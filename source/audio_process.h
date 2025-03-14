@@ -1,0 +1,69 @@
+#ifndef AUDIO_PROCESS_HEADER
+#define AUDIO_PROCESS_HEADER
+
+#include "audio_interface.h"
+#include <array>
+#include <memory>
+
+void mix_channels(const int16_t *ssrc, int out_chan, int ssrc_chan, int frames_num, int16_t *output);
+
+class SincInterpolator
+{
+  public:
+    SincInterpolator(int order, int precision, int chan, double ratio);
+    ~SincInterpolator();
+
+    int process(const double *input, int input_size, double *output, int track);
+
+  private:
+    double kernel_func(double x, double cutoff) const;
+
+    double interpolator(double x, const double *input, const double *prev_pos);
+
+  private:
+    const int order;
+    const int quan;
+    const int chan;
+    const double step;
+
+    double *left;
+    bool *ready;
+
+    double *prev;
+    double *kern;
+};
+
+class LocSampler
+{
+  public:
+    LocSampler(unsigned int src_fs, unsigned int src_ch, unsigned int dst_fs, unsigned int dst_ch,
+               unsigned int max_frames, const AudioChannelMap &imap, const AudioChannelMap &omap);
+
+    RetCode process(const PCM_TYPE *input, unsigned int input_frames, PCM_TYPE *output, unsigned int &output_frames);
+
+    bool is_valid() const
+    {
+        return valid;
+    }
+
+  public:
+    const unsigned int src_fs;
+    const unsigned int src_ch;
+    const unsigned int dst_fs;
+    const unsigned int dst_ch;
+    const double ratio;
+    const unsigned int max_frames;
+    const AudioChannelMap ichan_map;
+    const AudioChannelMap ochan_map;
+    const unsigned int real_channel;
+
+  private:
+    bool valid;
+    std::unique_ptr<double[]> ibuffer;
+    std::unique_ptr<double[]> obuffer;
+    std::unique_ptr<SincInterpolator> resampler;
+
+    void convertChannels(const PCM_TYPE *input, unsigned int frames, PCM_TYPE *output);
+};
+
+#endif
