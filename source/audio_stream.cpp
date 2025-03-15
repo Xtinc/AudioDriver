@@ -246,7 +246,7 @@ RetCode OAStream::direct_push(unsigned char token, unsigned int chan, unsigned i
         }
 
         it = result.first;
-        AUDIO_INFO_PRINT("new connection: %u", token);
+        AUDIO_INFO_PRINT("New connection: %u", token);
     }
 
     bool success = it->second->session.store((const char *)data, frames * chan * sizeof(PCM_TYPE));
@@ -318,7 +318,7 @@ RetCode OAStream::create_device(const AudioDeviceName &_name)
     auto ret = new_device->open();
     if (!ret)
     {
-        AUDIO_ERROR_PRINT("Open playback device [%s] failed: %s", _name.first.c_str(), ret.what());
+        AUDIO_ERROR_PRINT("Failed to open playback device [%s]: %s", _name.first.c_str(), ret.what());
         return ret;
     }
 
@@ -420,7 +420,7 @@ template <typename SessionMap> void OAStream::process_session(SessionMap &sessio
         {
             if (context->session.idle_count++ > SESSION_IDLE_TIMEOUT)
             {
-                AUDIO_INFO_PRINT("removing empty%s session: %u", session_type, it->first);
+                AUDIO_INFO_PRINT("Removing empty %s session: %u", session_type, it->first);
                 it = sessions.erase(it);
                 continue;
             }
@@ -435,7 +435,7 @@ template <typename SessionMap> void OAStream::process_session(SessionMap &sessio
 
         if (ret != RetCode::OK && ret != RetCode::NOACTION)
         {
-            AUDIO_DEBUG_PRINT("Failed to process%s data: %s", session_type, ret.what());
+            AUDIO_DEBUG_PRINT("Failed to process %s data: %s", session_type, ret.what());
             ++it;
             continue;
         }
@@ -445,7 +445,7 @@ template <typename SessionMap> void OAStream::process_session(SessionMap &sessio
 
         if (output_frames != ps)
         {
-            AUDIO_DEBUG_PRINT("%sframes mismatch: %u -> %u", session_type, output_frames, ps);
+            AUDIO_DEBUG_PRINT("%s frames mismatch: %u -> %u", session_type, output_frames, ps);
             output_frames = std::min(output_frames, ps);
         }
 
@@ -564,7 +564,7 @@ RetCode IAStream::connect(const std::shared_ptr<OAStream> &oas)
     return {RetCode::OK, "Connection established"};
 }
 
-RetCode IAStream::connect(const std::string &ip, uint16_t port)
+RetCode IAStream::connect(const std::string &ip, uint8_t token)
 {
     if (!network_enabled)
     {
@@ -579,6 +579,7 @@ RetCode IAStream::connect(const std::string &ip, uint16_t port)
     udp::resolver resolver(BG_SERVICE);
     asio::error_code ec;
 
+    auto port = token2port(token);
     auto endpoints = resolver.resolve(udp::v4(), ip, std::to_string(port), ec);
     if (ec)
     {
@@ -592,7 +593,7 @@ RetCode IAStream::connect(const std::string &ip, uint16_t port)
 
         if (std::find(net_dests.begin(), net_dests.end(), dest) != net_dests.end())
         {
-            AUDIO_DEBUG_PRINT("Destination already exists: %s:%d", ip.c_str(), port);
+            AUDIO_INFO_PRINT("Destination already exists: %s:%d", ip.c_str(), port);
             return {RetCode::OK, "Destination already exists"};
         }
 
@@ -671,13 +672,13 @@ RetCode IAStream::process_data()
         const uint8_t *encoded_data = encoder->encode(src, dev_fr, encoded_size);
         if (!encoded_data)
         {
-            AUDIO_DEBUG_PRINT("Failed to encode data");
+            AUDIO_DEBUG_PRINT("Failed to encode data: buffer may be empty or invalid");
             return RetCode::OK;
         }
 
         packet_header.sequence++;
         packet_header.timestamp =
-            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
                 .count();
         // gather-scatter operation
         std::array<asio::const_buffer, 2> buffers = {asio::buffer(&packet_header, sizeof(packet_header)),
@@ -700,7 +701,7 @@ RetCode IAStream::process_data()
                         auto it = std::find(self->net_dests.begin(), self->net_dests.end(), endpoint);
                         if (it != self->net_dests.end())
                         {
-                            AUDIO_INFO_PRINT("Removing unreachable destination: %s:%d",
+                            AUDIO_INFO_PRINT("Removed unreachable destination: %s:%d",
                                              it->address().to_string().c_str(), it->port());
                             self->net_dests.erase(it);
                         }
@@ -729,7 +730,7 @@ RetCode IAStream::create_device(const AudioDeviceName &_name)
     auto ret = new_device->open();
     if (!ret)
     {
-        AUDIO_ERROR_PRINT("Open capture device [%s] failed: %s", _name.first.c_str(), ret.what());
+        AUDIO_ERROR_PRINT("Failed to open capture device [%s]: %s", _name.first.c_str(), ret.what());
         return ret;
     }
 

@@ -146,7 +146,7 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     RetCode stop();
     RetCode reset(const AudioDeviceName &_name);
     RetCode connect(const std::shared_ptr<OAStream> &oas);
-    RetCode connect(const std::string &ip, uint16_t port);
+    RetCode connect(const std::string &ip, uint8_t token);
 
   private:
     void execute_loop(TimePointer tp, unsigned int cnt);

@@ -70,15 +70,15 @@ inline AudioBandWidth byte_to_bandwidth(uint8_t byte)
 {
     switch (byte)
     {
-    case 0x01:
+    case 8:
         return AudioBandWidth::Narrow;
-    case 0x02:
+    case 16:
         return AudioBandWidth::Wide;
-    case 0x03:
+    case 24:
         return AudioBandWidth::SemiSuperWide;
-    case 0x04:
+    case 44:
         return AudioBandWidth::CDQuality;
-    case 0x05:
+    case 48:
         return AudioBandWidth::Full;
     default:
         return AudioBandWidth::Unknown;
