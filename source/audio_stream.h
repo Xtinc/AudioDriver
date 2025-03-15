@@ -16,7 +16,15 @@
 using SessionData = KFifo;
 using TimePointer = std::chrono::steady_clock::time_point;
 using sampler_ptr = std::unique_ptr<LocSampler>;
+using session_ptr = std::unique_ptr<SessionData>;
+using usocket_ptr = std::unique_ptr<asio::ip::udp::socket>;
 using asio_strand = asio::strand<asio::io_context::executor_type>;
+
+constexpr unsigned int SESSION_IDLE_TIMEOUT = 1000;
+constexpr unsigned int NETWORK_MAX_FRAMES = enum2val(AudioPeriodSize::INR_40MS) * enum2val(AudioBandWidth::Full) / 1000;
+constexpr unsigned int NETWORK_MAX_BUFFER_SIZE = NETWORK_MAX_FRAMES + 2 * sizeof(NetPacketHeader);
+constexpr AudioChannelMap DEFAULT_DUAL_MAP = {0, 1};
+constexpr AudioChannelMap DEFAULT_MONO_MAP = {0, 0};
 
 class BackgroundService
 {
@@ -39,27 +47,42 @@ class BackgroundService
 #endif
 };
 
-class OAStream
+class OAStream : public std::enable_shared_from_this<OAStream>
 {
-    struct SessionContext
+    struct LocSessionContext
     {
         SessionData session;
         LocSampler sampler;
 
-        SessionContext(unsigned int src_fs, unsigned int src_ch, unsigned int dst_fs, unsigned int dst_ch,
-                       unsigned int max_frames, const AudioChannelMap &imap, const AudioChannelMap &omap)
+        LocSessionContext(unsigned int src_fs, unsigned int src_ch, unsigned int dst_fs, unsigned int dst_ch,
+                          unsigned int max_frames, const AudioChannelMap &imap, const AudioChannelMap &omap)
             : session(max_frames * sizeof(PCM_TYPE), 3, src_ch),
               sampler(src_fs, src_ch, dst_fs, dst_ch, max_frames, imap, omap)
         {
         }
     };
 
+    struct NetSessionContext : public LocSessionContext
+    {
+        NetSessionContext(unsigned int src_fs, unsigned int src_ch, unsigned int dst_fs, unsigned int dst_ch,
+                          unsigned int max_frames)
+            : LocSessionContext(src_fs, src_ch, dst_fs, dst_ch, max_frames,
+                                src_ch == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP,
+                                dst_ch == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP),
+              decoder(dst_ch, NETWORK_MAX_FRAMES)
+        {
+        }
+        NetDecoder decoder;
+    };
+
     using obuffer_ptr = std::unique_ptr<char[]>;
-    using context_ptr = std::unique_ptr<SessionContext>;
+    using loc_context = std::unique_ptr<LocSessionContext>;
+    using net_context = std::unique_ptr<NetSessionContext>;
     using odevice_ptr = std::unique_ptr<AudioDevice>;
 
   public:
-    OAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs, unsigned int _ch);
+    OAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs, unsigned int _ch,
+             bool enable_network);
     ~OAStream();
 
     RetCode start();
@@ -70,8 +93,13 @@ class OAStream
 
   private:
     void execute_loop(TimePointer tp, unsigned int cnt);
-    void process_data();
+    void write_data_to_dev();
+    void network_loop();
+    void store_data_to_buf(size_t bytes);
+
     RetCode create_device(const AudioDeviceName &_name);
+
+    template <typename SessionMap> void process_session(SessionMap &sessions, const char *session_type);
 
   public:
     const unsigned char token;
@@ -82,23 +110,29 @@ class OAStream
     unsigned int ps;
     unsigned int ch;
 
+    bool network_enabled;
+    std::atomic_bool oas_ready;
     asio::steady_timer timer;
     asio_strand exec_strand;
 
+    obuffer_ptr net_buf;
     obuffer_ptr mix_buf;
     obuffer_ptr databuf;
     odevice_ptr odevice;
-    std::mutex recv_mtx;
-    std::map<uint8_t, context_ptr> loc_sessions;
-    std::atomic_bool oas_ready;
+
+    usocket_ptr usocket;
+    std::mutex loc_mutex;
+    std::mutex net_mutex;
+    asio::ip::udp::endpoint net_sender;
+    std::map<uint8_t, loc_context> loc_sessions;
+    std::map<uint8_t, net_context> net_sessions;
 };
 
 class IAStream : public std::enable_shared_from_this<IAStream>
 {
     using encoder_ptr = std::unique_ptr<NetEncoder>;
-    using usocket_ptr = std::unique_ptr<asio::ip::udp::socket>;
+
     using ibuffer_ptr = std::unique_ptr<char[]>;
-    using session_ptr = std::unique_ptr<SessionData>;
     using idevice_ptr = std::unique_ptr<AudioDevice>;
     using loc_endpoints = std::vector<std::weak_ptr<OAStream>>;
     using net_endpoints = std::vector<asio::ip::udp::endpoint>;

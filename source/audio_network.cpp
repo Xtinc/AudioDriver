@@ -1,6 +1,7 @@
 #include "audio_network.h"
 #include <cstring>
 
+// KFifo
 KFifo::KFifo(size_t blk_sz, size_t blk_num, unsigned int channel)
     : chan(channel), buf_length(channel * blk_sz), max_length(channel * blk_sz * blk_num), idle_count(0), head(0),
       tail(0), length(0), memory_addr(nullptr), buffer_addr(nullptr)
@@ -102,6 +103,7 @@ static constexpr int ADPCM_STEP_TABLE[89] = {
     9493, 10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767};
 static constexpr size_t ADPCM_HEADER_SIZE_PER_CHANNEL = 4;
 
+// Encoder
 NetEncoder::NetEncoder(unsigned int channels, unsigned int max_frames) : channels(channels), max_frames(max_frames)
 {
     encode_states.resize(channels);
@@ -225,6 +227,7 @@ const uint8_t *NetEncoder::encode(const int16_t *pcm_data, unsigned int frames, 
     return encode_buffer.get();
 }
 
+// Decoder
 NetDecoder::NetDecoder(unsigned int channels, unsigned int max_frames) : channels(channels), max_frames(max_frames)
 {
     decode_states.resize(channels);
@@ -316,4 +319,36 @@ const int16_t *NetDecoder::decode(const uint8_t *adpcm_data, size_t adpcm_size, 
     }
 
     return decode_buffer.get();
+}
+
+// Packet header validation
+bool NetPacketHeader::validate(const char *data, size_t length)
+{
+    if (length < sizeof(NetPacketHeader))
+    {
+        AUDIO_DEBUG_PRINT("Received undersized packet (%zu bytes)", length);
+        return false;
+    }
+
+    auto header = *reinterpret_cast<const NetPacketHeader *>(data);
+
+    if (header.magic_num != NET_MAGIC_NUM)
+    {
+        AUDIO_DEBUG_PRINT("Invalid packet magic number: 0x%02X", header.magic_num);
+        return false;
+    }
+
+    if (header.channels == 0 || header.channels > 2)
+    {
+        AUDIO_DEBUG_PRINT("Invalid channel count: %u", header.channels);
+        return false;
+    }
+
+    if (byte_to_bandwidth(header.sample_rate) == AudioBandWidth::Unknown)
+    {
+        AUDIO_DEBUG_PRINT("Invalid sample rate: %u", header.sample_rate);
+        return false;
+    }
+
+    return true;
 }

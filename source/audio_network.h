@@ -10,11 +10,11 @@
  0                   1                   2                   3
  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|  magic num   |   sender id   |  receiver id  | encoder format |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|   channels   |  sample rate  |            reserved            |
+|  sender id   |    channels   |  sample rate  |  magic number  |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 |                            sequence                           |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                           timestamp                           |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 |                           timestamp                           |
 +=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
@@ -25,14 +25,14 @@
 
 struct NetPacketHeader
 {
-    uint8_t magic_num;
     uint8_t sender_id;
-    uint8_t receiver_id;
-    uint8_t encoder_fmt;
     uint8_t channels;
-    uint32_t sample_rate;
+    uint8_t sample_rate;
+    uint8_t magic_num;
     uint32_t sequence;
     uint64_t timestamp;
+
+    static bool validate(const char *data, size_t length);
 };
 
 constexpr uint8_t NET_MAGIC_NUM = 0xBA;

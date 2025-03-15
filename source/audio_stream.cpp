@@ -4,41 +4,20 @@
 #if WINDOWS_OS_ENVIRONMENT
 #include <combaseapi.h>
 #include <timeapi.h>
+// CoInitializeEx is not thread-safe
+static std::once_flag coinit_flag;
 #endif
 
-static std::once_flag coinit_flag;
-static constexpr AudioChannelMap DEFAULT_DUAL_MAP = {0, 1};
-static constexpr AudioChannelMap DEFAULT_MONO_MAP = {0, 0};
+using udp = asio::ip::udp;
 
 static bool check_wave_file_name(const std::string &dev_name)
 {
     return dev_name.size() >= 4 && dev_name.compare(dev_name.size() - 4, 4, ".wav") == 0;
 }
 
-template <typename StreamType, typename ReadyFlag>
-void execute_stream_loop(StreamType *stream, ReadyFlag &ready_flag, asio::steady_timer &timer, asio_strand &exec_strand,
-                         TimePointer tp, unsigned int cnt, unsigned int ti)
+inline constexpr uint16_t token2port(unsigned char token)
 {
-    if (!ready_flag)
-    {
-        return;
-    }
-
-    if (cnt == 0)
-    {
-        tp = std::chrono::steady_clock::now();
-    }
-
-    timer.expires_at(tp + std::chrono::milliseconds(ti) * cnt);
-    timer.async_wait(
-        asio::bind_executor(exec_strand, [stream, &ready_flag, &timer, &exec_strand, tp, cnt, ti](asio::error_code ec) {
-            if (ec)
-            {
-                return;
-            }
-            execute_stream_loop(stream, ready_flag, timer, exec_strand, tp, cnt + 1, ti);
-            stream->process_data();
-        }));
+    return (uint16_t)(0xccu << 8) + (uint16_t)token;
 }
 
 // BackgroundService
@@ -110,9 +89,9 @@ asio::io_context &BackgroundService::context()
 
 // OAStream
 OAStream::OAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs,
-                   unsigned int _ch)
-    : token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(_ch), timer(BG_SERVICE),
-      exec_strand(asio::make_strand(BG_SERVICE)), oas_ready(false)
+                   unsigned int _ch, bool enable_network)
+    : token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(_ch), network_enabled(false), oas_ready(false),
+      timer(BG_SERVICE), exec_strand(asio::make_strand(BG_SERVICE))
 {
     auto ret = create_device(_name);
     if (ret)
@@ -123,11 +102,52 @@ OAStream::OAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
     {
         AUDIO_ERROR_PRINT("Failed to create device: %s", ret.what());
     }
+
+    if (enable_network && oas_ready)
+    {
+        try
+        {
+            net_buf = std::make_unique<char[]>(NETWORK_MAX_BUFFER_SIZE);
+            usocket = std::make_unique<udp::socket>(BG_SERVICE, udp::endpoint(udp::v4(), token2port(token)));
+            asio::socket_base::receive_buffer_size option(262144); // 256KB
+            asio::error_code ec;
+            usocket->set_option(option, ec);
+            if (ec)
+            {
+                AUDIO_DEBUG_PRINT("Failed to set receive buffer size: %s", ec.message().c_str());
+            }
+            network_enabled = true;
+            AUDIO_INFO_PRINT("UDP listener started on port %u", token2port(token));
+        }
+        catch (const std::exception &e)
+        {
+            AUDIO_ERROR_PRINT("Failed to initialize network components: %s", e.what());
+        }
+    }
+
+    AUDIO_INFO_PRINT("Network functionality %s", network_enabled ? "enabled" : "disabled");
 }
 
 OAStream::~OAStream()
 {
-    (void)stop();
+    try
+    {
+        (void)stop();
+
+        if (usocket && usocket->is_open())
+        {
+            asio::error_code ec;
+            usocket->close(ec);
+            if (ec)
+            {
+                AUDIO_DEBUG_PRINT("Error closing socket: %s", ec.message().c_str());
+            }
+        }
+    }
+    catch (const std::exception &e)
+    {
+        AUDIO_ERROR_PRINT("Exception in OAStream destructor: %s", e.what());
+    }
 }
 
 RetCode OAStream::start()
@@ -141,6 +161,10 @@ RetCode OAStream::start()
     if (ret)
     {
         execute_loop({}, 0);
+        if (network_enabled)
+        {
+            network_loop();
+        }
     }
 
     return ret;
@@ -155,16 +179,33 @@ RetCode OAStream::stop()
     }
 
     timer.cancel();
+
+    if (network_enabled)
+    {
+        asio::error_code ec;
+        usocket->cancel(ec);
+        if (ec)
+        {
+            AUDIO_DEBUG_PRINT("Error canceling socket operations: %s", ec.message().c_str());
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> grd(loc_mutex);
+        loc_sessions.clear();
+    }
+
+    {
+        std::lock_guard<std::mutex> grd(net_mutex);
+        net_sessions.clear();
+    }
+
     return odevice->stop();
 }
 
 RetCode OAStream::reset(const AudioDeviceName &_name)
 {
     stop();
-    {
-        std::lock_guard<std::mutex> grd(recv_mtx);
-        loc_sessions.clear();
-    }
 
     auto ret = create_device(_name);
     if (!ret)
@@ -181,7 +222,7 @@ RetCode OAStream::direct_push(unsigned char token, unsigned int chan, unsigned i
 {
     if (!oas_ready)
     {
-        return {RetCode::FAILED, "Device not ready"};
+        return {RetCode::NOACTION, "Device not ready"};
     }
 
     if (!data)
@@ -191,16 +232,25 @@ RetCode OAStream::direct_push(unsigned char token, unsigned int chan, unsigned i
 
     unsigned int std_fr = sample_rate * ti / 1000;
 
-    std::lock_guard<std::mutex> grd(recv_mtx);
-    if (loc_sessions.find(token) == loc_sessions.end())
+    std::lock_guard<std::mutex> grd(loc_mutex);
+    auto it = loc_sessions.find(token);
+    if (it == loc_sessions.end())
     {
         auto io_map = chan == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP;
-        loc_sessions.emplace(token,
-                             std::make_unique<SessionContext>(sample_rate, chan, fs, ch, std_fr, io_map, io_map));
+        auto result = loc_sessions.emplace(
+            token, std::make_unique<LocSessionContext>(sample_rate, chan, fs, ch, std_fr, io_map, io_map));
+
+        if (!result.second)
+        {
+            return {RetCode::FAILED, "Failed to create session"};
+        }
+
+        it = result.first;
         AUDIO_INFO_PRINT("new connection: %u", token);
     }
-    loc_sessions.at(token)->session.store((const char *)data, frames * chan * sizeof(PCM_TYPE));
-    return {RetCode::OK, "Success"};
+
+    bool success = it->second->session.store((const char *)data, frames * chan * sizeof(PCM_TYPE));
+    return success ? RetCode::OK : RetCode{RetCode::NOACTION, "Failed to store data (buffer may be full)"};
 }
 
 void OAStream::execute_loop(TimePointer tp, unsigned int cnt)
@@ -216,17 +266,19 @@ void OAStream::execute_loop(TimePointer tp, unsigned int cnt)
     }
 
     timer.expires_at(tp + std::chrono::milliseconds(ti) * cnt);
-    timer.async_wait(asio::bind_executor(exec_strand, [this, tp, cnt](asio::error_code ec) {
+    timer.async_wait(asio::bind_executor(exec_strand, [tp, cnt, this, self = shared_from_this()](asio::error_code ec) {
         if (ec)
         {
+            AUDIO_DEBUG_PRINT("Timer error: %s", ec.message().c_str());
             return;
         }
+
         execute_loop(tp, cnt + 1);
-        process_data();
+        write_data_to_dev();
     }));
 }
 
-void OAStream::process_data()
+void OAStream::write_data_to_dev()
 {
     if (!oas_ready)
     {
@@ -235,49 +287,18 @@ void OAStream::process_data()
 
     std::memset(databuf.get(), 0, ch * ps * sizeof(PCM_TYPE));
     {
-        std::lock_guard<std::mutex> grd(recv_mtx);
-
-        for (auto it = loc_sessions.begin(); it != loc_sessions.end();)
+        std::lock_guard<std::mutex> grd(loc_mutex);
+        if (!loc_sessions.empty())
         {
-            auto &context = it->second;
-            unsigned int session_frames = context->sampler.src_fs * ti / 1000;
-            bool has_data = context->session.load_aside(session_frames * context->session.chan * sizeof(PCM_TYPE));
-            if (!has_data)
-            {
-                if (context->session.idle_count++ > 1000)
-                {
-                    AUDIO_INFO_PRINT("removing empty session: %u", it->first);
-                    it = loc_sessions.erase(it);
-                    continue;
-                }
+            process_session(loc_sessions, "local");
+        }
+    }
 
-                ++it;
-                continue;
-            }
-
-            context->session.idle_count = 0;
-            unsigned int output_frames = ps;
-            auto ret =
-                context->sampler.process(reinterpret_cast<const PCM_TYPE *>(context->session.data()), session_frames,
-                                         reinterpret_cast<PCM_TYPE *>(mix_buf.get()), output_frames);
-            if (ret != RetCode::OK && ret != RetCode::NOACTION)
-            {
-                AUDIO_DEBUG_PRINT("Failed to resample data: %s", ret.what());
-                ++it;
-                continue;
-            }
-
-            auto src = (ret == RetCode::NOACTION) ? reinterpret_cast<const PCM_TYPE *>(context->session.data())
-                                                  : reinterpret_cast<const PCM_TYPE *>(mix_buf.get());
-
-            if (output_frames != ps)
-            {
-                AUDIO_DEBUG_PRINT("Resample frames mismatch: %u -> %u", output_frames, ps);
-                output_frames = std::min(output_frames, ps);
-            }
-
-            mix_channels(src, ch, context->session.chan, output_frames, reinterpret_cast<PCM_TYPE *>(databuf.get()));
-            ++it;
+    {
+        std::lock_guard<std::mutex> grd(net_mutex);
+        if (!net_sessions.empty())
+        {
+            process_session(net_sessions, "network");
         }
     }
 
@@ -288,6 +309,11 @@ RetCode OAStream::create_device(const AudioDeviceName &_name)
 {
     auto new_device = check_wave_file_name(_name.first) ? make_audio_driver(WAVE_OAS, _name, fs, ps, ch)
                                                         : make_audio_driver(PHSY_OAS, _name, fs, ps, ch);
+
+    if (!new_device)
+    {
+        return {RetCode::FAILED, "Failed to create audio driver"};
+    }
 
     auto ret = new_device->open();
     if (!ret)
@@ -313,11 +339,126 @@ RetCode OAStream::create_device(const AudioDeviceName &_name)
     return {RetCode::OK, "Device initialized successfully"};
 }
 
+void OAStream::network_loop()
+{
+    usocket->async_receive_from(asio::buffer(net_buf.get(), NETWORK_MAX_BUFFER_SIZE), net_sender,
+                                [this, self_ptr = shared_from_this()](std::error_code ec, std::size_t bytes) {
+                                    if (ec)
+                                    {
+                                        if (ec == asio::error::operation_aborted)
+                                        {
+                                            return;
+                                        }
+                                        AUDIO_DEBUG_PRINT("Network receive error: %s", ec.message().c_str());
+                                        network_loop();
+                                        return;
+                                    }
+
+                                    store_data_to_buf(bytes);
+                                    network_loop();
+                                });
+}
+
+void OAStream::store_data_to_buf(size_t bytes)
+{
+    if (!oas_ready)
+    {
+        return;
+    }
+
+    if (!NetPacketHeader::validate(net_buf.get(), bytes))
+    {
+        AUDIO_DEBUG_PRINT("Invalid network packet");
+        return;
+    }
+
+    auto sender = static_cast<uint8_t>(net_buf[0]);
+    auto net_ch = static_cast<unsigned int>(net_buf[1]);
+    auto net_fs = enum2val(byte_to_bandwidth(net_buf[2]));
+    auto adpcm_data = net_buf.get() + sizeof(NetPacketHeader);
+    size_t adpcm_size = bytes - sizeof(NetPacketHeader);
+    auto net_fr = static_cast<unsigned int>(adpcm_size * 4 / (net_ch * sizeof(PCM_TYPE)) + 1);
+    NetSessionContext *session = nullptr;
+
+    {
+        std::lock_guard<std::mutex> grd(net_mutex);
+        auto session_it = net_sessions.find(sender);
+
+        if (session_it == net_sessions.end())
+        {
+            auto new_session = std::make_unique<NetSessionContext>(net_fs, net_ch, fs, ch, net_fr);
+            session = new_session.get();
+            net_sessions.emplace(sender, std::move(new_session));
+            AUDIO_INFO_PRINT("New network session from sender: %u", sender);
+        }
+        else
+        {
+            session = session_it->second.get();
+        }
+
+        unsigned int decode_frames = 0;
+        auto decode_data =
+            session->decoder.decode(reinterpret_cast<const uint8_t *>(adpcm_data), adpcm_size, decode_frames);
+
+        if (decode_data && decode_frames > 0)
+        {
+            session->session.store(reinterpret_cast<const char *>(decode_data),
+                                   decode_frames * net_ch * sizeof(PCM_TYPE));
+        }
+    }
+}
+
+template <typename SessionMap> void OAStream::process_session(SessionMap &sessions, const char *session_type)
+{
+    for (auto it = sessions.begin(); it != sessions.end();)
+    {
+        auto &context = it->second;
+        unsigned int session_frames = context->sampler.src_fs * ti / 1000;
+        bool has_data = context->session.load_aside(session_frames * context->session.chan * sizeof(PCM_TYPE));
+
+        if (!has_data)
+        {
+            if (context->session.idle_count++ > SESSION_IDLE_TIMEOUT)
+            {
+                AUDIO_INFO_PRINT("removing empty%s session: %u", session_type, it->first);
+                it = sessions.erase(it);
+                continue;
+            }
+            ++it;
+            continue;
+        }
+
+        context->session.idle_count = 0;
+        unsigned int output_frames = ps;
+        auto ret = context->sampler.process(reinterpret_cast<const PCM_TYPE *>(context->session.data()), session_frames,
+                                            reinterpret_cast<PCM_TYPE *>(mix_buf.get()), output_frames);
+
+        if (ret != RetCode::OK && ret != RetCode::NOACTION)
+        {
+            AUDIO_DEBUG_PRINT("Failed to process%s data: %s", session_type, ret.what());
+            ++it;
+            continue;
+        }
+
+        auto src = (ret == RetCode::NOACTION) ? reinterpret_cast<const PCM_TYPE *>(context->session.data())
+                                              : reinterpret_cast<const PCM_TYPE *>(mix_buf.get());
+
+        if (output_frames != ps)
+        {
+            AUDIO_DEBUG_PRINT("%sframes mismatch: %u -> %u", session_type, output_frames, ps);
+            output_frames = std::min(output_frames, ps);
+        }
+
+        mix_channels(src, ch, context->session.chan, output_frames, reinterpret_cast<PCM_TYPE *>(databuf.get()));
+        ++it;
+    }
+}
+
 // IAStream
 IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs,
                    unsigned int _ch, bool enable_network)
     : ias_ready(false), token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(_ch), timer(BG_SERVICE),
-      exec_strand(asio::make_strand(BG_SERVICE)), network_enabled(enable_network)
+      exec_strand(asio::make_strand(BG_SERVICE)), network_enabled(false)
 {
     auto ret = create_device(_name);
     if (ret)
@@ -329,34 +470,24 @@ IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
         AUDIO_ERROR_PRINT("Failed to create device: %s", ret.what());
     }
 
-    if (enable_network)
+    if (enable_network && ias_ready)
     {
-        packet_header.magic_num = NET_MAGIC_NUM;
         packet_header.sender_id = token;
-        packet_header.receiver_id = 0; // Broadcast
-        packet_header.encoder_fmt = 1; // ADPCM
         packet_header.channels = ch;
-        packet_header.sample_rate = fs;
+        packet_header.magic_num = NET_MAGIC_NUM;
+        packet_header.sample_rate = fs / 1000;
         packet_header.sequence = 0;  // Will be updated on each send
         packet_header.timestamp = 0; // Will be updated on each send
 
         try
         {
             encoder = std::make_unique<NetEncoder>(ch, ps);
-            usocket = std::make_unique<asio::ip::udp::socket>(BG_SERVICE);
-            usocket->open(asio::ip::udp::v4());
-            // Set UDP socket options for better performance
-            asio::socket_base::send_buffer_size option(262144); // 256KB
-            asio::error_code ec;
-            usocket->set_option(option, ec);
-            if (ec)
-            {
-                AUDIO_DEBUG_PRINT("Failed to set socket buffer size: %s", ec.message().c_str());
-            }
+            usocket = std::make_unique<udp::socket>(BG_SERVICE);
+            usocket->open(udp::v4());
+            network_enabled = true;
         }
         catch (const std::exception &e)
         {
-            network_enabled = false;
             AUDIO_ERROR_PRINT("Failed to create UDP socket: %s", e.what());
         }
     }
@@ -440,17 +571,34 @@ RetCode IAStream::connect(const std::string &ip, uint16_t port)
         return {RetCode::FAILED, "Network functionality is disabled or socket not available"};
     }
 
-    asio::ip::udp::resolver resolver(BG_SERVICE);
+    if (ip.empty())
+    {
+        return {RetCode::FAILED, "Invalid IP address"};
+    }
+
+    udp::resolver resolver(BG_SERVICE);
     asio::error_code ec;
 
-    auto dest = *resolver.resolve(asio::ip::udp::v4(), ip, std::to_string(port), ec).begin();
+    auto endpoints = resolver.resolve(udp::v4(), ip, std::to_string(port), ec);
     if (ec)
     {
-        AUDIO_ERROR_PRINT("%s\n", ec.message().c_str());
-        return {RetCode::FAILED, "Failed to add network destination"};
+        AUDIO_ERROR_PRINT("Failed to resolve address %s:%d: %s", ip.c_str(), port, ec.message().c_str());
+        return {RetCode::FAILED, "Failed to resolve address"};
     }
-    std::lock_guard<std::mutex> grd(dest_mtx);
-    net_dests.push_back(std::move(dest));
+
+    auto dest = *endpoints.begin();
+    {
+        std::lock_guard<std::mutex> grd(dest_mtx);
+
+        if (std::find(net_dests.begin(), net_dests.end(), dest) != net_dests.end())
+        {
+            AUDIO_DEBUG_PRINT("Destination already exists: %s:%d", ip.c_str(), port);
+            return {RetCode::OK, "Destination already exists"};
+        }
+
+        net_dests.push_back(std::move(dest));
+    }
+
     AUDIO_INFO_PRINT("Added network destination: %s:%d", ip.c_str(), port);
     return {RetCode::OK, "Network destination added"};
 }
@@ -468,15 +616,16 @@ void IAStream::execute_loop(TimePointer tp, unsigned int cnt)
     }
 
     timer.expires_at(tp + std::chrono::milliseconds(ti) * cnt);
-    timer.async_wait(asio::bind_executor(exec_strand, [tp, cnt, self = shared_from_this()](asio::error_code ec) {
+    timer.async_wait(asio::bind_executor(exec_strand, [tp, cnt, this, self = shared_from_this()](asio::error_code ec) {
         if (ec)
         {
+            AUDIO_DEBUG_PRINT("Timer error: %s", ec.message().c_str());
             return;
         }
-        self->execute_loop(tp, cnt + 1);
-        if (self->process_data() == RetCode::INVSEEK)
+        execute_loop(tp, cnt + 1);
+        if (process_data() == RetCode::INVSEEK)
         {
-            self->ias_ready = false;
+            ias_ready = false;
         }
     }));
 }
@@ -539,24 +688,26 @@ RetCode IAStream::process_data()
             usocket->async_send_to(
                 buffers, endpoint,
                 [self = shared_from_this(), endpoint](const asio::error_code &error, std::size_t bytes_transferred) {
-                    if (error)
+                    if (!error)
                     {
-                        if (error == asio::error::connection_refused || error == asio::error::connection_reset)
+                        return;
+                    }
+
+                    if (error == asio::error::connection_refused || error == asio::error::connection_reset)
+                    {
+                        // Consider removing this destination automatically
+                        std::lock_guard<std::mutex> grd(self->dest_mtx);
+                        auto it = std::find(self->net_dests.begin(), self->net_dests.end(), endpoint);
+                        if (it != self->net_dests.end())
                         {
-                            // Consider removing this destination automatically
-                            std::lock_guard<std::mutex> grd(self->dest_mtx);
-                            auto it = std::find(self->net_dests.begin(), self->net_dests.end(), endpoint);
-                            if (it != self->net_dests.end())
-                            {
-                                AUDIO_INFO_PRINT("Removing unreachable destination: %s:%d",
-                                                 it->address().to_string().c_str(), it->port());
-                                self->net_dests.erase(it);
-                            }
+                            AUDIO_INFO_PRINT("Removing unreachable destination: %s:%d",
+                                             it->address().to_string().c_str(), it->port());
+                            self->net_dests.erase(it);
                         }
-                        else
-                        {
-                            AUDIO_DEBUG_PRINT("Send error: %s", error.message().c_str());
-                        }
+                    }
+                    else
+                    {
+                        AUDIO_DEBUG_PRINT("Send error: %s", error.message().c_str());
                     }
                 });
         }
@@ -569,6 +720,11 @@ RetCode IAStream::create_device(const AudioDeviceName &_name)
 {
     auto new_device = check_wave_file_name(_name.first) ? make_audio_driver(WAVE_IAS, _name, fs, ps, ch)
                                                         : make_audio_driver(PHSY_IAS, _name, fs, ps, ch);
+
+    if (!new_device)
+    {
+        return {RetCode::FAILED, "Failed to create audio driver"};
+    }
 
     auto ret = new_device->open();
     if (!ret)
