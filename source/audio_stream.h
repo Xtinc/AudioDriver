@@ -95,19 +95,24 @@ class OAStream
 
 class IAStream : public std::enable_shared_from_this<IAStream>
 {
+    using encoder_ptr = std::unique_ptr<NetEncoder>;
+    using usocket_ptr = std::unique_ptr<asio::ip::udp::socket>;
     using ibuffer_ptr = std::unique_ptr<char[]>;
     using session_ptr = std::unique_ptr<SessionData>;
     using idevice_ptr = std::unique_ptr<AudioDevice>;
     using loc_endpoints = std::vector<std::weak_ptr<OAStream>>;
+    using net_endpoints = std::vector<asio::ip::udp::endpoint>;
 
   public:
-    IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs, unsigned int _ch);
+    IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs, unsigned int _ch,
+             bool enable_network);
     ~IAStream();
 
     RetCode start();
     RetCode stop();
     RetCode reset(const AudioDeviceName &_name);
     RetCode connect(const std::shared_ptr<OAStream> &oas);
+    RetCode connect(const std::string &ip, uint16_t port);
 
   private:
     void execute_loop(TimePointer tp, unsigned int cnt);
@@ -122,6 +127,8 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     const unsigned int ch;
 
   private:
+    bool network_enabled;
+
     std::atomic_bool ias_ready;
     asio::steady_timer timer;
     asio_strand exec_strand;
@@ -130,8 +137,13 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     ibuffer_ptr dev_buf;
     idevice_ptr idevice;
     sampler_ptr sampler;
+    encoder_ptr encoder;
+    usocket_ptr usocket;
 
+    std::mutex dest_mtx;
+    net_endpoints net_dests;
     loc_endpoints loc_dests;
+    NetPacketHeader packet_header;
 };
 
 #endif

@@ -315,9 +315,9 @@ RetCode OAStream::create_device(const AudioDeviceName &_name)
 
 // IAStream
 IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs,
-                   unsigned int _ch)
+                   unsigned int _ch, bool enable_network)
     : ias_ready(false), token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(_ch), timer(BG_SERVICE),
-      exec_strand(asio::make_strand(BG_SERVICE))
+      exec_strand(asio::make_strand(BG_SERVICE)), network_enabled(enable_network)
 {
     auto ret = create_device(_name);
     if (ret)
@@ -329,12 +329,51 @@ IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
         AUDIO_ERROR_PRINT("Failed to create device: %s", ret.what());
     }
 
+    if (enable_network)
+    {
+        packet_header.magic_num = NET_MAGIC_NUM;
+        packet_header.sender_id = token;
+        packet_header.receiver_id = 0; // Broadcast
+        packet_header.encoder_fmt = 1; // ADPCM
+        packet_header.channels = ch;
+        packet_header.sample_rate = fs;
+        packet_header.sequence = 0;  // Will be updated on each send
+        packet_header.timestamp = 0; // Will be updated on each send
+
+        try
+        {
+            encoder = std::make_unique<NetEncoder>(ch, ps);
+            usocket = std::make_unique<asio::ip::udp::socket>(BG_SERVICE);
+            usocket->open(asio::ip::udp::v4());
+            // Set UDP socket options for better performance
+            asio::socket_base::send_buffer_size option(262144); // 256KB
+            asio::error_code ec;
+            usocket->set_option(option, ec);
+            if (ec)
+            {
+                AUDIO_DEBUG_PRINT("Failed to set socket buffer size: %s", ec.message().c_str());
+            }
+        }
+        catch (const std::exception &e)
+        {
+            network_enabled = false;
+            AUDIO_ERROR_PRINT("Failed to create UDP socket: %s", e.what());
+        }
+    }
+
+    AUDIO_INFO_PRINT("Network functionality %s", network_enabled ? "enabled" : "disabled");
     loc_dests.reserve(4);
 }
 
 IAStream::~IAStream()
 {
     (void)stop();
+
+    if (usocket && usocket->is_open())
+    {
+        asio::error_code ec;
+        usocket->close(ec);
+    }
 }
 
 RetCode IAStream::reset(const AudioDeviceName &_name)
@@ -392,6 +431,28 @@ RetCode IAStream::connect(const std::shared_ptr<OAStream> &oas)
 
     loc_dests.emplace_back(oas);
     return {RetCode::OK, "Connection established"};
+}
+
+RetCode IAStream::connect(const std::string &ip, uint16_t port)
+{
+    if (!network_enabled)
+    {
+        return {RetCode::FAILED, "Network functionality is disabled or socket not available"};
+    }
+
+    asio::ip::udp::resolver resolver(BG_SERVICE);
+    asio::error_code ec;
+
+    auto dest = *resolver.resolve(asio::ip::udp::v4(), ip, std::to_string(port), ec).begin();
+    if (ec)
+    {
+        AUDIO_ERROR_PRINT("%s\n", ec.message().c_str());
+        return {RetCode::FAILED, "Failed to add network destination"};
+    }
+    std::lock_guard<std::mutex> grd(dest_mtx);
+    net_dests.push_back(std::move(dest));
+    AUDIO_INFO_PRINT("Added network destination: %s:%d", ip.c_str(), port);
+    return {RetCode::OK, "Network destination added"};
 }
 
 void IAStream::execute_loop(TimePointer tp, unsigned int cnt)
@@ -452,6 +513,52 @@ RetCode IAStream::process_data()
         if (auto np = dest.lock())
         {
             np->direct_push(token, ch, dev_fr, fs, src);
+        }
+    }
+
+    if (network_enabled)
+    {
+        size_t encoded_size;
+        const uint8_t *encoded_data = encoder->encode(src, dev_fr, encoded_size);
+        if (!encoded_data)
+        {
+            AUDIO_DEBUG_PRINT("Failed to encode data");
+            return RetCode::OK;
+        }
+
+        packet_header.sequence++;
+        packet_header.timestamp =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+                .count();
+        // gather-scatter operation
+        std::array<asio::const_buffer, 2> buffers = {asio::buffer(&packet_header, sizeof(packet_header)),
+                                                     asio::buffer(encoded_data, encoded_size)};
+        std::lock_guard<std::mutex> grd(dest_mtx);
+        for (const auto &endpoint : net_dests)
+        {
+            usocket->async_send_to(
+                buffers, endpoint,
+                [self = shared_from_this(), endpoint](const asio::error_code &error, std::size_t bytes_transferred) {
+                    if (error)
+                    {
+                        if (error == asio::error::connection_refused || error == asio::error::connection_reset)
+                        {
+                            // Consider removing this destination automatically
+                            std::lock_guard<std::mutex> grd(self->dest_mtx);
+                            auto it = std::find(self->net_dests.begin(), self->net_dests.end(), endpoint);
+                            if (it != self->net_dests.end())
+                            {
+                                AUDIO_INFO_PRINT("Removing unreachable destination: %s:%d",
+                                                 it->address().to_string().c_str(), it->port());
+                                self->net_dests.erase(it);
+                            }
+                        }
+                        else
+                        {
+                            AUDIO_DEBUG_PRINT("Send error: %s", error.message().c_str());
+                        }
+                    }
+                });
         }
     }
 

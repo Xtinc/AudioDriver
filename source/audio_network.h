@@ -8,13 +8,13 @@
 
 /*                    Packet Frame Format
  0                   1                   2                   3
- 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|  sender id   |    channels   |  sample rate  | encoder format |
+|  magic num   |   sender id   |  receiver id  | encoder format |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|   channels   |  sample rate  |            reserved            |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 |                            sequence                           |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                           timestamp                           |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 |                           timestamp                           |
 +=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
@@ -22,6 +22,20 @@
 |                             ....                              |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 */
+
+struct NetPacketHeader
+{
+    uint8_t magic_num;
+    uint8_t sender_id;
+    uint8_t receiver_id;
+    uint8_t encoder_fmt;
+    uint8_t channels;
+    uint32_t sample_rate;
+    uint32_t sequence;
+    uint64_t timestamp;
+};
+
+constexpr uint8_t NET_MAGIC_NUM = 0xBA;
 
 template <typename T> constexpr typename std::underlying_type<T>::type enum2val(T e)
 {
@@ -70,25 +84,6 @@ inline AudioBandWidth byte_to_bandwidth(uint8_t byte)
         return AudioBandWidth::Unknown;
     }
 }
-
-enum class EncodeFormat : uint8_t
-{
-    PCM = 0x01,
-    ADPCM = 0x02
-};
-
-struct PacketHeader
-{
-    uint8_t sender;
-    uint8_t channel;
-    uint8_t fs_rate;
-    uint8_t enc_fmt;
-    uint32_t sequence;
-    uint64_t timestamp;
-};
-
-static constexpr size_t PACKET_HEADER_SIZE = sizeof(PacketHeader);
-static constexpr size_t PACKET_MAX_SIZE = 8 * ((sizeof(PacketHeader) + sizeof(PCM_TYPE) * 2 * 3840) / 8 + 1);
 
 struct KFifo
 {
