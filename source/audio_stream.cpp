@@ -412,11 +412,11 @@ void IAStream::execute_loop(TimePointer tp, unsigned int cnt)
         {
             return;
         }
+        self->execute_loop(tp, cnt + 1);
         if (self->process_data() == RetCode::INVSEEK)
         {
-            return;
+            self->ias_ready = false;
         }
-        self->execute_loop(tp, cnt + 1);
     }));
 }
 

@@ -1,9 +1,27 @@
-#ifndef AUDIO_NETWORK_H
-#define AUDIO_NETWORK_H
+#ifndef AUDIO_NETWORK_HEADER
+#define AUDIO_NETWORK_HEADER
 
+#include "asio.hpp"
 #include "audio_interface.h"
 #include <mutex>
 #include <vector>
+
+/*                    Packet Frame Format
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|  sender id   |    channels   |  sample rate  | encoder format |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                            sequence                           |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                           timestamp                           |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                           timestamp                           |
++=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
+|                            payload                            |
+|                             ....                              |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+*/
 
 template <typename T> constexpr typename std::underlying_type<T>::type enum2val(T e)
 {
@@ -14,6 +32,63 @@ template <typename E> constexpr E val2enum(typename std::underlying_type<E>::typ
 {
     return static_cast<E>(val);
 }
+
+inline uint8_t bandwidth_to_byte(AudioBandWidth bw)
+{
+    switch (bw)
+    {
+    case AudioBandWidth::Narrow:
+        return 0x01;
+    case AudioBandWidth::Wide:
+        return 0x02;
+    case AudioBandWidth::SemiSuperWide:
+        return 0x03;
+    case AudioBandWidth::CDQuality:
+        return 0x04;
+    case AudioBandWidth::Full:
+        return 0x05;
+    default:
+        return 0x00;
+    }
+}
+
+inline AudioBandWidth byte_to_bandwidth(uint8_t byte)
+{
+    switch (byte)
+    {
+    case 0x01:
+        return AudioBandWidth::Narrow;
+    case 0x02:
+        return AudioBandWidth::Wide;
+    case 0x03:
+        return AudioBandWidth::SemiSuperWide;
+    case 0x04:
+        return AudioBandWidth::CDQuality;
+    case 0x05:
+        return AudioBandWidth::Full;
+    default:
+        return AudioBandWidth::Unknown;
+    }
+}
+
+enum class EncodeFormat : uint8_t
+{
+    PCM = 0x01,
+    ADPCM = 0x02
+};
+
+struct PacketHeader
+{
+    uint8_t sender;
+    uint8_t channel;
+    uint8_t fs_rate;
+    uint8_t enc_fmt;
+    uint32_t sequence;
+    uint64_t timestamp;
+};
+
+static constexpr size_t PACKET_HEADER_SIZE = sizeof(PacketHeader);
+static constexpr size_t PACKET_MAX_SIZE = 8 * ((sizeof(PacketHeader) + sizeof(PCM_TYPE) * 2 * 3840) / 8 + 1);
 
 struct KFifo
 {
@@ -55,61 +130,49 @@ struct KFifo
 
 class NetEncoder
 {
+  private:
     struct State
     {
-        int16_t predictor;
-        int8_t step_index;
-        State() : predictor(0), step_index(0)
-        {
-        }
+        int32_t predictor{0};
+        int step_index{0};
     };
 
   public:
     NetEncoder(unsigned int channels, unsigned int max_frames);
-    ~NetEncoder() = default;
-
     const uint8_t *encode(const int16_t *pcm_data, unsigned int frames, size_t &out_size);
-    void reset();
+    void reset() noexcept;
 
   private:
     uint8_t encode_sample(int16_t sample, State &state);
-    size_t calculate_encoded_size(unsigned int frames) const;
+    size_t calculate_encoded_size(unsigned int frames) const noexcept;
 
-  private:
-    unsigned int channels;
-    unsigned int max_frames;
+    const unsigned int channels;
+    const unsigned int max_frames;
     std::vector<State> encode_states;
     std::unique_ptr<uint8_t[]> encode_buffer;
-    size_t encode_buffer_size;
 };
 
 class NetDecoder
 {
+  private:
     struct State
     {
-        int16_t predictor;
-        int8_t step_index;
-        State() : predictor(0), step_index(0)
-        {
-        }
+        int32_t predictor{0};
+        int step_index{0};
     };
 
   public:
     NetDecoder(unsigned int channels, unsigned int max_frames);
-    ~NetDecoder() = default;
-
     const int16_t *decode(const uint8_t *adpcm_data, size_t adpcm_size, unsigned int &out_frames);
-    void reset();
+    void reset() noexcept;
 
   private:
     int16_t decode_sample(uint8_t code, State &state);
 
-  private:
-    unsigned int channels;
-    unsigned int max_frames;
+    const unsigned int channels;
+    const unsigned int max_frames;
     std::vector<State> decode_states;
     std::unique_ptr<int16_t[]> decode_buffer;
-    size_t decode_buffer_size;
 };
 
 #endif
