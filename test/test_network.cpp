@@ -21,7 +21,8 @@ int main()
     net_mgr->start();
     ias->start();
     oas->start();
-
+    std::this_thread::sleep_for(std::chrono::seconds(10));
+    // BackgroundService::instance().enumerate_devices();
     std::this_thread::sleep_for(std::chrono::seconds(360));
     BackgroundService::instance().stop();
     return 0;

@@ -474,7 +474,7 @@ void NetWorker::report()
         auto stats = pair.second.get_period_stats();
         auto token = pair.first;
 
-        AUDIO_INFO_PRINT("NET STATS(%u) : [loss]%.2f%% [jitter]%.2fms [received]%u [lost]%u", token,
+        AUDIO_INFO_PRINT("NETSTATS(%u) : [loss] %.2f%%, [jitter] %.2fms, [received] %u, [lost] %u", token,
                          stats.packet_loss_rate, stats.average_jitter, stats.packets_received, stats.packets_lost);
     }
 }

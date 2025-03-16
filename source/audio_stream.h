@@ -2,6 +2,7 @@
 #define AUDIO_STREAM_HEADER
 
 #include "asio.hpp"
+#include "audio_device_monitor.h"
 #include "audio_driver.h"
 #include "audio_interface.h"
 #include "audio_network.h"
@@ -16,7 +17,6 @@ using session_ptr = std::unique_ptr<SessionData>;
 using network_ptr = std::weak_ptr<NetWorker>;
 using asio_strand = asio::strand<asio::io_context::executor_type>;
 
-
 class BackgroundService
 {
   public:
@@ -24,6 +24,7 @@ class BackgroundService
     void start();
     void stop();
     asio::io_context &context();
+    void enumerate_devices() const;
 
   private:
     BackgroundService();
@@ -31,10 +32,13 @@ class BackgroundService
 
     asio::io_context io_context;
     std::vector<std::thread> io_thds;
+    std::shared_ptr<AudioDeviceMonitor> dev_monitor;
     asio::executor_work_guard<asio::io_context::executor_type> work_guard;
+
 #if WINDOWS_OS_ENVIRONMENT
     bool active_high_res_timer = false;
     UINT high_timer_resolution = 1;
+    std::shared_ptr<AudioDeviceMonitor> device_monitor_;
 #endif
 };
 

@@ -11,6 +11,25 @@ constexpr unsigned int SESSION_IDLE_TIMEOUT = 1000;
 constexpr AudioChannelMap DEFAULT_DUAL_MAP = {0, 1};
 constexpr AudioChannelMap DEFAULT_MONO_MAP = {0, 0};
 
+static void print_device_change_info(AudioDeviceEvent event, const AudioDeviceInfo &info)
+{
+    switch (event)
+    {
+    case AudioDeviceEvent::Added:
+        AUDIO_INFO_PRINT("Device added: %s", info.name.c_str());
+        break;
+    case AudioDeviceEvent::Removed:
+        AUDIO_INFO_PRINT("Device removed: %s", info.name.c_str());
+        break;
+    case AudioDeviceEvent::StateChanged:
+        AUDIO_INFO_PRINT("Device state changed: %s", info.name.c_str());
+        break;
+    case AudioDeviceEvent::DefaultChanged:
+        AUDIO_INFO_PRINT("Default device changed: %s", info.name.c_str());
+        break;
+    }
+}
+
 static bool check_wave_file_name(const std::string &dev_name)
 {
     return dev_name.size() >= 4 && dev_name.compare(dev_name.size() - 4, 4, ".wav") == 0;
@@ -39,11 +58,15 @@ BackgroundService::BackgroundService() : work_guard(asio::make_work_guard(io_con
         }
     }
 #endif
+
+    dev_monitor = AudioDeviceMonitor::Create(io_context);
+    dev_monitor->RegisterCallback(this, print_device_change_info);
 }
 
 BackgroundService::~BackgroundService()
 {
     stop();
+    dev_monitor->UnregisterCallback(this);
 #if WINDOWS_OS_ENVIRONMENT
     if (active_high_res_timer)
     {
@@ -81,6 +104,19 @@ void BackgroundService::stop()
 asio::io_context &BackgroundService::context()
 {
     return io_context;
+}
+
+void BackgroundService::enumerate_devices() const
+{
+    auto devices = dev_monitor->EnumerateDevices();
+    for (const auto &device : devices)
+    {
+        AUDIO_INFO_PRINT("Device: %s, type: %s, default: %s", device.name.c_str(),
+                         device.type == AudioDeviceType::Playback  ? "playback"
+                         : device.type == AudioDeviceType::Capture ? "capture"
+                                                                   : "all",
+                         device.is_default ? "yes" : "no");
+    }
 }
 
 // OAStream
