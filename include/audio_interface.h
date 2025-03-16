@@ -133,6 +133,8 @@ enum class AudioPeriodSize : unsigned int
     INR_40MS = 0x28
 };
 
+#define NETWORK_AUDIO_TRANS_PORT 52282
+
 #define AUDIO_INFO_PRINT(fmt, ...)                                                                                     \
     printf("[INF] %s(%d): " fmt, __FUNCTION__, __LINE__, ##__VA_ARGS__);                                               \
     printf("\n")

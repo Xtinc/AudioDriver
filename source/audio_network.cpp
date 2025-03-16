@@ -1,5 +1,5 @@
 #include "audio_network.h"
-#include <cstring>
+#include "audio_stream.h"
 
 // KFifo
 KFifo::KFifo(size_t blk_sz, size_t blk_num, unsigned int channel)
@@ -351,4 +351,477 @@ bool NetPacketHeader::validate(const char *data, size_t length)
     }
 
     return true;
+}
+
+// NetWorker
+using udp = asio::ip::udp;
+
+static RetCode resolve_endpoint(const std::string &ip, uint16_t port, asio::ip::udp::endpoint &endpoint)
+{
+    try
+    {
+        asio::ip::udp::resolver resolver(BG_SERVICE.get_executor());
+        asio::error_code ec;
+
+        auto endpoints = resolver.resolve(asio::ip::udp::v4(), ip, std::to_string(port), ec);
+        if (ec)
+        {
+            AUDIO_ERROR_PRINT("Failed to resolve address %s:%d: %s", ip.c_str(), port, ec.message().c_str());
+            return {RetCode::FAILED, "Failed to resolve address"};
+        }
+
+        endpoint = *endpoints.begin();
+        return {RetCode::OK, "Address resolved"};
+    }
+    catch (const std::exception &e)
+    {
+        AUDIO_ERROR_PRINT("Exception resolving address: %s", e.what());
+        return {RetCode::EXCEPTION, "Exception resolving address"};
+    }
+}
+
+NetWorker::NetWorker(asio::io_context &io_context)
+    : retry_count(0), io_context(io_context), running(false), receive_buffer(new char[NETWORK_MAX_BUFFER_SIZE]),
+      stats_timer(io_context)
+{
+    try
+    {
+        socket = std::make_unique<udp::socket>(io_context);
+        socket->open(udp::v4());
+
+        asio::socket_base::send_buffer_size option_send(262144);    // 256KB
+        asio::socket_base::receive_buffer_size option_recv(262144); // 256KB
+        asio::error_code ec;
+        socket->set_option(option_send, ec);
+        socket->set_option(option_recv, ec);
+        socket->set_option(asio::socket_base::reuse_address(true), ec);
+
+        socket->bind(udp::endpoint(udp::v4(), NETWORK_AUDIO_TRANS_PORT), ec);
+        if (ec)
+        {
+            AUDIO_ERROR_PRINT("Failed to bind socket: %s", ec.message().c_str());
+        }
+
+        AUDIO_INFO_PRINT("NetWorker initialized on port %d", socket->local_endpoint().port());
+    }
+    catch (const std::exception &e)
+    {
+        AUDIO_ERROR_PRINT("Failed to create socket: %s", e.what());
+    }
+}
+
+NetWorker::~NetWorker()
+{
+    stop();
+}
+
+RetCode NetWorker::start()
+{
+    if (running)
+    {
+        return {RetCode::NOACTION, "Already running"};
+    }
+
+    if (!socket || !socket->is_open())
+    {
+        return {RetCode::FAILED, "Socket not available"};
+    }
+
+    running = true;
+    start_receive_loop();
+    start_stats_loop();
+
+    return {RetCode::OK, "Started"};
+}
+
+RetCode NetWorker::stop()
+{
+    if (!running)
+    {
+        return {RetCode::NOACTION, "Not running"};
+    }
+
+    running = false;
+
+    if (socket && socket->is_open())
+    {
+        asio::error_code ec;
+        socket->cancel(ec);
+    }
+
+    stats_timer.cancel();
+
+    {
+        std::lock_guard<std::mutex> lock(receivers_mutex);
+        receivers.clear();
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(senders_mutex);
+        senders.clear();
+    }
+
+    AUDIO_INFO_PRINT("NetWorker stopped");
+    return {RetCode::OK, "Stopped"};
+}
+
+void NetWorker::report()
+{
+    std::lock_guard<std::mutex> lock(receivers_mutex);
+
+    for (auto &pair : decoders)
+    {
+        auto stats = pair.second.get_period_stats();
+        auto token = pair.first;
+
+        AUDIO_INFO_PRINT("NET STATS(%u) : [loss]%.2f%% [jitter]%.2fms [received]%u [lost]%u", token,
+                         stats.packet_loss_rate, stats.average_jitter, stats.packets_received, stats.packets_lost);
+    }
+}
+
+RetCode NetWorker::register_receiver(uint8_t token, ReceiveCallback callback)
+{
+    if (!callback)
+    {
+        return {RetCode::FAILED, "Invalid callback"};
+    }
+
+    if (!socket || !socket->is_open())
+    {
+        return {RetCode::FAILED, "NetWorker not ready"};
+    }
+
+    std::lock_guard<std::mutex> lock(receivers_mutex);
+
+    auto result = receivers.emplace(token, ReceiverContext(std::move(callback)));
+    if (!result.second)
+    {
+        result.first->second = std::move(callback);
+        return {RetCode::OK, "Receiver callback updated"};
+    }
+
+    AUDIO_DEBUG_PRINT("Registered receiver for token %u", token);
+    return {RetCode::OK, "Receiver registered"};
+}
+
+RetCode NetWorker::unregister_receiver(uint8_t token)
+{
+    std::lock_guard<std::mutex> lock(receivers_mutex);
+
+    auto it = receivers.find(token);
+    if (it == receivers.end())
+    {
+        return {RetCode::NOACTION, "Receiver not found"};
+    }
+
+    receivers.erase(it);
+    AUDIO_DEBUG_PRINT("Unregistered receiver for token %u", token);
+    return {RetCode::OK, "Receiver unregistered"};
+}
+
+RetCode NetWorker::register_sender(uint8_t sender_id, unsigned int channels, unsigned int sample_rate)
+{
+    if (!socket || !socket->is_open())
+    {
+        return {RetCode::FAILED, "Socket not available"};
+    }
+
+    std::lock_guard<std::mutex> lock(senders_mutex);
+    if (senders.find(sender_id) != senders.end())
+    {
+        return {RetCode::FAILED, "Sender ID already exists"};
+    }
+
+    senders.emplace(sender_id, SenderContext(channels, sample_rate));
+    return {RetCode::OK, "Sender registered"};
+}
+
+RetCode NetWorker::unregister_sender(uint8_t sender_id)
+{
+    std::lock_guard<std::mutex> lock(senders_mutex);
+    auto removed = senders.erase(sender_id) > 0;
+
+    if (removed)
+    {
+        AUDIO_DEBUG_PRINT("Unregistered sender for token %u", sender_id);
+        return {RetCode::OK, "Sender unregistered"};
+    }
+
+    return {RetCode::NOACTION, "Sender not found"};
+}
+
+RetCode NetWorker::add_destination(uint8_t sender_id, uint8_t receiver_token, const std::string &ip, uint16_t port)
+{
+    if (ip.empty())
+    {
+        return {RetCode::FAILED, "Invalid IP address"};
+    }
+
+    asio::ip::udp::endpoint endpoint;
+    RetCode res = resolve_endpoint(ip, port, endpoint);
+    if (res != RetCode::OK)
+    {
+        return res;
+    }
+
+    std::lock_guard<std::mutex> lock(senders_mutex);
+    auto iter = senders.find(sender_id);
+    if (iter == senders.end())
+    {
+        return {RetCode::FAILED, "Sender not registered"};
+    }
+
+    auto &dest_list = iter->second.destinations;
+
+    Destination new_dest(endpoint, receiver_token);
+
+    if (std::find(dest_list.begin(), dest_list.end(), new_dest) != dest_list.end())
+    {
+        return {RetCode::OK, "Destination already exists"};
+    }
+
+    dest_list.push_back(std::move(new_dest));
+    AUDIO_INFO_PRINT("Added destination %s for sender %u to receiver %u", ip.c_str(), sender_id, receiver_token);
+
+    return {RetCode::OK, "Destination added"};
+}
+
+RetCode NetWorker::send_audio(uint8_t sender_id, const int16_t *data, unsigned int frames)
+{
+    if (!data || frames == 0)
+    {
+        return {RetCode::FAILED, "Invalid input parameters"};
+    }
+
+    if (!is_ready())
+    {
+        return {RetCode::FAILED, "NetWorker not running"};
+    }
+
+    std::lock_guard<std::mutex> lock(senders_mutex);
+    auto it = senders.find(sender_id);
+    if (it == senders.end())
+    {
+        return {RetCode::FAILED, "Sender not registered"};
+    }
+
+    auto &context = it->second;
+
+    size_t encoded_size;
+    const uint8_t *encoded_data = context.encoder->encode(data, frames, encoded_size);
+    if (!encoded_data || encoded_size == 0)
+    {
+        return {RetCode::FAILED, "Encoding failed"};
+    }
+
+    NetPacketHeader header;
+    header.sender_id = sender_id;
+    header.channels = static_cast<uint8_t>(context.channels);
+    header.magic_num = NET_MAGIC_NUM;
+    header.sample_rate = context.sample_rate / 1000;
+    header.sequence = context.isequence++;
+    header.timestamp =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+
+    std::array<asio::const_buffer, 2> buffers{asio::buffer(&header, sizeof(header)),
+                                              asio::buffer(encoded_data, encoded_size)};
+
+    for (const auto &dest : context.destinations)
+    {
+        header.receiver_id = dest.receiver_token;
+        socket->async_send_to(buffers, dest.endpoint, [](const asio::error_code &error, std::size_t /*bytes*/) {
+            if (error)
+            {
+                AUDIO_DEBUG_PRINT("Send error: %s", error.message().c_str());
+            }
+        });
+    }
+
+    return {RetCode::OK, "Data sent"};
+}
+
+void NetWorker::start_receive_loop()
+{
+    if (!is_ready())
+    {
+        return;
+    }
+    auto self = shared_from_this();
+    socket->async_receive_from(asio::buffer(receive_buffer.get(), NETWORK_MAX_BUFFER_SIZE), sender_endpoint,
+                               [self](const asio::error_code &error, std::size_t bytes_transferred) {
+                                   self->handle_receive(error, bytes_transferred);
+                               });
+}
+
+void NetWorker::start_stats_loop()
+{
+    auto self = shared_from_this();
+    stats_timer.expires_after(std::chrono::minutes(1));
+    stats_timer.async_wait([self](const asio::error_code &ec) {
+        if (!ec && self->running)
+        {
+            self->report();
+            self->start_stats_loop();
+        }
+    });
+}
+
+void NetWorker::handle_receive(const asio::error_code &error, std::size_t bytes_transferred)
+{
+    if (error)
+    {
+        if (error != asio::error::operation_aborted)
+        {
+            AUDIO_DEBUG_PRINT("Receive error: %s", error.message().c_str());
+            retry_receive_with_backoff();
+        }
+        return;
+    }
+
+    if (bytes_transferred < sizeof(NetPacketHeader))
+    {
+        goto exit;
+    }
+
+    const NetPacketHeader *header = reinterpret_cast<const NetPacketHeader *>(receive_buffer.get());
+
+    if (header->magic_num != NET_MAGIC_NUM)
+    {
+        goto exit;
+    }
+
+    uint8_t sender_id = header->sender_id;
+    uint8_t receiver_id = header->receiver_id;
+    uint8_t channels = header->channels;
+    auto sample_enum = byte_to_bandwidth(header->sample_rate);
+
+    if (sample_enum == AudioBandWidth::Unknown)
+    {
+        goto exit;
+    }
+
+    const uint8_t *adpcm_data = reinterpret_cast<const uint8_t *>(receive_buffer.get() + sizeof(NetPacketHeader));
+    size_t adpcm_size = bytes_transferred - sizeof(NetPacketHeader);
+
+    {
+        auto &context = get_decoder(sender_id, channels);
+        context.update_stats(header->sequence, header->timestamp);
+
+        unsigned int decode_frames = 0;
+        auto decoded_data = context.decoder->decode(adpcm_data, adpcm_size, decode_frames);
+
+        if (decoded_data && decode_frames > 0)
+        {
+            std::lock_guard<std::mutex> lock(receivers_mutex);
+            auto it = receivers.find(receiver_id);
+            if (it != receivers.end() && (it->second))
+            {
+                (it->second)(sender_id, channels, decode_frames, enum2val(sample_enum), decoded_data);
+            }
+        }
+    }
+
+exit:
+    if (running)
+    {
+        start_receive_loop();
+    }
+}
+
+void NetWorker::retry_receive_with_backoff()
+{
+    int delay_ms = std::min(100 * (1 << retry_count), 30000);
+
+    auto self = shared_from_this();
+    auto timer = std::make_shared<asio::steady_timer>(io_context);
+    timer->expires_after(std::chrono::milliseconds(delay_ms));
+    timer->async_wait([self, timer](const asio::error_code &ec) {
+        if (!ec)
+        {
+            self->retry_count++;
+            self->start_receive_loop();
+        }
+    });
+}
+
+NetWorker::DecoderContext &NetWorker::get_decoder(uint8_t sender_id, unsigned int channels)
+{
+    std::lock_guard<std::mutex> lock(decoders_mutex);
+
+    auto it = decoders.find(sender_id);
+    if (it == decoders.end())
+    {
+        auto result = decoders.emplace(sender_id, DecoderContext(channels, NETWORK_MAX_FRAMES));
+        return result.first->second;
+    }
+
+    return it->second;
+}
+
+void NetWorker::DecoderContext::update_stats(uint32_t sequence, uint64_t timestamp)
+{
+    auto now = std::chrono::steady_clock::now();
+    uint64_t arrival_time = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+
+    packets_received++;
+    period_packets_received++;
+
+    if (last_sequence == 0)
+    {
+        last_sequence = sequence;
+        last_timestamp = timestamp;
+        last_arrival_time = arrival_time;
+        return;
+    }
+
+    if (sequence > last_sequence + 1)
+    {
+        uint32_t lost = sequence - last_sequence - 1;
+        packets_lost += lost;
+        period_packets_lost += lost;
+    }
+
+    if (timestamp > last_timestamp)
+    {
+        uint64_t send_interval = timestamp - last_timestamp;
+        uint64_t arrival_interval = arrival_time - last_arrival_time;
+
+        double jitter = std::abs(static_cast<double>(arrival_interval) - static_cast<double>(send_interval));
+
+        total_jitter += jitter;
+        period_total_jitter += jitter;
+        max_jitter = std::max(max_jitter, jitter);
+    }
+
+    last_sequence = sequence;
+    last_timestamp = timestamp;
+    last_arrival_time = arrival_time;
+}
+
+NetStatInfos NetWorker::DecoderContext::get_period_stats()
+{
+    NetStatInfos stats;
+
+    if (period_packets_received + period_packets_lost > 0)
+    {
+        stats.packet_loss_rate =
+            static_cast<double>(period_packets_lost) / (period_packets_received + period_packets_lost) * 100.0;
+    }
+
+    if (period_packets_received > 0)
+    {
+        stats.average_jitter = period_total_jitter / period_packets_received;
+    }
+
+    stats.packets_received = period_packets_received;
+    stats.packets_lost = period_packets_lost;
+    stats.max_jitter = max_jitter;
+
+    period_packets_received = 0;
+    period_packets_lost = 0;
+    period_total_jitter = 0.0;
+    last_report_time = std::chrono::steady_clock::now();
+
+    return stats;
 }
