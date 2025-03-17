@@ -1,4 +1,4 @@
-#include "audio_device_monitor.h"
+#include "audio_monitor.h"
 #include "audio_interface.h"
 
 #if WINDOWS_OS_ENVIRONMENT
@@ -347,6 +347,36 @@ bool AudioDeviceMonitor::DeviceExists(const std::string &device_id)
 #include <sys/stat.h>
 #include <unistd.h>
 
+static std::array<std::string, 12> blakclist = {"null",
+                                                "pulse",
+                                                "default",
+                                                "Rate Converter Plugin",
+                                                "JACK Audio Connection",
+                                                "Open Sound System",
+                                                "Plugin",
+                                                "jack",
+                                                "oss",
+                                                "dsnoop",
+                                                "dmix",
+                                                "dsp"};
+
+static bool is_blacklisted(const char *name)
+{
+    if (name == nullptr)
+    {
+        return true;
+    }
+
+    for (const auto &blacklisted : blakclist)
+    {
+        if (strncmp(name, blacklisted.c_str(), blacklisted.size()) == 0 || strstr(name, blacklisted.c_str()) != nullptr)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 // Helper function: Convert ALSA device name to human-readable name
 static std::string get_device_description(const char *device_name)
 {
@@ -354,7 +384,8 @@ static std::string get_device_description(const char *device_name)
     std::string result = device_name;
 
     // Validate input
-    if (!device_name || strlen(device_name) == 0) {
+    if (!device_name || strlen(device_name) == 0)
+    {
         return "Unknown Device";
     }
 
@@ -367,8 +398,9 @@ static std::string get_device_description(const char *device_name)
 
         if (snd_ctl_card_info(handle, info) >= 0)
         {
-            const char* name = snd_ctl_card_info_get_name(info);
-            if (name && strlen(name) > 0) {
+            const char *name = snd_ctl_card_info_get_name(info);
+            if (name && strlen(name) > 0)
+            {
                 result = name;
             }
         }
@@ -382,14 +414,13 @@ static std::string get_device_description(const char *device_name)
 // Helper function: Get ALSA device type
 static AudioDeviceType get_device_type(const char *device_name)
 {
-    // Check if the device supports playback
-    bool supports_playback = false;
-    bool supports_capture = false;
-
-    // Validate input
-    if (!device_name || strlen(device_name) == 0) {
+    if (!device_name || strlen(device_name) == 0 || is_blacklisted(device_name))
+    {
         return AudioDeviceType::All;
     }
+
+    bool supports_playback = false;
+    bool supports_capture = false;
 
     snd_pcm_t *pcm;
     if (snd_pcm_open(&pcm, device_name, SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK) >= 0)
@@ -417,7 +448,6 @@ static AudioDeviceType get_device_type(const char *device_name)
         return AudioDeviceType::Capture;
     }
 
-    // Default to assuming it is a playback device
     return AudioDeviceType::Playback;
 }
 
@@ -427,7 +457,8 @@ static bool is_default_device(const std::string &device_id, AudioDeviceType type
     void **hints;
     bool is_default = false;
 
-    if (device_id.empty() || snd_device_name_hint(-1, "pcm", &hints) < 0) {
+    if (device_id.empty() || snd_device_name_hint(-1, "pcm", &hints) < 0)
+    {
         return false;
     }
 
@@ -459,7 +490,8 @@ static bool is_default_device(const std::string &device_id, AudioDeviceType type
                 {
                     is_default = true;
                     free(name);
-                    if (ioid) free(ioid);
+                    if (ioid)
+                        free(ioid);
                     break;
                 }
             }
@@ -556,7 +588,8 @@ void UdevNotificationHandler::HandleUdevEvent()
         if (IsAudioDevice(dev))
         {
             const char *action = udev_device_get_action(dev);
-            if (!action) {
+            if (!action)
+            {
                 udev_device_unref(dev);
                 goto continue_monitoring;
             }
@@ -629,7 +662,8 @@ AudioDeviceInfo UdevNotificationHandler::GetDeviceInfo(struct udev_device *dev)
 {
     AudioDeviceInfo info;
 
-    if (!dev) {
+    if (!dev)
+    {
         return info;
     }
 
@@ -650,19 +684,21 @@ AudioDeviceInfo UdevNotificationHandler::GetDeviceInfo(struct udev_device *dev)
         {
             char card_id[32];
             snprintf(card_id, sizeof(card_id), "hw:%d", card_num);
-            
+
             // Get more descriptive name if possible
             info.name = get_device_description(card_id);
-            
+
             // If we couldn't get a proper name, use the card ID
-            if (info.name.empty()) {
+            if (info.name.empty())
+            {
                 info.name = card_id;
             }
 
             // Assume the device is available but verify
             snd_pcm_t *pcm = nullptr;
             info.is_active = (snd_pcm_open(&pcm, card_id, SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK) >= 0);
-            if (pcm) snd_pcm_close(pcm);
+            if (pcm)
+                snd_pcm_close(pcm);
 
             // Determine device type
             info.type = get_device_type(card_id);
@@ -681,12 +717,15 @@ AudioDeviceInfo UdevNotificationHandler::GetDeviceInfo(struct udev_device *dev)
 
     return info;
 }
+
 #endif
 
 // Cross-platform AudioDeviceMonitor implementation
 std::shared_ptr<AudioDeviceMonitor> AudioDeviceMonitor::Create(asio::io_context &io_context)
 {
-    return std::shared_ptr<AudioDeviceMonitor>(new AudioDeviceMonitor(io_context));
+    auto monitor = std::shared_ptr<AudioDeviceMonitor>(new AudioDeviceMonitor(io_context));
+    monitor->Start();
+    return monitor;
 }
 
 AudioDeviceMonitor::AudioDeviceMonitor(asio::io_context &io_context)
@@ -722,8 +761,6 @@ AudioDeviceMonitor::AudioDeviceMonitor(asio::io_context &io_context)
     // Store initial device list
     last_device_list_ = EnumerateDevices();
 
-    // Start polling timer
-    StartPollingTimer();
 #endif
 }
 
@@ -937,6 +974,10 @@ AudioDeviceInfo AudioDeviceMonitor::GetDeviceInfo(IMMDevice *device, AudioDevice
     return info;
 }
 
+void AudioDeviceMonitor::Start()
+{
+}
+
 #elif LINUX_OS_ENVIRONMENT
 std::vector<AudioDeviceInfo> AudioDeviceMonitor::EnumerateDevices(AudioDeviceType type)
 {
@@ -945,7 +986,9 @@ std::vector<AudioDeviceInfo> AudioDeviceMonitor::EnumerateDevices(AudioDeviceTyp
     void **hints;
     int err = snd_device_name_hint(-1, "pcm", &hints);
     if (err < 0)
+    {
         return devices;
+    }
 
     void **n = hints;
     while (*n != nullptr)
@@ -954,70 +997,71 @@ std::vector<AudioDeviceInfo> AudioDeviceMonitor::EnumerateDevices(AudioDeviceTyp
         char *desc = snd_device_name_get_hint(*n, "DESC");
         char *ioid = snd_device_name_get_hint(*n, "IOID");
 
-        if (name != nullptr &&
-            // Filter out ALSA software devices and some virtual devices
-            strncmp(name, "null", 4) != 0 && 
-            strncmp(name, "pulse", 5) != 0 &&
-            strncmp(name, "default", 7) != 0)
+        if (name != nullptr && !is_blacklisted(name))
         {
-            AudioDeviceInfo info;
-            info.id = name;
+            if (strncmp(name, "hw:", 3) == 0 || strncmp(name, "plughw:", 7) == 0)
+            {
+                AudioDeviceInfo info;
+                info.id = name;
 
-            if (desc != nullptr && strlen(desc) > 0)
-            {
-                info.name = desc;
-            }
-            else
-            {
-                info.name = name;
-            }
-
-            // Determine device type
-            if (ioid != nullptr)
-            {
-                std::string ioid_str(ioid);
-                if (ioid_str == "Output")
+                if (desc != nullptr && strlen(desc) > 0)
                 {
-                    info.type = AudioDeviceType::Playback;
-                }
-                else if (ioid_str == "Input")
-                {
-                    info.type = AudioDeviceType::Capture;
+                    info.name = desc;
                 }
                 else
                 {
-                    info.type = AudioDeviceType::All;
-                }
-            }
-            else
-            {
-                // No IOID specified, try to detect type by opening the device
-                info.type = get_device_type(name);
-            }
-
-            // Filter devices based on requested type
-            bool add_device = (type == AudioDeviceType::All) ||
-                            (type == AudioDeviceType::Playback &&
-                            (info.type == AudioDeviceType::Playback || info.type == AudioDeviceType::All)) ||
-                            (type == AudioDeviceType::Capture &&
-                            (info.type == AudioDeviceType::Capture || info.type == AudioDeviceType::All));
-
-            if (add_device)
-            {
-                // Check device status - try to open it to confirm it's active
-                snd_pcm_t *pcm = nullptr;
-                int stream_type = (info.type == AudioDeviceType::Capture) ? 
-                                SND_PCM_STREAM_CAPTURE : SND_PCM_STREAM_PLAYBACK;
-                
-                info.is_active = (snd_pcm_open(&pcm, name, stream_type, SND_PCM_NONBLOCK) >= 0);
-                if (pcm) {
-                    snd_pcm_close(pcm);
+                    info.name = name;
                 }
 
-                // Check if it's the default device
-                info.is_default = is_default_device(info.id, info.type);
+                if (ioid != nullptr)
+                {
+                    std::string ioid_str(ioid);
+                    if (ioid_str == "Output")
+                    {
+                        info.type = AudioDeviceType::Playback;
+                    }
+                    else if (ioid_str == "Input")
+                    {
+                        info.type = AudioDeviceType::Capture;
+                    }
+                    else
+                    {
+                        info.type = AudioDeviceType::All;
+                    }
+                }
+                else
+                {
+                    info.type = get_device_type(name);
+                }
 
-                devices.push_back(info);
+                bool add_device = (type == AudioDeviceType::All) ||
+                                  (type == AudioDeviceType::Playback &&
+                                   (info.type == AudioDeviceType::Playback || info.type == AudioDeviceType::All)) ||
+                                  (type == AudioDeviceType::Capture &&
+                                   (info.type == AudioDeviceType::Capture || info.type == AudioDeviceType::All));
+
+                if (add_device)
+                {
+                    snd_pcm_t *pcm = nullptr;
+                    snd_pcm_stream_t stream_type =
+                        (info.type == AudioDeviceType::Capture) ? SND_PCM_STREAM_CAPTURE : SND_PCM_STREAM_PLAYBACK;
+
+                    info.is_active = (snd_pcm_open(&pcm, name, stream_type, SND_PCM_NONBLOCK) >= 0);
+                    if (pcm)
+                    {
+                        snd_pcm_close(pcm);
+                    }
+
+                    info.is_default = is_default_device(info.id, info.type);
+
+                    // std::string readable_name = get_device_description(name);
+                    // if (!readable_name.empty() && readable_name != name)
+                    // {
+                    //     info.name = readable_name;
+                    // }
+
+                    devices.push_back(info);
+                }
             }
         }
 
@@ -1032,7 +1076,6 @@ std::vector<AudioDeviceInfo> AudioDeviceMonitor::EnumerateDevices(AudioDeviceTyp
     }
 
     snd_device_name_free_hint(hints);
-
     return devices;
 }
 
@@ -1069,14 +1112,16 @@ bool AudioDeviceMonitor::DeviceExists(const std::string &device_id)
 
 void AudioDeviceMonitor::StartPollingTimer()
 {
-    auto self = shared_from_this();
-
     polling_timer_->expires_after(std::chrono::seconds(5));
-    polling_timer_->async_wait([this, self](const asio::error_code &ec) {
+    polling_timer_->async_wait([this](const asio::error_code &ec) {
         if (!ec)
         {
             PollDeviceChanges();
-            StartPollingTimer(); // Restart the timer
+
+            if (polling_timer_)
+            {
+                StartPollingTimer();
+            }
         }
     });
 }
@@ -1126,5 +1171,10 @@ void AudioDeviceMonitor::PollDeviceChanges()
 
     // Update device list
     last_device_list_ = std::move(current_devices);
+}
+
+void AudioDeviceMonitor::Start()
+{
+    StartPollingTimer();
 }
 #endif

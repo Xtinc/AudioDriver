@@ -117,6 +117,8 @@ class AudioDeviceMonitor : public std::enable_shared_from_this<AudioDeviceMonito
 
     // Unregister device change callback
     bool UnregisterCallback(void *owner);
+    
+    void Start();
 
 #if WINDOWS_OS_ENVIRONMENT
     // String conversion utility methods

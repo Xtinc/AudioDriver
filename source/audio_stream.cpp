@@ -111,11 +111,11 @@ void BackgroundService::enumerate_devices() const
     auto devices = dev_monitor->EnumerateDevices();
     for (const auto &device : devices)
     {
-        AUDIO_INFO_PRINT("Device: %s, type: %s, default: %s", device.name.c_str(),
+        AUDIO_INFO_PRINT("[%s](%s) : %s", device.id.c_str(),
                          device.type == AudioDeviceType::Playback  ? "playback"
                          : device.type == AudioDeviceType::Capture ? "capture"
                                                                    : "all",
-                         device.is_default ? "yes" : "no");
+                         device.name.c_str());
     }
 }
 
@@ -147,10 +147,10 @@ RetCode OAStream::initialize_network(const std::shared_ptr<NetWorker> &nw)
     std::weak_ptr<OAStream> weak_self = shared_from_this();
     auto result =
         nw->register_receiver(token, [weak_self](uint8_t sender_id, unsigned int channels, unsigned int frames,
-                                                 unsigned int sample_rate, const int16_t *data) {
+                                                 unsigned int sample_rate, const int16_t *data, uint32_t source_ip) {
             if (auto self = weak_self.lock())
             {
-                self->direct_push(sender_id, channels, frames, sample_rate, data);
+                self->direct_push(sender_id, channels, frames, sample_rate, data, source_ip);
             }
         });
 
@@ -217,12 +217,17 @@ RetCode OAStream::reset(const AudioDeviceName &_name)
         AUDIO_ERROR_PRINT("Failed to create device: %s", ret.what());
     }
 
+    if (auto np = listener.lock())
+    {
+        np->reset(_name, fs, ch);
+    }
+
     oas_ready = true;
     return start();
 }
 
 RetCode OAStream::direct_push(unsigned char itoken, unsigned int chan, unsigned int frames, unsigned int sample_rate,
-                              const int16_t *data)
+                              const int16_t *data, uint32_t source_ip)
 {
     if (!oas_ready)
     {
@@ -235,14 +240,16 @@ RetCode OAStream::direct_push(unsigned char itoken, unsigned int chan, unsigned 
     }
 
     unsigned int std_fr = sample_rate * ti / 1000;
+    uint64_t composite_key = (static_cast<uint64_t>(source_ip) << 32) | itoken;
 
     std::lock_guard<std::mutex> grd(session_mtx);
-    auto it = sessions.find(itoken);
+    auto it = sessions.find(composite_key);
     if (it == sessions.end())
     {
-        auto io_map = chan == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP;
-        auto result = sessions.emplace(
-            itoken, std::make_unique<SessionContext>(sample_rate, chan, fs, ch, std_fr, io_map, io_map));
+        auto imap = chan == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP;
+        auto omap = ch == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP;
+        auto result = sessions.emplace(composite_key,
+                                       std::make_unique<SessionContext>(sample_rate, chan, fs, ch, std_fr, imap, omap));
 
         if (!result.second)
         {
@@ -250,11 +257,22 @@ RetCode OAStream::direct_push(unsigned char itoken, unsigned int chan, unsigned 
         }
 
         it = result.first;
-        AUDIO_INFO_PRINT("%u receiver New connection: %u", token, itoken);
+        AUDIO_INFO_PRINT("%u receiver New connection: %u (IP: %08X)", token, itoken, source_ip);
     }
 
     bool success = it->second->session.store((const char *)data, frames * chan * sizeof(PCM_TYPE));
-    return success ? RetCode::OK : RetCode{RetCode::NOACTION, "Failed to store data (buffer may be full)"};
+    return success ? RetCode::OK : RetCode::NOACTION;
+}
+
+void OAStream::register_listener(const std::shared_ptr<IAStream> &ias)
+{
+    ias->reset({odevice->hw_name, 0}, fs, ch);
+    listener = ias;
+}
+
+void OAStream::unregister_listener()
+{
+    listener.reset();
 }
 
 void OAStream::execute_loop(TimePointer tp, unsigned int cnt)
@@ -303,7 +321,8 @@ void OAStream::process_data()
             {
                 if (context->session.idle_count++ > SESSION_IDLE_TIMEOUT)
                 {
-                    AUDIO_INFO_PRINT("Removing empty session: %u", it->first);
+                    AUDIO_INFO_PRINT("Removing empty session: %u (IP: 0x%08X)", static_cast<uint8_t>(it->first & 0xFF),
+                                     static_cast<uint32_t>(it->first >> 32));
                     it = sessions.erase(it);
                     continue;
                 }
@@ -333,12 +352,17 @@ void OAStream::process_data()
                 output_frames = std::min(output_frames, ps);
             }
 
-            mix_channels(src, ch, context->session.chan, output_frames, reinterpret_cast<PCM_TYPE *>(databuf.get()));
+            mix_channels(src, ch, output_frames, reinterpret_cast<PCM_TYPE *>(databuf.get()));
             ++it;
         }
     }
 
     odevice->write(databuf.get(), ps * ch * sizeof(PCM_TYPE));
+
+    if (auto np = listener.lock())
+    {
+        np->direct_push(databuf.get(), ps * ch * sizeof(PCM_TYPE));
+    }
 }
 
 RetCode OAStream::create_device(const AudioDeviceName &_name)
@@ -365,12 +389,15 @@ RetCode OAStream::create_device(const AudioDeviceName &_name)
     auto new_databuf = std::make_unique<char[]>(new_ps * new_ch * sizeof(PCM_TYPE));
     auto new_mix_buf = std::make_unique<char[]>(new_ps * new_ch * sizeof(PCM_TYPE));
 
-    odevice = std::move(new_device);
-    fs = new_fs;
-    ch = new_ch;
-    ps = new_ps;
-    databuf = std::move(new_databuf);
-    mix_buf = std::move(new_mix_buf);
+    {
+        std::lock_guard<std::mutex> grd(session_mtx);
+        odevice = std::move(new_device);
+        fs = new_fs;
+        ch = new_ch;
+        ps = new_ps;
+        databuf = std::move(new_databuf);
+        mix_buf = std::move(new_mix_buf);
+    }
 
     return {RetCode::OK, "Device initialized successfully"};
 }
@@ -410,6 +437,19 @@ RetCode IAStream::reset(const AudioDeviceName &_name)
     stop();
 
     auto ret = create_device(_name);
+    if (!ret)
+    {
+        AUDIO_ERROR_PRINT("Failed to create device: %s", ret.what());
+    }
+    ias_ready = true;
+    return start();
+}
+
+RetCode IAStream::reset(const AudioDeviceName &_name, unsigned int _fs, unsigned int _ch)
+{
+    stop();
+
+    auto ret = create_device(_name, _fs, _ch);
     if (!ret)
     {
         AUDIO_ERROR_PRINT("Failed to create device: %s", ret.what());
@@ -479,6 +519,11 @@ RetCode IAStream::connect(const std::shared_ptr<OAStream> &oas)
     return {RetCode::OK, "Connection established"};
 }
 
+RetCode IAStream::direct_push(const char *data, size_t len)
+{
+    return idevice->write(data, len);
+}
+
 void IAStream::execute_loop(TimePointer tp, unsigned int cnt)
 {
     if (!ias_ready)
@@ -516,7 +561,7 @@ RetCode IAStream::process_data()
     auto dev_fr = idevice->fs() * ti / 1000;
     auto ret = idevice->read(dev_buf.get(), dev_fr * idevice->ch() * sizeof(PCM_TYPE));
 
-    if (ret != RetCode::OK)
+    if (ret != RetCode::OK && ret != RetCode::NOACTION)
     {
         AUDIO_DEBUG_PRINT("Failed to read data: %s", ret.what());
         return ret;
@@ -551,8 +596,19 @@ RetCode IAStream::process_data()
 
 RetCode IAStream::create_device(const AudioDeviceName &_name)
 {
-    auto new_device = check_wave_file_name(_name.first) ? make_audio_driver(WAVE_IAS, _name, fs, ps, ch)
-                                                        : make_audio_driver(PHSY_IAS, _name, fs, ps, ch);
+    std::unique_ptr<AudioDevice> new_device;
+    if (_name.first == "echo")
+    {
+        new_device = make_audio_driver(ECHO_IAS, _name, fs, ps, ch);
+    }
+    else if (check_wave_file_name(_name.first))
+    {
+        new_device = make_audio_driver(WAVE_IAS, _name, fs, ps, ch);
+    }
+    else
+    {
+        new_device = make_audio_driver(PHSY_IAS, _name, fs, ps, ch);
+    }
 
     if (!new_device)
     {
@@ -566,6 +622,28 @@ RetCode IAStream::create_device(const AudioDeviceName &_name)
         return ret;
     }
 
+    return swap_device(new_device);
+}
+
+RetCode IAStream::create_device(const AudioDeviceName &_name, unsigned int _fs, unsigned int _ch)
+{
+    auto new_device = make_audio_driver(ECHO_IAS, _name, _fs, _fs * ti / 1000, _ch);
+    if (!new_device)
+    {
+        return {RetCode::FAILED, "Failed to create audio driver"};
+    }
+
+    auto ret = new_device->open();
+    if (!ret)
+    {
+        AUDIO_ERROR_PRINT("Failed to open capture device [%s]: %s", _name.first.c_str(), ret.what());
+        return ret;
+    }
+    return swap_device(new_device);
+}
+
+RetCode IAStream::swap_device(idevice_ptr &new_device)
+{
     auto dev_fr = new_device->fs() * ti / 1000;
     auto new_dev_buf = std::make_unique<char[]>(dev_fr * new_device->ch() * sizeof(PCM_TYPE));
     auto new_usr_buf = std::make_unique<char[]>(ps * ch * sizeof(PCM_TYPE));
@@ -576,7 +654,7 @@ RetCode IAStream::create_device(const AudioDeviceName &_name)
 
     if (!new_sampler->is_valid())
     {
-        AUDIO_ERROR_PRINT("Failed to create sampler for device [%s]", _name.first.c_str());
+        AUDIO_ERROR_PRINT("Failed to create sampler for device [%s]", new_device->hw_name.c_str());
         return {RetCode::FAILED, "Failed to create sampler"};
     }
 

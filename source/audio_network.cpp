@@ -679,30 +679,38 @@ void NetWorker::handle_receive(const asio::error_code &error, std::size_t bytes_
         return;
     }
 
+    const NetPacketHeader *header = nullptr;
+    uint8_t sender_id = 0;
+    uint8_t receiver_id = 0;
+    uint8_t channels = 0;
+    AudioBandWidth sample_enum = AudioBandWidth::Unknown;
+    const uint8_t *adpcm_data = nullptr;
+    size_t adpcm_size = 0;
+
     if (bytes_transferred < sizeof(NetPacketHeader))
     {
         goto exit;
     }
 
-    const NetPacketHeader *header = reinterpret_cast<const NetPacketHeader *>(receive_buffer.get());
+    header = reinterpret_cast<const NetPacketHeader *>(receive_buffer.get());
 
     if (header->magic_num != NET_MAGIC_NUM)
     {
         goto exit;
     }
 
-    uint8_t sender_id = header->sender_id;
-    uint8_t receiver_id = header->receiver_id;
-    uint8_t channels = header->channels;
-    auto sample_enum = byte_to_bandwidth(header->sample_rate);
+    sender_id = header->sender_id;
+    receiver_id = header->receiver_id;
+    channels = header->channels;
+    sample_enum = byte_to_bandwidth(header->sample_rate);
 
     if (sample_enum == AudioBandWidth::Unknown)
     {
         goto exit;
     }
 
-    const uint8_t *adpcm_data = reinterpret_cast<const uint8_t *>(receive_buffer.get() + sizeof(NetPacketHeader));
-    size_t adpcm_size = bytes_transferred - sizeof(NetPacketHeader);
+    adpcm_data = reinterpret_cast<const uint8_t *>(receive_buffer.get() + sizeof(NetPacketHeader));
+    adpcm_size = bytes_transferred - sizeof(NetPacketHeader);
 
     {
         auto &context = get_decoder(sender_id, channels);
@@ -717,7 +725,9 @@ void NetWorker::handle_receive(const asio::error_code &error, std::size_t bytes_
             auto it = receivers.find(receiver_id);
             if (it != receivers.end() && (it->second))
             {
-                (it->second)(sender_id, channels, decode_frames, enum2val(sample_enum), decoded_data);
+                uint32_t ip_address =
+                    sender_endpoint.address().is_v4() ? sender_endpoint.address().to_v4().to_uint() : 0;
+                (it->second)(sender_id, channels, decode_frames, enum2val(sample_enum), decoded_data, ip_address);
             }
         }
     }

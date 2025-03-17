@@ -10,6 +10,16 @@
 
 static std::string normailzed_device_name(const AudioDeviceName &name)
 {
+    if (name.first == "default" || name.first.empty())
+    {
+        return "default";
+    }
+
+    if (name.first.find("hw:") == 0 && name.first.find(",") != std::string::npos)
+    {
+        return name.first;
+    }
+
     return std::string("hw:CARD=") + name.first + ",DEV=" + std::to_string(name.second);
 }
 
@@ -22,7 +32,7 @@ void set_current_thread_scheduler_policy()
     pthread_setname_np(thread, "audio_thd");
 }
 
-class AlsaDriver final : public AudioDriver
+class AlsaDriver final : public AudioDevice
 {
   public:
     AlsaDriver(const std::string &name, bool capture, unsigned int fs, unsigned int ps, unsigned int ch);
@@ -45,7 +55,7 @@ class AlsaDriver final : public AudioDriver
 };
 
 AlsaDriver::AlsaDriver(const std::string &name, bool capture, unsigned int fs, unsigned int ps, unsigned int ch)
-    : AudioDriver(name, capture, fs, ps, ch), handle(nullptr)
+    : AudioDevice(name, capture, fs, ps, ch), handle(nullptr)
 {
 }
 
@@ -64,7 +74,8 @@ RetCode AlsaDriver::open()
         snd_pcm_open(&handle, hw_name.c_str(), is_capture_dev ? SND_PCM_STREAM_CAPTURE : SND_PCM_STREAM_PLAYBACK, 0);
     if (result < 0)
     {
-        return {result, snd_strerror(result)};
+        AUDIO_ERROR_PRINT("ALSA device [%s] open failed: %s", hw_name.c_str(), snd_strerror(result));
+        return RetCode::EOPEN;
     }
     hstate = STREAM_OPENED;
 
@@ -73,48 +84,56 @@ RetCode AlsaDriver::open()
     result = snd_pcm_hw_params_any(handle, hw_params);
     if (result < 0)
     {
-        return {result, snd_strerror(result)};
+        AUDIO_ERROR_PRINT("ALSA device [%s] hw_params_any failed: %s", hw_name.c_str(), snd_strerror(result));
+        return RetCode::EPARAM;
     }
 
     result = snd_pcm_hw_params_set_access(handle, hw_params, SND_PCM_ACCESS_MMAP_INTERLEAVED);
     if (result < 0)
     {
-        return {result, snd_strerror(result)};
+        AUDIO_ERROR_PRINT("ALSA device [%s] set access failed: %s", hw_name.c_str(), snd_strerror(result));
+        return RetCode::EPARAM;
     }
 
     result = snd_pcm_hw_params_set_format(handle, hw_params, SND_PCM_FORMAT_S16_LE);
     if (result < 0)
     {
-        return {result, snd_strerror(result)};
+        AUDIO_ERROR_PRINT("ALSA device [%s] set format failed: %s", hw_name.c_str(), snd_strerror(result));
+        return RetCode::EPARAM;
     }
 
     result = snd_pcm_hw_params_set_rate_near(handle, hw_params, &dev_fs, 0);
     if (result < 0)
     {
-        return {result, snd_strerror(result)};
+        AUDIO_ERROR_PRINT("ALSA device [%s] set rate failed: %s", hw_name.c_str(), snd_strerror(result));
+        return RetCode::EPARAM;
     }
 
     result = snd_pcm_hw_params_get_channels_max(hw_params, &max_ch);
     if (result < 0)
     {
-        return {result, snd_strerror(result)};
+        AUDIO_ERROR_PRINT("ALSA device [%s] get max channel failed: %s", hw_name.c_str(), snd_strerror(result));
+        return RetCode::EPARAM;
     }
 
     result = snd_pcm_hw_params_get_channels_min(hw_params, &min_ch);
     if (result < 0)
     {
-        return {result, snd_strerror(result)};
+        AUDIO_ERROR_PRINT("ALSA device [%s] get min channel failed: %s", hw_name.c_str(), snd_strerror(result));
+        return RetCode::EPARAM;
     }
 
     if (dev_ch < min_ch || dev_ch > max_ch)
     {
-        return {-1, "Invalid channel count"};
+        AUDIO_ERROR_PRINT("ALSA device [%s] invalid channel count: %u", hw_name.c_str(), dev_ch);
+        return {RetCode::EPARAM, "Invalid channel count"};
     }
 
     result = snd_pcm_hw_params_set_channels(handle, hw_params, dev_ch);
     if (result < 0)
     {
-        return {result, snd_strerror(result)};
+        AUDIO_ERROR_PRINT("ALSA device [%s] set channel failed: %s", hw_name.c_str(), snd_strerror(result));
+        return RetCode::EPARAM;
     }
 
     int dir = 0;
@@ -122,7 +141,8 @@ RetCode AlsaDriver::open()
     result = snd_pcm_hw_params_set_period_size_near(handle, hw_params, &period_size, &dir);
     if (result < 0)
     {
-        return {result, snd_strerror(result)};
+        AUDIO_ERROR_PRINT("ALSA device [%s] set period size failed: %s", hw_name.c_str(), snd_strerror(result));
+        return RetCode::EPARAM;
     }
     dev_ps = period_size;
 
@@ -130,13 +150,15 @@ RetCode AlsaDriver::open()
     result = snd_pcm_hw_params_set_periods_near(handle, hw_params, &period_number, &dir);
     if (result < 0)
     {
-        return {result, snd_strerror(result)};
+        AUDIO_ERROR_PRINT("ALSA device [%s] set period number failed: %s", hw_name.c_str(), snd_strerror(result));
+        return RetCode::EPARAM;
     }
 
     result = snd_pcm_hw_params(handle, hw_params);
     if (result < 0)
     {
-        return {result, snd_strerror(result)};
+        AUDIO_ERROR_PRINT("ALSA device [%s] set hw params failed: %s", hw_name.c_str(), snd_strerror(result));
+        return RetCode::EPARAM;
     }
 
     snd_pcm_sw_params_t *sw_params = NULL;
@@ -153,13 +175,14 @@ RetCode AlsaDriver::open()
     result = snd_pcm_sw_params(handle, sw_params);
     if (result < 0)
     {
-        return {result, snd_strerror(result)};
+        AUDIO_ERROR_PRINT("ALSA device [%s] set sw params failed: %s", hw_name.c_str(), snd_strerror(result));
+        return RetCode::EPARAM;
     }
 
     io_buffer = std::make_unique<KFifo>(dev_ps * sizeof(PCM_TYPE), 4, dev_ch);
     AUDIO_INFO_PRINT("ALSA device [%s] opened. fs = %u, ps = %u, chan = %u, min_chan = %u, max_chan = %u",
                      hw_name.c_str(), dev_fs, dev_ps, dev_ch, min_ch, max_ch);
-    return {0, "Success"};
+    return RetCode::OK;
 }
 
 RetCode AlsaDriver::start()
@@ -168,7 +191,7 @@ RetCode AlsaDriver::start()
     if (!hstate.compare_exchange_strong(expected, STREAM_RUNNING) &&
         !(expected = STREAM_STOPPED, hstate.compare_exchange_strong(expected, STREAM_RUNNING)))
     {
-        return {-1, "stream not opened or stopped"};
+        return {RetCode::FAILED, "stream not opened or stopped"};
     }
 
     if (is_capture_dev)
@@ -183,13 +206,17 @@ RetCode AlsaDriver::start()
         if (result < 0)
         {
             hstate = STREAM_STOPPED;
-            return {result, snd_strerror(result)};
+            AUDIO_ERROR_PRINT("ALSA device [%s] prepare failed: %s", hw_name.c_str(), snd_strerror(result));
+            return {RetCode::FAILED, "snd_pcm_prepare failed"};
         }
     }
 
-    worker_td = std::make_unique<std::thread>(is_capture_dev ? &AlsaDriver::read_loop : &AlsaDriver::write_loop, this);
-    set_audio_scheduler_policy(worker_td->native_handle());
-    return {0, "Success"};
+    worker_td = std::make_unique<std::thread>([this] {
+        set_current_thread_scheduler_policy();
+        return is_capture_dev ? read_loop() : write_loop();
+    });
+
+    return RetCode::OK;
 }
 
 RetCode AlsaDriver::stop()
@@ -197,7 +224,7 @@ RetCode AlsaDriver::stop()
     Mode expected = STREAM_RUNNING;
     if (!hstate.compare_exchange_strong(expected, STREAM_STOPPED))
     {
-        return {0, "Not running"};
+        return RetCode::NOACTION;
     }
 
     if (worker_td && worker_td->joinable())
@@ -210,7 +237,8 @@ RetCode AlsaDriver::stop()
         auto result = snd_pcm_drop(handle);
         if (result < 0)
         {
-            return {result, snd_strerror(result)};
+            AUDIO_ERROR_PRINT("ALSA device [%s] drop failed: %s", hw_name.c_str(), snd_strerror(result));
+            return RetCode::FAILED;
         }
     }
     else
@@ -218,61 +246,76 @@ RetCode AlsaDriver::stop()
         auto result = snd_pcm_drain(handle);
         if (result < 0)
         {
-            return {result, snd_strerror(result)};
+            AUDIO_ERROR_PRINT("ALSA device [%s] drain failed: %s", hw_name.c_str(), snd_strerror(result));
+            return RetCode::FAILED;
         }
     }
 
-    return {0, "Success"};
+    return RetCode::OK;
 }
 
 RetCode AlsaDriver::write(const char *data, size_t len)
 {
     if (is_capture_dev)
     {
-        return {-1, "Capture device does not support write"};
+        return {RetCode::EWRITE, "Capture device does not support write"};
     }
 
     if (!io_buffer->store(data, len))
     {
-        return {-1, "Buffer full"};
+        return {RetCode::NOACTION, "Buffer full"};
     }
-    return {0, "Success"};
+    return {RetCode::OK, "Success"};
 }
 
 RetCode AlsaDriver::read(char *data, size_t len)
 {
     if (!is_capture_dev)
     {
-        return {-1, "Playback device does not support read"};
+        return {RetCode::EREAD, "Playback device does not support read"};
     }
 
     if (!io_buffer->load(data, len))
     {
-        return {-1, "Buffer empty"};
+        return {RetCode::NOACTION, "Buffer empty"};
     }
-
-    return {0, "Success"};
+    return RetCode::OK;
 }
 
 int AlsaDriver::xrun_recovery(int err)
 {
     if (err == -EPIPE)
     {
+        AUDIO_DEBUG_PRINT("ALSA device [%s] underrun/overrun detected", hw_name.c_str());
         err = snd_pcm_prepare(handle);
-        return 0;
+        if (err < 0)
+        {
+            AUDIO_ERROR_PRINT("ALSA device [%s] prepare after underrun failed: %s", hw_name.c_str(), snd_strerror(err));
+        }
+        return err;
     }
     else if (err == -ESTRPIPE)
     {
-        while ((err = snd_pcm_resume(handle)) == -EAGAIN)
+        AUDIO_DEBUG_PRINT("ALSA device [%s] suspended", hw_name.c_str());
+        int retry_count = 0;
+        while ((err = snd_pcm_resume(handle)) == -EAGAIN && retry_count++ < 10)
         {
-            sleep(1); /* wait until the suspend flag is released */
+            usleep(100000); // 100ms
         }
         if (err < 0)
         {
             err = snd_pcm_prepare(handle);
+            if (err < 0)
+            {
+                AUDIO_ERROR_PRINT("ALSA device [%s] prepare after suspend failed: %s", hw_name.c_str(),
+                                  snd_strerror(err));
+                return err;
+            }
         }
         return 0;
     }
+
+    AUDIO_ERROR_PRINT("ALSA device [%s] error: %s", hw_name.c_str(), snd_strerror(err));
     return err;
 }
 
@@ -288,11 +331,12 @@ void AlsaDriver::write_loop()
             AUDIO_DEBUG_PRINT("ALSA device [%s] buffer underflow", hw_name.c_str());
         }
 
-        while (cptr > 0)
+        while (cptr > 0 && ok)
         {
             auto result = snd_pcm_mmap_writei(handle, data, cptr);
             if (result == -EAGAIN)
             {
+                usleep(1000);
                 continue;
             }
             if (result < 0)
@@ -300,18 +344,19 @@ void AlsaDriver::write_loop()
                 if (xrun_recovery(result) < 0)
                 {
                     ok = false;
+                    break;
                 }
-                break; // skip a period
+                continue;
             }
             data += result * dev_ch * sizeof(PCM_TYPE);
             cptr -= result;
         }
     }
 
+    hstate = STREAM_STOPPED;
+    (void)snd_pcm_drop(handle);
     if (!ok)
     {
-        hstate = STREAM_STOPPED;
-        (void)snd_pcm_drop(handle);
         AUDIO_ERROR_PRINT("ALSA device [%s] write loop exited with error", hw_name.c_str());
     }
 }
@@ -323,11 +368,12 @@ void AlsaDriver::read_loop()
     {
         auto cptr = dev_ps;
         auto data = io_buffer->data();
-        while (cptr > 0)
+        while (cptr > 0 && ok)
         {
             auto result = snd_pcm_mmap_readi(handle, data, cptr);
             if (result == -EAGAIN)
             {
+                usleep(1000);
                 continue;
             }
             if (result < 0)
@@ -335,23 +381,25 @@ void AlsaDriver::read_loop()
                 if (xrun_recovery(result) < 0)
                 {
                     ok = false;
+                    break;
                 }
-                break; // skip a period
+                continue;
             }
             data += result * dev_ch * sizeof(PCM_TYPE);
             cptr -= result;
         }
 
-        if (!io_buffer->store_aside(dev_ps * dev_ch * sizeof(PCM_TYPE)))
+        if (ok && !io_buffer->store_aside(dev_ps * dev_ch * sizeof(PCM_TYPE)))
         {
             AUDIO_DEBUG_PRINT("ALSA device [%s] buffer overflow", hw_name.c_str());
         }
     }
 
+    hstate = STREAM_STOPPED;
+    (void)snd_pcm_drop(handle);
+
     if (!ok)
     {
-        hstate = STREAM_STOPPED;
-        (void)snd_pcm_drop(handle);
         AUDIO_ERROR_PRINT("ALSA device [%s] read loop exited with error", hw_name.c_str());
     }
 }
@@ -686,7 +734,7 @@ RetCode WasapiDriver::write(const char *data, size_t len)
 
     if (!io_buffer->store(data, len))
     {
-        return {RetCode::FAILED, "Buffer full"};
+        return {RetCode::NOACTION, "Buffer full"};
     }
     return {RetCode::OK, "Success"};
 }
@@ -700,7 +748,7 @@ RetCode WasapiDriver::read(char *data, size_t len)
 
     if (!io_buffer->load(data, len))
     {
-        return {RetCode::FAILED, "Buffer empty"};
+        return {RetCode::NOACTION, "Buffer empty"};
     }
 
     return {RetCode::OK, "Success"};
@@ -858,6 +906,7 @@ void WasapiDriver::read_loop()
 
 #endif
 
+// Wave file device
 class WaveDevice final : public AudioDevice
 {
   public:
@@ -990,6 +1039,71 @@ RetCode WaveDevice::read(char *data, size_t len)
     return ret;
 }
 
+// Echo device
+class EchoDevice final : public AudioDevice
+{
+  public:
+    EchoDevice(const std::string &name, unsigned int fs, unsigned int ps, unsigned int ch);
+    ~EchoDevice() override;
+
+    RetCode open() override;
+    RetCode start() override;
+    RetCode stop() override;
+    RetCode write(const char *data, size_t len) override;
+    RetCode read(char *data, size_t len) override;
+};
+
+EchoDevice::EchoDevice(const std::string &name, unsigned int fs, unsigned int ps, unsigned int ch)
+    : AudioDevice("echo_" + name, true, fs, ps, ch)
+{
+}
+
+EchoDevice::~EchoDevice()
+{
+    (void)stop();
+}
+
+RetCode EchoDevice::open()
+{
+    hstate = STREAM_OPENED;
+    io_buffer = std::make_unique<KFifo>(dev_ps * sizeof(PCM_TYPE), 4, dev_ch);
+    AUDIO_INFO_PRINT("Echo device [%s] opened. fs = %u, ps = %u, chan = %u", hw_name.c_str(), dev_fs, dev_ps, dev_ch);
+    return {RetCode::OK, "Success"};
+}
+
+RetCode EchoDevice::start()
+{
+    Mode expected = STREAM_OPENED;
+    if (!hstate.compare_exchange_strong(expected, STREAM_RUNNING) &&
+        !(expected = STREAM_STOPPED, hstate.compare_exchange_strong(expected, STREAM_RUNNING)))
+    {
+        return {RetCode::FAILED, "stream not opened or stopped"};
+    }
+
+    return {RetCode::OK, "Success"};
+}
+
+RetCode EchoDevice::stop()
+{
+    Mode expected = STREAM_RUNNING;
+    if (!hstate.compare_exchange_strong(expected, STREAM_STOPPED))
+    {
+        return {RetCode::OK, "Not running"};
+    }
+
+    return {RetCode::OK, "Success"};
+}
+
+RetCode EchoDevice::write(const char *data, size_t len)
+{
+    return io_buffer->store(data, len) ? RetCode::OK : RetCode::NOACTION;
+}
+
+RetCode EchoDevice::read(char *data, size_t len)
+{
+    return io_buffer->load(data, len) ? RetCode::OK : RetCode::NOACTION;
+}
+
 std::unique_ptr<AudioDevice> make_audio_driver(int type, const AudioDeviceName &name, unsigned int fs, unsigned int ps,
                                                unsigned int ch)
 {
@@ -1015,8 +1129,12 @@ std::unique_ptr<AudioDevice> make_audio_driver(int type, const AudioDeviceName &
     {
         return std::make_unique<WaveDevice>(name.first, true, fs, ps, ch, name.second);
     }
-    else
+    else if (type == WAVE_OAS)
     {
         return std::make_unique<WaveDevice>(name.first, false, fs, ps, ch, name.second);
+    }
+    else
+    {
+        return std::make_unique<EchoDevice>(name.first, fs, ps, ch);
     }
 }

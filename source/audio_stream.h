@@ -2,9 +2,9 @@
 #define AUDIO_STREAM_HEADER
 
 #include "asio.hpp"
-#include "audio_device_monitor.h"
 #include "audio_driver.h"
 #include "audio_interface.h"
+#include "audio_monitor.h"
 #include "audio_network.h"
 #include "audio_process.h"
 
@@ -42,6 +42,8 @@ class BackgroundService
 #endif
 };
 
+class IAStream;
+
 class OAStream : public std::enable_shared_from_this<OAStream>
 {
     struct SessionContext
@@ -60,6 +62,7 @@ class OAStream : public std::enable_shared_from_this<OAStream>
     using obuffer_ptr = std::unique_ptr<char[]>;
     using context_ptr = std::unique_ptr<SessionContext>;
     using odevice_ptr = std::unique_ptr<AudioDevice>;
+    using istream_ptr = std::weak_ptr<IAStream>;
 
   public:
     OAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs, unsigned int _ch);
@@ -70,7 +73,10 @@ class OAStream : public std::enable_shared_from_this<OAStream>
     RetCode initialize_network(const std::shared_ptr<NetWorker> &nw);
     RetCode reset(const AudioDeviceName &_name);
     RetCode direct_push(unsigned char token, unsigned int chan, unsigned int frames, unsigned int sample_rate,
-                        const int16_t *data);
+                        const int16_t *data, uint32_t source_ip = 0);
+
+    void register_listener(const std::shared_ptr<IAStream> &ias);
+    void unregister_listener();
 
   private:
     void execute_loop(TimePointer tp, unsigned int cnt);
@@ -95,8 +101,10 @@ class OAStream : public std::enable_shared_from_this<OAStream>
     odevice_ptr odevice;
 
     std::mutex session_mtx;
-    std::map<uint8_t, context_ptr> sessions;
+    std::map<uint64_t, context_ptr> sessions;
     network_ptr networker;
+    std::mutex listener_mtx;
+    istream_ptr listener;
 };
 
 class IAStream : public std::enable_shared_from_this<IAStream>
@@ -113,12 +121,16 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     RetCode stop();
     RetCode initialize_network(const std::shared_ptr<NetWorker> &nw);
     RetCode reset(const AudioDeviceName &_name);
+    RetCode reset(const AudioDeviceName &_name, unsigned int _fs, unsigned int _ch);
     RetCode connect(const std::shared_ptr<OAStream> &oas);
+    RetCode direct_push(const char* data, size_t len);
 
   private:
     void execute_loop(TimePointer tp, unsigned int cnt);
     RetCode process_data();
     RetCode create_device(const AudioDeviceName &_name);
+    RetCode create_device(const AudioDeviceName &_name, unsigned int _fs, unsigned int _ch);
+    RetCode swap_device(idevice_ptr &new_device);
 
   public:
     const unsigned char token;

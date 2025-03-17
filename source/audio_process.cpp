@@ -4,7 +4,7 @@
 #include <cstring>
 
 static constexpr auto RS_BLKSIZE = 4;
-static constexpr auto M_PI = 3.141592653589793;
+static constexpr auto A_PI = 3.141592653589793;
 static constexpr auto MAX_CONVERTER_RATIO = 8.0;
 
 constexpr int16_t clamp_s16(int32_t v)
@@ -18,45 +18,24 @@ constexpr int16_t clamp_s16(double v)
     return static_cast<int16_t>(v < -32768 ? -32768 : 32767 < v ? 32767 : v);
 }
 
-void mix_channels(const int16_t *ssrc, int out_chan, int ssrc_chan, int frames_num, int16_t *output)
+void mix_channels(const int16_t *ssrc, unsigned int chan, int frames_num, int16_t *output)
 {
-    if (out_chan == ssrc_chan)
+    for (unsigned int i = 0; i < frames_num * chan; i++)
     {
-        for (auto i = 0; i < frames_num * ssrc_chan; i++)
-        {
-            auto res = (int32_t)output[i] + (int32_t)ssrc[i];
-            output[i] = clamp_s16(res);
-        }
-    }
-    else if (out_chan == 1 && ssrc_chan == 2)
-    {
-        for (auto i = 0; i < frames_num; i++)
-        {
-            auto res = (int32_t)output[i] + ((int32_t)ssrc[2 * i] + (int32_t)ssrc[2 * i + 1]) / 2;
-            output[i] = clamp_s16(res);
-        }
-    }
-    else if (out_chan == 2 && ssrc_chan == 1)
-    {
-        for (auto i = 0; i < frames_num; i++)
-        {
-            auto res = (int32_t)output[2 * i] + (int32_t)ssrc[i];
-            output[2 * i] = clamp_s16(res);
-            res = (int32_t)output[2 * i + 1] + (int32_t)ssrc[i];
-            output[2 * i + 1] = clamp_s16(res);
-        }
+        auto res = (int32_t)output[i] + (int32_t)ssrc[i];
+        output[i] = clamp_s16(res);
     }
 }
 
 inline static double sinc(double x)
 {
-    return x == 0 ? 1 : std::sin(M_PI * x) / (M_PI * x);
+    return x == 0 ? 1 : std::sin(A_PI * x) / (A_PI * x);
 }
 
 static double blackman_nuttall(double x, double N)
 {
-    return 0.3635819 - 0.4891775 * std::cos((2 * M_PI * x) / N) + 0.1365995 * std::cos((4 * M_PI * x) / N) -
-           0.0106411 * std::cos((6 * M_PI * x) / N);
+    return 0.3635819 - 0.4891775 * std::cos((2 * A_PI * x) / N) + 0.1365995 * std::cos((4 * A_PI * x) / N) -
+           0.0106411 * std::cos((6 * A_PI * x) / N);
 }
 
 SincInterpolator::SincInterpolator(int _order, int _precision, int _chan, double _ratio)

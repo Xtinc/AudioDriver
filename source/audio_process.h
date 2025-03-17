@@ -5,7 +5,7 @@
 #include <array>
 #include <memory>
 
-void mix_channels(const int16_t *ssrc, int out_chan, int ssrc_chan, int frames_num, int16_t *output);
+void mix_channels(const int16_t *ssrc, unsigned int chan, int frames_num, int16_t *output);
 
 class SincInterpolator
 {

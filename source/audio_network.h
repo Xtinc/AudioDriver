@@ -175,7 +175,7 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
 {
   public:
     using ReceiveCallback = std::function<void(uint8_t sender_id, unsigned int channels, unsigned int frames,
-                                               unsigned int sample_rate, const int16_t *data)>;
+                                               unsigned int sample_rate, const int16_t *data, uint32_t source_ip)>;
     using ReceiverContext = ReceiveCallback;
 
   private:
