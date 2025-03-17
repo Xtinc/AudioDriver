@@ -217,11 +217,17 @@ RetCode OAStream::reset(const AudioDeviceName &_name)
         AUDIO_ERROR_PRINT("Failed to create device: %s", ret.what());
     }
 
-    if (auto np = listener.lock())
+    std::shared_ptr<IAStream> np;
+    {
+        std::lock_guard<std::mutex> lock(listener_mtx);
+        np = listener.lock();
+    }
+
+    if (np)
     {
         np->reset(_name, fs, ch);
     }
-
+    
     oas_ready = true;
     return start();
 }
@@ -267,11 +273,15 @@ RetCode OAStream::direct_push(unsigned char itoken, unsigned int chan, unsigned 
 void OAStream::register_listener(const std::shared_ptr<IAStream> &ias)
 {
     ias->reset({odevice->hw_name, 0}, fs, ch);
-    listener = ias;
+    {
+        std::lock_guard<std::mutex> grd(listener_mtx);
+        listener = ias;
+    }
 }
 
 void OAStream::unregister_listener()
 {
+    std::lock_guard<std::mutex> grd(listener_mtx);
     listener.reset();
 }
 
@@ -359,7 +369,13 @@ void OAStream::process_data()
 
     odevice->write(databuf.get(), ps * ch * sizeof(PCM_TYPE));
 
-    if (auto np = listener.lock())
+    std::shared_ptr<IAStream> np;
+    {
+        std::lock_guard<std::mutex> lock(listener_mtx);
+        np = listener.lock();
+    }
+
+    if (np)
     {
         np->direct_push(databuf.get(), ps * ch * sizeof(PCM_TYPE));
     }
@@ -391,6 +407,7 @@ RetCode OAStream::create_device(const AudioDeviceName &_name)
 
     {
         std::lock_guard<std::mutex> grd(session_mtx);
+        sessions.clear();
         odevice = std::move(new_device);
         fs = new_fs;
         ch = new_ch;

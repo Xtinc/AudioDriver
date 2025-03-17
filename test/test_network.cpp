@@ -19,7 +19,7 @@ int main()
     oas->start();
 
     oas->start();
-    std::this_thread::sleep_for(std::chrono::seconds(360));
+    std::this_thread::sleep_for(std::chrono::seconds(300));
     BackgroundService::instance().stop();
     return 0;
 }
