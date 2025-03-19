@@ -4,6 +4,7 @@
 #include <array>
 #include <cinttypes>
 #include <cstdio>
+#include <map>
 #include <memory>
 #include <string>
 
@@ -25,6 +26,7 @@
 #endif
 
 #define USER_MAX_AUDIO_TOKEN 200
+#define NETWORK_AUDIO_TRANS_PORT 52282
 
 typedef int16_t PCM_TYPE;
 typedef std::pair<std::string, unsigned int> AudioDeviceName;
@@ -135,7 +137,90 @@ enum class AudioPeriodSize : unsigned int
     INR_40MS = 0x28
 };
 
-#define NETWORK_AUDIO_TRANS_PORT 52282
+struct AudioToken
+{
+    static constexpr unsigned char INVALID_TOKEN = 0xFF;
+
+    unsigned char tok;
+
+    AudioToken() : tok(INVALID_TOKEN)
+    {
+    }
+
+    explicit AudioToken(unsigned char t) : tok(t)
+    {
+    }
+
+    operator uint8_t() const
+    {
+        return tok;
+    }
+
+    bool operator==(const AudioToken &other) const
+    {
+        return tok == other.tok;
+    }
+
+    bool operator!=(const AudioToken &other) const
+    {
+        return tok != other.tok;
+    }
+};
+
+struct IToken : public AudioToken
+{
+    IToken() : AudioToken(INVALID_TOKEN)
+    {
+    }
+
+    explicit IToken(unsigned char t) : AudioToken{t}
+    {
+    }
+
+    using AudioToken::operator==;
+    using AudioToken::operator!=;
+};
+
+struct OToken : public AudioToken
+{
+    OToken() : AudioToken(INVALID_TOKEN)
+    {
+    }
+
+    explicit OToken(unsigned char t) : AudioToken{t}
+    {
+    }
+
+    using AudioToken::operator==;
+    using AudioToken::operator!=;
+};
+
+class IAStream;
+class OAStream;
+class AudioPlayer;
+class AudioMonitor;
+
+class AudioCenter
+{
+  public:
+    AudioCenter();
+    ~AudioCenter();
+
+    IToken create(IToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps, unsigned int ch);
+    OToken create(OToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps, unsigned int ch);
+
+    RetCode connect(IToken itoken, OToken otoken);    
+
+  private:
+    std::map<unsigned char, std::shared_ptr<IAStream>> ias_map;
+    std::map<unsigned char, std::shared_ptr<OAStream>> oas_map;
+
+    std::unique_ptr<AudioMonitor> monitor;
+    std::unique_ptr<AudioPlayer> player;
+};
+
+void start_audio_center();
+void stop_audio_center();
 
 #define AUDIO_INFO_PRINT(fmt, ...) printf("[INF] %s(%d): " fmt "\n", __FUNCTION__, __LINE__, ##__VA_ARGS__)
 #define AUDIO_ERROR_PRINT(fmt, ...) printf("[ERR] %s(%d): " fmt "\n", __FUNCTION__, __LINE__, ##__VA_ARGS__)

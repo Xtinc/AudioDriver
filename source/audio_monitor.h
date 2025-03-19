@@ -4,10 +4,7 @@
 #include "asio.hpp"
 #include "audio_interface.h"
 #include <functional>
-#include <map>
-#include <memory>
 #include <mutex>
-#include <string>
 #include <vector>
 
 enum class AudioDeviceEvent
@@ -86,7 +83,7 @@ class UdevNotificationHandler
     void StartMonitoring();
     void HandleUdevEvent();
     bool IsAudioDevice(struct udev_device *dev);
-    AudioDeviceInfo GetDeviceInfo(struct udev_device *dev);
+    AudioDeviceInfo GetDeviceInfo(struct udev_device *dev, AudioDeviceEvent event);
 
     std::function<void(AudioDeviceEvent, const AudioDeviceInfo &)> callback_;
     struct udev *udev_;
@@ -98,11 +95,11 @@ class UdevNotificationHandler
 #endif
 
 // Audio device monitor class - cross-platform definition
-class AudioDeviceMonitor : public std::enable_shared_from_this<AudioDeviceMonitor>
+class AudioMonitor
 {
   public:
-    static std::shared_ptr<AudioDeviceMonitor> Create(asio::io_context &io_context);
-    ~AudioDeviceMonitor();
+    explicit AudioMonitor(asio::io_context &io_context);
+    ~AudioMonitor();
 
     // Get list of all devices
     std::vector<AudioDeviceInfo> EnumerateDevices(AudioDeviceType type = AudioDeviceType::All);
@@ -126,8 +123,6 @@ class AudioDeviceMonitor : public std::enable_shared_from_this<AudioDeviceMonito
 #endif
 
   private:
-    explicit AudioDeviceMonitor(asio::io_context &io_context);
-
     // Internal device change handler function
     void HandleDeviceChange(AudioDeviceEvent event, const AudioDeviceInfo &device_info);
 

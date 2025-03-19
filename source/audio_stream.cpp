@@ -7,28 +7,10 @@
 static std::once_flag coinit_flag;
 #endif
 
+constexpr unsigned int AUDIO_MAX_COCURRECY_WORKER = 2;
 constexpr unsigned int SESSION_IDLE_TIMEOUT = 1000;
 constexpr AudioChannelMap DEFAULT_DUAL_MAP = {0, 1};
 constexpr AudioChannelMap DEFAULT_MONO_MAP = {0, 0};
-
-static void print_device_change_info(AudioDeviceEvent event, const AudioDeviceInfo &info)
-{
-    switch (event)
-    {
-    case AudioDeviceEvent::Added:
-        AUDIO_INFO_PRINT("Device added: %s", info.name.c_str());
-        break;
-    case AudioDeviceEvent::Removed:
-        AUDIO_INFO_PRINT("Device removed: %s", info.name.c_str());
-        break;
-    case AudioDeviceEvent::StateChanged:
-        AUDIO_INFO_PRINT("Device state changed: %s", info.name.c_str());
-        break;
-    case AudioDeviceEvent::DefaultChanged:
-        AUDIO_INFO_PRINT("Default device changed: %s", info.name.c_str());
-        break;
-    }
-}
 
 static bool check_wave_file_name(const std::string &dev_name)
 {
@@ -58,15 +40,11 @@ BackgroundService::BackgroundService() : work_guard(asio::make_work_guard(io_con
         }
     }
 #endif
-
-    dev_monitor = AudioDeviceMonitor::Create(io_context);
-    dev_monitor->RegisterCallback(this, print_device_change_info);
 }
 
 BackgroundService::~BackgroundService()
 {
-    stop();
-    dev_monitor->UnregisterCallback(this);
+    stop();    
 #if WINDOWS_OS_ENVIRONMENT
     if (active_high_res_timer)
     {
@@ -78,9 +56,7 @@ BackgroundService::~BackgroundService()
 
 void BackgroundService::start()
 {
-    const auto thread_count = std::thread::hardware_concurrency();
-
-    for (size_t i = 0; i < thread_count; ++i)
+    for (size_t i = 0; i < AUDIO_MAX_COCURRECY_WORKER; ++i)
     {
         io_thds.emplace_back([this]() { io_context.run(); });
     }
@@ -104,19 +80,6 @@ void BackgroundService::stop()
 asio::io_context &BackgroundService::context()
 {
     return io_context;
-}
-
-void BackgroundService::enumerate_devices() const
-{
-    auto devices = dev_monitor->EnumerateDevices();
-    for (const auto &device : devices)
-    {
-        AUDIO_INFO_PRINT("[%s](%s) : %s", device.id.c_str(),
-                         device.type == AudioDeviceType::Playback  ? "playback"
-                         : device.type == AudioDeviceType::Capture ? "capture"
-                                                                   : "all",
-                         device.name.c_str());
-    }
 }
 
 // OAStream
@@ -263,7 +226,7 @@ RetCode OAStream::direct_push(unsigned char itoken, unsigned int chan, unsigned 
         }
 
         it = result.first;
-        AUDIO_INFO_PRINT("%u receiver New connection: %u (IP: %08X)", token, itoken, source_ip);
+        AUDIO_INFO_PRINT("%u receiver New connection: %u (IP: 0x%08X)", token, itoken, source_ip);
     }
 
     bool success = it->second->session.store((const char *)data, frames * chan * sizeof(PCM_TYPE));

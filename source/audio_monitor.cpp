@@ -4,7 +4,7 @@
 #if WINDOWS_OS_ENVIRONMENT
 // must be included after mmdeviceapi.h
 #include <functiondiscoverykeys_devpkey.h>
-std::string AudioDeviceMonitor::WideToUtf8(const std::wstring &wstr)
+std::string AudioMonitor::WideToUtf8(const std::wstring &wstr)
 {
     if (wstr.empty())
     {
@@ -24,7 +24,7 @@ std::string AudioDeviceMonitor::WideToUtf8(const std::wstring &wstr)
     return str;
 }
 
-std::wstring AudioDeviceMonitor::Utf8ToWide(const std::string &str)
+std::wstring AudioMonitor::Utf8ToWide(const std::string &str)
 {
     if (str.empty())
     {
@@ -140,7 +140,7 @@ HRESULT STDMETHODCALLTYPE DeviceNotificationClient::OnDeviceAdded(LPCWSTR pwstrD
 HRESULT STDMETHODCALLTYPE DeviceNotificationClient::OnDeviceRemoved(LPCWSTR pwstrDeviceId)
 {
     AudioDeviceInfo device_info;
-    device_info.id = AudioDeviceMonitor::WideToUtf8(std::wstring(pwstrDeviceId));
+    device_info.id = AudioMonitor::WideToUtf8(std::wstring(pwstrDeviceId));
 
     if (callback_)
     {
@@ -208,7 +208,7 @@ AudioDeviceInfo DeviceNotificationClient::GetDeviceInfo(LPCWSTR pwstrDeviceId, A
     HRESULT hr;
 
     // Convert wide character device ID to UTF-8 string
-    info.id = AudioDeviceMonitor::WideToUtf8(std::wstring(pwstrDeviceId));
+    info.id = AudioMonitor::WideToUtf8(std::wstring(pwstrDeviceId));
 
     if (!enumerator_)
     {
@@ -261,7 +261,7 @@ AudioDeviceInfo DeviceNotificationClient::GetDeviceInfo(LPCWSTR pwstrDeviceId, A
         hr = props->GetValue(PKEY_Device_FriendlyName, &var);
         if (SUCCEEDED(hr) && var.vt == VT_LPWSTR)
         {
-            info.name = AudioDeviceMonitor::WideToUtf8(var.pwszVal);
+            info.name = AudioMonitor::WideToUtf8(var.pwszVal);
         }
         PropVariantClear(&var);
 
@@ -296,7 +296,7 @@ AudioDeviceInfo DeviceNotificationClient::GetDeviceInfo(LPCWSTR pwstrDeviceId, A
     return info;
 }
 
-AudioDeviceInfo AudioDeviceMonitor::GetDefaultDevice(AudioDeviceType type)
+AudioDeviceInfo AudioMonitor::GetDefaultDevice(AudioDeviceType type)
 {
     if (!enumerator_)
     {
@@ -319,7 +319,7 @@ AudioDeviceInfo AudioDeviceMonitor::GetDefaultDevice(AudioDeviceType type)
     return AudioDeviceInfo();
 }
 
-bool AudioDeviceMonitor::DeviceExists(const std::string &device_id)
+bool AudioMonitor::DeviceExists(const std::string &device_id)
 {
     if (!enumerator_ || device_id.empty())
     {
@@ -709,7 +709,7 @@ bool UdevNotificationHandler::IsAudioDevice(struct udev_device *dev)
     return false;
 }
 
-AudioDeviceInfo UdevNotificationHandler::GetDeviceInfo(struct udev_device *dev)
+AudioDeviceInfo UdevNotificationHandler::GetDeviceInfo(struct udev_device *dev, AudioDeviceEvent event)
 {
     AudioDeviceInfo info;
 
@@ -748,19 +748,23 @@ AudioDeviceInfo UdevNotificationHandler::GetDeviceInfo(struct udev_device *dev)
             info.name = card_id;
         }
 
-        // Assume the device is available but verify
-        snd_pcm_t *pcm = nullptr;
-        info.is_active = (snd_pcm_open(&pcm, card_id, SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK) >= 0);
-        if (pcm)
+        if (event == AudioDeviceEvent::Added || event == AudioDeviceEvent::StateChanged)
         {
-            snd_pcm_close(pcm);
+
+            // Assume the device is available but verify
+            snd_pcm_t *pcm = nullptr;
+            info.is_active = (snd_pcm_open(&pcm, card_id, SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK) >= 0);
+            if (pcm)
+            {
+                snd_pcm_close(pcm);
+            }
+
+            // Determine device type
+            info.type = get_device_type(card_id);
+
+            // Check if it is the default device
+            info.is_default = is_default_device(card_id, info.type);
         }
-
-        // Determine device type
-        info.type = get_device_type(card_id);
-
-        // Check if it is the default device
-        info.is_default = is_default_device(card_id, info.type);
     }
     else
     {
@@ -776,13 +780,8 @@ AudioDeviceInfo UdevNotificationHandler::GetDeviceInfo(struct udev_device *dev)
 #endif
 
 // Cross-platform AudioDeviceMonitor implementation
-std::shared_ptr<AudioDeviceMonitor> AudioDeviceMonitor::Create(asio::io_context &io_context)
-{
-    auto monitor = std::shared_ptr<AudioDeviceMonitor>(new AudioDeviceMonitor(io_context));
-    return monitor;
-}
 
-AudioDeviceMonitor::AudioDeviceMonitor(asio::io_context &io_context)
+AudioMonitor::AudioMonitor(asio::io_context &io_context)
     : io_context_(io_context)
 #if WINDOWS_OS_ENVIRONMENT
       ,
@@ -814,7 +813,7 @@ AudioDeviceMonitor::AudioDeviceMonitor(asio::io_context &io_context)
 #endif
 }
 
-AudioDeviceMonitor::~AudioDeviceMonitor()
+AudioMonitor::~AudioMonitor()
 {
 #if WINDOWS_OS_ENVIRONMENT
     if (notification_client_)
@@ -837,7 +836,7 @@ AudioDeviceMonitor::~AudioDeviceMonitor()
 #endif
 }
 
-bool AudioDeviceMonitor::RegisterCallback(void *owner, DeviceChangeCallback callback)
+bool AudioMonitor::RegisterCallback(void *owner, DeviceChangeCallback callback)
 {
     if (!owner || !callback)
         return false;
@@ -847,7 +846,7 @@ bool AudioDeviceMonitor::RegisterCallback(void *owner, DeviceChangeCallback call
     return true;
 }
 
-bool AudioDeviceMonitor::UnregisterCallback(void *owner)
+bool AudioMonitor::UnregisterCallback(void *owner)
 {
     if (!owner)
         return false;
@@ -856,7 +855,7 @@ bool AudioDeviceMonitor::UnregisterCallback(void *owner)
     return callbacks_.erase(owner) > 0;
 }
 
-void AudioDeviceMonitor::HandleDeviceChange(AudioDeviceEvent event, const AudioDeviceInfo &device_info)
+void AudioMonitor::HandleDeviceChange(AudioDeviceEvent event, const AudioDeviceInfo &device_info)
 {
     // Use strand to ensure callbacks are executed sequentially on the IO thread
     asio::post(io_context_, [this, event, device_info]() {
@@ -869,7 +868,7 @@ void AudioDeviceMonitor::HandleDeviceChange(AudioDeviceEvent event, const AudioD
 }
 
 #if WINDOWS_OS_ENVIRONMENT
-std::vector<AudioDeviceInfo> AudioDeviceMonitor::EnumerateDevices(AudioDeviceType type)
+std::vector<AudioDeviceInfo> AudioMonitor::EnumerateDevices(AudioDeviceType type)
 {
     std::vector<AudioDeviceInfo> devices;
 
@@ -932,7 +931,7 @@ std::vector<AudioDeviceInfo> AudioDeviceMonitor::EnumerateDevices(AudioDeviceTyp
     return devices;
 }
 
-AudioDeviceInfo AudioDeviceMonitor::GetDeviceInfo(IMMDevice *device, AudioDeviceType type)
+AudioDeviceInfo AudioMonitor::GetDeviceInfo(IMMDevice *device, AudioDeviceType type)
 {
     AudioDeviceInfo info;
     IPropertyStore *props = nullptr;
@@ -1020,7 +1019,7 @@ AudioDeviceInfo AudioDeviceMonitor::GetDeviceInfo(IMMDevice *device, AudioDevice
 }
 
 #elif LINUX_OS_ENVIRONMENT
-std::vector<AudioDeviceInfo> AudioDeviceMonitor::EnumerateDevices(AudioDeviceType type)
+std::vector<AudioDeviceInfo> AudioMonitor::EnumerateDevices(AudioDeviceType type)
 {
     std::vector<AudioDeviceInfo> devices;
 
@@ -1154,7 +1153,7 @@ std::vector<AudioDeviceInfo> AudioDeviceMonitor::EnumerateDevices(AudioDeviceTyp
     return devices;
 }
 
-AudioDeviceInfo AudioDeviceMonitor::GetDefaultDevice(AudioDeviceType type)
+AudioDeviceInfo AudioMonitor::GetDefaultDevice(AudioDeviceType type)
 {
     // First try to open the default device directly to get information
     snd_pcm_t *pcm = nullptr;
@@ -1212,7 +1211,7 @@ AudioDeviceInfo AudioDeviceMonitor::GetDefaultDevice(AudioDeviceType type)
     return AudioDeviceInfo();
 }
 
-bool AudioDeviceMonitor::DeviceExists(const std::string &device_id)
+bool AudioMonitor::DeviceExists(const std::string &device_id)
 {
     if (device_id.empty())
     {

@@ -24,7 +24,6 @@ class BackgroundService
     void start();
     void stop();
     asio::io_context &context();
-    void enumerate_devices() const;
 
   private:
     BackgroundService();
@@ -32,13 +31,11 @@ class BackgroundService
 
     asio::io_context io_context;
     std::vector<std::thread> io_thds;
-    std::shared_ptr<AudioDeviceMonitor> dev_monitor;
     asio::executor_work_guard<asio::io_context::executor_type> work_guard;
 
 #if WINDOWS_OS_ENVIRONMENT
     bool active_high_res_timer = false;
     UINT high_timer_resolution = 1;
-    std::shared_ptr<AudioDeviceMonitor> device_monitor_;
 #endif
 };
 

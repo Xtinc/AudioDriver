@@ -8,8 +8,8 @@ int main(int argc, char **argv)
                                           enum2val(AudioBandWidth::Full), 2);
     oas->start();
     AUDIO_DEBUG_PRINT("Start playing: %s", player.play("dukou_44100.wav", 1, oas).msg);
-    std::this_thread::sleep_for(std::chrono::minutes(1));
-    AUDIO_DEBUG_PRINT("Stop playing: %s", player.stop("dukou_44100.wav").msg);
+    std::this_thread::sleep_for(std::chrono::minutes(4));
+    // AUDIO_DEBUG_PRINT("Stop playing: %s", player.stop("dukou_44100.wav").msg);
     BackgroundService::instance().stop();
     return 0;
 }
