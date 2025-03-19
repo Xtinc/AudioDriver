@@ -346,8 +346,9 @@ bool AudioDeviceMonitor::DeviceExists(const std::string &device_id)
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <unordered_set>
 
-static std::array<std::string, 12> blakclist = {"null",
+static std::array<std::string, 12> blacklist = {"null",
                                                 "pulse",
                                                 "default",
                                                 "Rate Converter Plugin",
@@ -367,7 +368,7 @@ static bool is_blacklisted(const char *name)
         return true;
     }
 
-    for (const auto &blacklisted : blakclist)
+    for (const auto &blacklisted : blacklist)
     {
         if (strncmp(name, blacklisted.c_str(), blacklisted.size()) == 0 || strstr(name, blacklisted.c_str()) != nullptr)
         {
@@ -380,17 +381,34 @@ static bool is_blacklisted(const char *name)
 // Helper function: Convert ALSA device name to human-readable name
 static std::string get_device_description(const char *device_name)
 {
-    snd_ctl_t *handle;
-    std::string result = device_name;
-
     // Validate input
     if (!device_name || strlen(device_name) == 0)
     {
         return "Unknown Device";
     }
 
-    // Try to open the control interface for the card
-    int err = snd_ctl_open(&handle, device_name, SND_CTL_READONLY);
+    // If not in hw:X or plughw:X format, return the original name
+    if (strncmp(device_name, "hw:", 3) != 0 && strncmp(device_name, "plughw:", 7) != 0)
+    {
+        return device_name;
+    }
+
+    // Extract card number
+    int card_num = -1;
+    if (sscanf(device_name, "hw:%d", &card_num) != 1 && sscanf(device_name, "plughw:%d", &card_num) != 1)
+    {
+        return device_name;
+    }
+
+    // Build card control name
+    char card_name[32];
+    snprintf(card_name, sizeof(card_name), "hw:%d", card_num);
+
+    snd_ctl_t *handle;
+    std::string result = device_name;
+
+    // Try to open the control interface
+    int err = snd_ctl_open(&handle, card_name, SND_CTL_READONLY);
     if (err >= 0)
     {
         snd_ctl_card_info_t *info;
@@ -398,10 +416,24 @@ static std::string get_device_description(const char *device_name)
 
         if (snd_ctl_card_info(handle, info) >= 0)
         {
-            const char *name = snd_ctl_card_info_get_name(info);
-            if (name && strlen(name) > 0)
+            const char *card_name = snd_ctl_card_info_get_name(info);
+            const char *card_id = snd_ctl_card_info_get_id(info);
+            const char *card_longname = snd_ctl_card_info_get_longname(info);
+
+            // Prefer detailed name if available
+            if (card_longname && strlen(card_longname) > 0)
             {
-                result = name;
+                result = card_longname;
+            }
+            // Next use card name
+            else if (card_name && strlen(card_name) > 0)
+            {
+                result = card_name;
+            }
+            // Finally use card ID
+            else if (card_id && strlen(card_id) > 0)
+            {
+                result = card_id;
             }
         }
 
@@ -422,19 +454,42 @@ static AudioDeviceType get_device_type(const char *device_name)
     bool supports_playback = false;
     bool supports_capture = false;
 
+    // Try to open the device in playback mode
     snd_pcm_t *pcm;
-    if (snd_pcm_open(&pcm, device_name, SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK) >= 0)
+    int err = snd_pcm_open(&pcm, device_name, SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK);
+    if (err >= 0)
     {
         supports_playback = true;
         snd_pcm_close(pcm);
     }
+    else if (err != -EBUSY) // If device is busy, it might still support playback
+    {
+        // Check if it's a permission issue
+        if (err == -EACCES)
+        {
+            // Might be a permission issue, assume it supports playback
+            supports_playback = true;
+        }
+    }
 
-    if (snd_pcm_open(&pcm, device_name, SND_PCM_STREAM_CAPTURE, SND_PCM_NONBLOCK) >= 0)
+    // Try to open the device in capture mode
+    err = snd_pcm_open(&pcm, device_name, SND_PCM_STREAM_CAPTURE, SND_PCM_NONBLOCK);
+    if (err >= 0)
     {
         supports_capture = true;
         snd_pcm_close(pcm);
     }
+    else if (err != -EBUSY) // If device is busy, it might still support capture
+    {
+        // Check if it's a permission issue
+        if (err == -EACCES)
+        {
+            // Might be a permission issue, assume it supports capture
+            supports_capture = true;
+        }
+    }
 
+    // Return device type based on supported modes
     if (supports_playback && supports_capture)
     {
         return AudioDeviceType::All;
@@ -448,64 +503,51 @@ static AudioDeviceType get_device_type(const char *device_name)
         return AudioDeviceType::Capture;
     }
 
+    // Unable to determine type, default to playback
     return AudioDeviceType::Playback;
 }
 
 // Helper function: Check if the device is the default device
 static bool is_default_device(const std::string &device_id, AudioDeviceType type)
 {
-    void **hints;
+    // Try to get the default device from asoundrc or system configuration
+    // For simple detection, we can use the "default" alias
+
+    snd_pcm_t *pcm = nullptr;
+    snd_pcm_stream_t stream_type =
+        (type == AudioDeviceType::Capture) ? SND_PCM_STREAM_CAPTURE : SND_PCM_STREAM_PLAYBACK;
+
+    // First open the default device
+    int err = snd_pcm_open(&pcm, "default", stream_type, SND_PCM_NONBLOCK);
+    if (err < 0)
+    {
+        return false; // Cannot open default device
+    }
+
+    // Get default device information
+    snd_pcm_info_t *info;
+    snd_pcm_info_alloca(&info);
+    err = snd_pcm_info(pcm, info);
+
     bool is_default = false;
-
-    if (device_id.empty() || snd_device_name_hint(-1, "pcm", &hints) < 0)
+    if (err >= 0)
     {
-        return false;
+        // Get card number and device number
+        int card = snd_pcm_info_get_card(info);
+        int device = snd_pcm_info_get_device(info);
+
+        char default_hw_id[32];
+        snprintf(default_hw_id, sizeof(default_hw_id), "hw:%d,%d", card, device);
+
+        // Also check plughw format
+        char default_plughw_id[32];
+        snprintf(default_plughw_id, sizeof(default_plughw_id), "plughw:%d,%d", card, device);
+
+        // Check if device ID matches
+        is_default = (device_id == default_hw_id || device_id == default_plughw_id);
     }
 
-    void **n = hints;
-    while (*n != nullptr)
-    {
-        char *name = snd_device_name_get_hint(*n, "NAME");
-        char *ioid = snd_device_name_get_hint(*n, "IOID");
-
-        if (name != nullptr)
-        {
-            std::string name_str(name);
-
-            // Only compare the ID part (usually hw:X,Y or plughw:X,Y)
-            if (name_str == device_id)
-            {
-                // Check if IOID matches the type
-                bool is_valid_ioid = true;
-                if (ioid != nullptr)
-                {
-                    std::string ioid_str(ioid);
-                    is_valid_ioid = (type == AudioDeviceType::Playback && ioid_str == "Output") ||
-                                    (type == AudioDeviceType::Capture && ioid_str == "Input") ||
-                                    (type == AudioDeviceType::All);
-                }
-
-                // Default device is usually the first matching device
-                if (is_valid_ioid)
-                {
-                    is_default = true;
-                    free(name);
-                    if (ioid)
-                        free(ioid);
-                    break;
-                }
-            }
-
-            free(name);
-        }
-
-        if (ioid != nullptr)
-            free(ioid);
-
-        n++;
-    }
-
-    snd_device_name_free_hint(hints);
+    snd_pcm_close(pcm);
     return is_default;
 }
 
@@ -523,18 +565,24 @@ UdevNotificationHandler::~UdevNotificationHandler()
     Stop();
 
     if (udev_)
+    {
         udev_unref(udev_);
+    }
 }
 
 bool UdevNotificationHandler::Start(asio::io_context &io_context)
 {
     if (!udev_ || running_)
+    {
         return false;
+    }
 
     // Create monitor
     monitor_ = udev_monitor_new_from_netlink(udev_, "udev");
     if (!monitor_)
+    {
         return false;
+    }
 
     // Set filter to only receive sound card device events
     udev_monitor_filter_add_match_subsystem_devtype(monitor_, "sound", nullptr);
@@ -547,13 +595,7 @@ bool UdevNotificationHandler::Start(asio::io_context &io_context)
 
     // Start asynchronous read
     running_ = true;
-    stream_descriptor_->async_wait(asio::posix::stream_descriptor::wait_read, [this](const asio::error_code &ec) {
-        if (!ec && running_)
-        {
-            HandleUdevEvent();
-        }
-    });
-
+    StartMonitoring();
     return true;
 }
 
@@ -561,39 +603,56 @@ void UdevNotificationHandler::Stop()
 {
     running_ = false;
 
-    if (stream_descriptor_)
-    {
-        stream_descriptor_->cancel();
-        delete stream_descriptor_;
-        stream_descriptor_ = nullptr;
-    }
-
     if (monitor_)
     {
         udev_monitor_unref(monitor_);
         monitor_ = nullptr;
+    }
+
+    if (stream_descriptor_)
+    {
+        stream_descriptor_->cancel();
+
+        delete stream_descriptor_;
+        stream_descriptor_ = nullptr;
+    }
+}
+
+void UdevNotificationHandler::StartMonitoring()
+{
+    if (running_ && stream_descriptor_)
+    {
+        stream_descriptor_->async_wait(asio::posix::stream_descriptor::wait_read, [this](const asio::error_code &ec) {
+            if (!ec && running_)
+            {
+                HandleUdevEvent();
+            }
+        });
     }
 }
 
 void UdevNotificationHandler::HandleUdevEvent()
 {
     if (!running_ || !monitor_)
+    {
         return;
+    }
 
     // Receive event
     struct udev_device *dev = udev_monitor_receive_device(monitor_);
-    if (dev)
+    if (!dev)
     {
-        // Check if it is an audio device
-        if (IsAudioDevice(dev))
-        {
-            const char *action = udev_device_get_action(dev);
-            if (!action)
-            {
-                udev_device_unref(dev);
-                goto continue_monitoring;
-            }
+        StartMonitoring();
+        return;
+    }
 
+    std::unique_ptr<struct udev_device, decltype(&udev_device_unref)> dev_ptr(dev, &udev_device_unref);
+
+    if (IsAudioDevice(dev))
+    {
+        const char *action = udev_device_get_action(dev);
+        if (action)
+        {
             AudioDeviceEvent event;
             if (strcmp(action, "add") == 0)
             {
@@ -609,34 +668,20 @@ void UdevNotificationHandler::HandleUdevEvent()
             }
             else
             {
-                udev_device_unref(dev);
-                goto continue_monitoring;
+                StartMonitoring();
+                return;
             }
 
-            // Get device information
             AudioDeviceInfo device_info = GetDeviceInfo(dev);
 
-            // Call callback
             if (callback_ && !device_info.id.empty())
             {
                 callback_(event, device_info);
             }
         }
-
-        udev_device_unref(dev);
     }
 
-continue_monitoring:
-    // Continue listening
-    if (running_ && stream_descriptor_)
-    {
-        stream_descriptor_->async_wait(asio::posix::stream_descriptor::wait_read, [this](const asio::error_code &ec) {
-            if (!ec && running_)
-            {
-                HandleUdevEvent();
-            }
-        });
-    }
+    StartMonitoring();
 }
 
 bool UdevNotificationHandler::IsAudioDevice(struct udev_device *dev)
@@ -644,16 +689,22 @@ bool UdevNotificationHandler::IsAudioDevice(struct udev_device *dev)
     // Check if the device belongs to the sound subsystem
     const char *subsystem = udev_device_get_subsystem(dev);
     if (!subsystem || strcmp(subsystem, "sound") != 0)
+    {
         return false;
+    }
 
     // Check if the device type is a sound card or audio device
     const char *sysname = udev_device_get_sysname(dev);
     if (!sysname)
+    {
         return false;
+    }
 
     // Sound card devices usually start with "card"
     if (strncmp(sysname, "card", 4) == 0)
+    {
         return true;
+    }
 
     return false;
 }
@@ -676,43 +727,47 @@ AudioDeviceInfo UdevNotificationHandler::GetDeviceInfo(struct udev_device *dev)
 
     // Get device name
     const char *sysname = udev_device_get_sysname(dev);
-    if (sysname)
+
+    if (!sysname)
     {
-        // Extract card number from sysname
-        int card_num = -1;
-        if (sscanf(sysname, "card%d", &card_num) == 1)
+        return info;
+    }
+
+    // Extract card number from sysname
+    int card_num = -1;
+    if (sscanf(sysname, "card%d", &card_num) == 1)
+    {
+        char card_id[32];
+        snprintf(card_id, sizeof(card_id), "hw:%d", card_num);
+
+        // Get more descriptive name if possible
+        info.name = get_device_description(card_id);
+        // If we couldn't get a proper name, use the card ID
+        if (info.name.empty())
         {
-            char card_id[32];
-            snprintf(card_id, sizeof(card_id), "hw:%d", card_num);
-
-            // Get more descriptive name if possible
-            info.name = get_device_description(card_id);
-
-            // If we couldn't get a proper name, use the card ID
-            if (info.name.empty())
-            {
-                info.name = card_id;
-            }
-
-            // Assume the device is available but verify
-            snd_pcm_t *pcm = nullptr;
-            info.is_active = (snd_pcm_open(&pcm, card_id, SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK) >= 0);
-            if (pcm)
-                snd_pcm_close(pcm);
-
-            // Determine device type
-            info.type = get_device_type(card_id);
-
-            // Check if it is the default device
-            info.is_default = is_default_device(card_id, info.type);
+            info.name = card_id;
         }
-        else
+
+        // Assume the device is available but verify
+        snd_pcm_t *pcm = nullptr;
+        info.is_active = (snd_pcm_open(&pcm, card_id, SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK) >= 0);
+        if (pcm)
         {
-            info.name = sysname;
-            info.type = AudioDeviceType::All;
-            info.is_active = false;
-            info.is_default = false;
+            snd_pcm_close(pcm);
         }
+
+        // Determine device type
+        info.type = get_device_type(card_id);
+
+        // Check if it is the default device
+        info.is_default = is_default_device(card_id, info.type);
+    }
+    else
+    {
+        info.name = sysname;
+        info.type = AudioDeviceType::All;
+        info.is_active = false;
+        info.is_default = false;
     }
 
     return info;
@@ -724,7 +779,6 @@ AudioDeviceInfo UdevNotificationHandler::GetDeviceInfo(struct udev_device *dev)
 std::shared_ptr<AudioDeviceMonitor> AudioDeviceMonitor::Create(asio::io_context &io_context)
 {
     auto monitor = std::shared_ptr<AudioDeviceMonitor>(new AudioDeviceMonitor(io_context));
-    monitor->Start();
     return monitor;
 }
 
@@ -735,7 +789,7 @@ AudioDeviceMonitor::AudioDeviceMonitor(asio::io_context &io_context)
       enumerator_(nullptr), notification_client_(nullptr)
 #elif LINUX_OS_ENVIRONMENT
       ,
-      udev_handler_(nullptr), polling_timer_(std::make_unique<asio::steady_timer>(io_context))
+      udev_handler_(nullptr)
 #endif
 {
 #if WINDOWS_OS_ENVIRONMENT
@@ -757,10 +811,6 @@ AudioDeviceMonitor::AudioDeviceMonitor(asio::io_context &io_context)
     {
         udev_handler_->Start(io_context_);
     }
-
-    // Store initial device list
-    last_device_list_ = EnumerateDevices();
-
 #endif
 }
 
@@ -779,11 +829,6 @@ AudioDeviceMonitor::~AudioDeviceMonitor()
         enumerator_ = nullptr;
     }
 #elif LINUX_OS_ENVIRONMENT
-    if (polling_timer_)
-    {
-        polling_timer_->cancel();
-    }
-
     if (udev_handler_)
     {
         udev_handler_->Stop();
@@ -974,10 +1019,6 @@ AudioDeviceInfo AudioDeviceMonitor::GetDeviceInfo(IMMDevice *device, AudioDevice
     return info;
 }
 
-void AudioDeviceMonitor::Start()
-{
-}
-
 #elif LINUX_OS_ENVIRONMENT
 std::vector<AudioDeviceInfo> AudioDeviceMonitor::EnumerateDevices(AudioDeviceType type)
 {
@@ -990,29 +1031,49 @@ std::vector<AudioDeviceInfo> AudioDeviceMonitor::EnumerateDevices(AudioDeviceTyp
         return devices;
     }
 
+    // Track already added device IDs to avoid duplicates
+    std::unordered_set<std::string> added_device_ids;
+
     void **n = hints;
     while (*n != nullptr)
     {
         char *name = snd_device_name_get_hint(*n, "NAME");
-        char *desc = snd_device_name_get_hint(*n, "DESC");
-        char *ioid = snd_device_name_get_hint(*n, "IOID");
 
         if (name != nullptr && !is_blacklisted(name))
         {
-            if (strncmp(name, "hw:", 3) == 0 || strncmp(name, "plughw:", 7) == 0)
+            char *desc = snd_device_name_get_hint(*n, "DESC");
+            char *ioid = snd_device_name_get_hint(*n, "IOID");
+            if (strncmp(name, "hw:", 3) == 0)
             {
+                // Avoid adding the same device multiple times
+                if (added_device_ids.find(name) != added_device_ids.end())
+                {
+                    goto cleanup;
+                }
+
                 AudioDeviceInfo info;
                 info.id = name;
+                added_device_ids.insert(info.id);
 
+                // Prefer device description as name
                 if (desc != nullptr && strlen(desc) > 0)
                 {
                     info.name = desc;
+
+                    // Remove newlines and excess spaces
+                    info.name.erase(std::remove(info.name.begin(), info.name.end(), '\n'), info.name.end());
+                    while (info.name.find("  ") != std::string::npos)
+                    {
+                        info.name.replace(info.name.find("  "), 2, " ");
+                    }
                 }
                 else
                 {
-                    info.name = name;
+                    // Try to get a more friendly name
+                    info.name = get_device_description(name);
                 }
 
+                // Determine device type
                 if (ioid != nullptr)
                 {
                     std::string ioid_str(ioid);
@@ -1034,6 +1095,7 @@ std::vector<AudioDeviceInfo> AudioDeviceMonitor::EnumerateDevices(AudioDeviceTyp
                     info.type = get_device_type(name);
                 }
 
+                // Filter devices by requested type
                 bool add_device = (type == AudioDeviceType::All) ||
                                   (type == AudioDeviceType::Playback &&
                                    (info.type == AudioDeviceType::Playback || info.type == AudioDeviceType::All)) ||
@@ -1042,6 +1104,7 @@ std::vector<AudioDeviceInfo> AudioDeviceMonitor::EnumerateDevices(AudioDeviceTyp
 
                 if (add_device)
                 {
+                    // Check device active status
                     snd_pcm_t *pcm = nullptr;
                     snd_pcm_stream_t stream_type =
                         (info.type == AudioDeviceType::Capture) ? SND_PCM_STREAM_CAPTURE : SND_PCM_STREAM_PLAYBACK;
@@ -1052,38 +1115,85 @@ std::vector<AudioDeviceInfo> AudioDeviceMonitor::EnumerateDevices(AudioDeviceTyp
                         snd_pcm_close(pcm);
                     }
 
+                    // Check if it's the default device
                     info.is_default = is_default_device(info.id, info.type);
-
-                    // std::string readable_name = get_device_description(name);
-                    // if (!readable_name.empty() && readable_name != name)
-                    // {
-                    //     info.name = readable_name;
-                    // }
 
                     devices.push_back(info);
                 }
             }
+
+            if (desc != nullptr)
+            {
+                free(desc);
+            }
+            if (ioid != nullptr)
+            {
+                free(ioid);
+            }
         }
 
+    cleanup:
         if (name != nullptr)
+        {
             free(name);
-        if (desc != nullptr)
-            free(desc);
-        if (ioid != nullptr)
-            free(ioid);
-
+        }
         n++;
     }
 
     snd_device_name_free_hint(hints);
+
+    // Sort device list with default devices first
+    std::sort(devices.begin(), devices.end(), [](const AudioDeviceInfo &a, const AudioDeviceInfo &b) {
+        if (a.is_default != b.is_default)
+        {
+            return a.is_default;
+        }
+        return a.name < b.name;
+    });
+
     return devices;
 }
 
 AudioDeviceInfo AudioDeviceMonitor::GetDefaultDevice(AudioDeviceType type)
 {
-    // Get the first default device
-    std::vector<AudioDeviceInfo> devices = EnumerateDevices(type);
+    // First try to open the default device directly to get information
+    snd_pcm_t *pcm = nullptr;
+    snd_pcm_stream_t stream_type =
+        (type == AudioDeviceType::Capture) ? SND_PCM_STREAM_CAPTURE : SND_PCM_STREAM_PLAYBACK;
 
+    int err = snd_pcm_open(&pcm, "default", stream_type, SND_PCM_NONBLOCK);
+    if (err >= 0 && pcm)
+    {
+        // Get default device information
+        snd_pcm_info_t *info;
+        snd_pcm_info_alloca(&info);
+
+        if (snd_pcm_info(pcm, info) >= 0)
+        {
+            int card = snd_pcm_info_get_card(info);
+            int device = snd_pcm_info_get_device(info);
+
+            char hw_id[32];
+            snprintf(hw_id, sizeof(hw_id), "hw:%d,%d", card, device);
+
+            snd_pcm_close(pcm);
+
+            // Get complete information for this device
+            std::vector<AudioDeviceInfo> devices = EnumerateDevices(type);
+            for (const auto &dev : devices)
+            {
+                if (dev.id == hw_id || dev.id.find(hw_id) != std::string::npos)
+                {
+                    return dev;
+                }
+            }
+        }
+
+        snd_pcm_close(pcm);
+    }
+
+    // Alternative method: look for a device marked as default in the enumerated devices
+    std::vector<AudioDeviceInfo> devices = EnumerateDevices(type);
     for (const auto &device : devices)
     {
         if (device.is_default)
@@ -1104,77 +1214,42 @@ AudioDeviceInfo AudioDeviceMonitor::GetDefaultDevice(AudioDeviceType type)
 
 bool AudioDeviceMonitor::DeviceExists(const std::string &device_id)
 {
-    std::vector<AudioDeviceInfo> devices = EnumerateDevices();
-
-    return std::any_of(devices.begin(), devices.end(),
-                       [&device_id](const AudioDeviceInfo &device) { return device.id == device_id; });
-}
-
-void AudioDeviceMonitor::StartPollingTimer()
-{
-    polling_timer_->expires_after(std::chrono::seconds(5));
-    polling_timer_->async_wait([this](const asio::error_code &ec) {
-        if (!ec)
-        {
-            PollDeviceChanges();
-
-            if (polling_timer_)
-            {
-                StartPollingTimer();
-            }
-        }
-    });
-}
-
-void AudioDeviceMonitor::PollDeviceChanges()
-{
-    // Get the current device list
-    std::vector<AudioDeviceInfo> current_devices = EnumerateDevices();
-
-    // Find added devices
-    for (const auto &current_device : current_devices)
+    if (device_id.empty())
     {
-        auto it = std::find_if(
-            last_device_list_.begin(), last_device_list_.end(),
-            [&current_device](const AudioDeviceInfo &old_device) { return old_device.id == current_device.id; });
-
-        if (it == last_device_list_.end())
-        {
-            // Found a new device
-            HandleDeviceChange(AudioDeviceEvent::Added, current_device);
-        }
-        else if (it->is_active != current_device.is_active)
-        {
-            // Device state changed
-            HandleDeviceChange(AudioDeviceEvent::StateChanged, current_device);
-        }
-        else if (it->is_default != current_device.is_default && current_device.is_default)
-        {
-            // Default device changed
-            HandleDeviceChange(AudioDeviceEvent::DefaultChanged, current_device);
-        }
+        return false;
     }
 
-    // Find removed devices
-    for (const auto &old_device : last_device_list_)
-    {
-        auto it = std::find_if(
-            current_devices.begin(), current_devices.end(),
-            [&old_device](const AudioDeviceInfo &current_device) { return current_device.id == old_device.id; });
+    // First try to open the device directly
+    snd_pcm_t *pcm = nullptr;
+    bool exists = false;
 
-        if (it == current_devices.end())
-        {
-            // Device was removed
-            HandleDeviceChange(AudioDeviceEvent::Removed, old_device);
-        }
+    // Try to open in playback mode
+    int err = snd_pcm_open(&pcm, device_id.c_str(), SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK);
+    if (err >= 0)
+    {
+        exists = true;
+        snd_pcm_close(pcm);
+        return exists;
     }
 
-    // Update device list
-    last_device_list_ = std::move(current_devices);
+    // Try to open in capture mode
+    err = snd_pcm_open(&pcm, device_id.c_str(), SND_PCM_STREAM_CAPTURE, SND_PCM_NONBLOCK);
+    if (err >= 0)
+    {
+        exists = true;
+        snd_pcm_close(pcm);
+        return exists;
+    }
+
+    // If direct open fails, enumerate devices
+    if (!exists)
+    {
+        std::vector<AudioDeviceInfo> devices = EnumerateDevices();
+        exists = std::any_of(devices.begin(), devices.end(),
+                             [&device_id](const AudioDeviceInfo &device) { return device.id == device_id; });
+    }
+
+    return exists;
 }
 
-void AudioDeviceMonitor::Start()
-{
-    StartPollingTimer();
-}
 #endif

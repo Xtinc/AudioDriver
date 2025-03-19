@@ -227,7 +227,7 @@ RetCode OAStream::reset(const AudioDeviceName &_name)
     {
         np->reset(_name, fs, ch);
     }
-    
+
     oas_ready = true;
     return start();
 }
@@ -268,6 +268,16 @@ RetCode OAStream::direct_push(unsigned char itoken, unsigned int chan, unsigned 
 
     bool success = it->second->session.store((const char *)data, frames * chan * sizeof(PCM_TYPE));
     return success ? RetCode::OK : RetCode::NOACTION;
+}
+
+void OAStream::mute()
+{
+    muted.store(true);
+}
+
+void OAStream::unmute()
+{
+    muted.store(false);
 }
 
 void OAStream::register_listener(const std::shared_ptr<IAStream> &ias)
@@ -339,8 +349,13 @@ void OAStream::process_data()
                 ++it;
                 continue;
             }
-
             context->session.idle_count = 0;
+
+            if (muted)
+            {
+                break;
+            }
+
             unsigned int output_frames = ps;
             auto ret =
                 context->sampler.process(reinterpret_cast<const PCM_TYPE *>(context->session.data()), session_frames,
@@ -541,6 +556,16 @@ RetCode IAStream::direct_push(const char *data, size_t len)
     return idevice->write(data, len);
 }
 
+void IAStream::mute()
+{
+    muted.store(true);
+}
+
+void IAStream::unmute()
+{
+    muted.store(false);
+}
+
 void IAStream::execute_loop(TimePointer tp, unsigned int cnt)
 {
     if (!ias_ready)
@@ -582,6 +607,11 @@ RetCode IAStream::process_data()
     {
         AUDIO_DEBUG_PRINT("Failed to read data: %s", ret.what());
         return ret;
+    }
+
+    if (muted)
+    {
+        return RetCode::OK;
     }
 
     ret = sampler->process(reinterpret_cast<const PCM_TYPE *>(dev_buf.get()), dev_fr,
@@ -681,4 +711,28 @@ RetCode IAStream::swap_device(idevice_ptr &new_device)
     sampler = std::move(new_sampler);
 
     return {RetCode::OK, "Device initialized successfully"};
+}
+
+// AudioPlayer
+AudioPlayer::AudioPlayer(unsigned char _token) : token(_token), preemptive(0)
+{
+}
+
+RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared_ptr<OAStream> &sink)
+{
+    return play_tmpl(name, cycles, sink);
+}
+
+RetCode AudioPlayer::stop(const std::string &name)
+{
+    std::unique_lock<std::mutex> lck(mtx);
+    if (sounds.find(name) != sounds.cend())
+    {
+        if (auto np = sounds.at(name).lock())
+        {
+            lck.unlock();
+            return np->stop();
+        }
+    }
+    return RetCode::FAILED;
 }

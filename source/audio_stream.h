@@ -75,6 +75,9 @@ class OAStream : public std::enable_shared_from_this<OAStream>
     RetCode direct_push(unsigned char token, unsigned int chan, unsigned int frames, unsigned int sample_rate,
                         const int16_t *data, uint32_t source_ip = 0);
 
+    void mute();
+    void unmute();
+
     void register_listener(const std::shared_ptr<IAStream> &ias);
     void unregister_listener();
 
@@ -105,6 +108,7 @@ class OAStream : public std::enable_shared_from_this<OAStream>
     network_ptr networker;
     std::mutex listener_mtx;
     istream_ptr listener;
+    std::atomic_bool muted;
 };
 
 class IAStream : public std::enable_shared_from_this<IAStream>
@@ -123,7 +127,10 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     RetCode reset(const AudioDeviceName &_name);
     RetCode reset(const AudioDeviceName &_name, unsigned int _fs, unsigned int _ch);
     RetCode connect(const std::shared_ptr<OAStream> &oas);
-    RetCode direct_push(const char* data, size_t len);
+    RetCode direct_push(const char *data, size_t len);
+
+    void mute();
+    void unmute();
 
   private:
     void execute_loop(TimePointer tp, unsigned int cnt);
@@ -152,6 +159,59 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     std::mutex dest_mtx;
     destinations dests;
     network_ptr networker;
+    std::atomic_bool muted;
+};
+
+class AudioPlayer
+{
+  public:
+    AudioPlayer(unsigned char _token);
+    ~AudioPlayer() = default;
+
+    RetCode play(const std::string &name, int cycles, const std::shared_ptr<OAStream> &sink);
+    RetCode stop(const std::string &name);
+
+  private:
+    template <typename... T> RetCode play_tmpl(const std::string &name, int cycles, T... args)
+    {
+        if (preemptive > 5)
+        {
+            return {RetCode::FAILED, "Too many player streams"};
+        }
+
+        IAStream *raw_sender = new IAStream(token + preemptive, AudioDeviceName(name, cycles),
+                                            enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2);
+
+        auto audio_sender = std::shared_ptr<IAStream>(raw_sender, [this, name](IAStream *ptr) {
+            preemptive--;
+            std::lock_guard<std::mutex> grd(mtx);
+            auto iter = sounds.find(name);
+            if (iter != sounds.cend())
+            {
+                sounds.erase(iter);
+            }
+            delete ptr;
+        });
+
+        preemptive++;
+        {
+            std::lock_guard<std::mutex> grd(mtx);
+            if (sounds.find(name) != sounds.cend())
+            {
+                return {RetCode::FAILED, "Stream already exists"};
+            }
+            sounds.emplace(name, audio_sender);
+        }
+
+        audio_sender->connect(args...);
+        return audio_sender->start();
+    }
+
+  private:
+    const unsigned char token;
+    std::mutex mtx;
+    std::atomic_int preemptive;
+    std::map<std::string, std::weak_ptr<IAStream>> sounds;
 };
 
 #endif

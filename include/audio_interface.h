@@ -24,6 +24,8 @@
 #define LINUX_OS_ENVIRONMENT 0
 #endif
 
+#define USER_MAX_AUDIO_TOKEN 200
+
 typedef int16_t PCM_TYPE;
 typedef std::pair<std::string, unsigned int> AudioDeviceName;
 typedef std::array<unsigned int, 2> AudioChannelMap;
@@ -135,14 +137,8 @@ enum class AudioPeriodSize : unsigned int
 
 #define NETWORK_AUDIO_TRANS_PORT 52282
 
-#define AUDIO_INFO_PRINT(fmt, ...)                                                                                     \
-    printf("[INF] %s(%d): " fmt, __FUNCTION__, __LINE__, ##__VA_ARGS__);                                               \
-    printf("\n")
-#define AUDIO_ERROR_PRINT(fmt, ...)                                                                                    \
-    printf("[ERR] %s(%d): " fmt, __FUNCTION__, __LINE__, ##__VA_ARGS__);                                               \
-    printf("\n")
-#define AUDIO_DEBUG_PRINT(fmt, ...)                                                                                    \
-    printf("[DEB] %s(%d): " fmt, __FUNCTION__, __LINE__, ##__VA_ARGS__);                                               \
-    printf("\n")
+#define AUDIO_INFO_PRINT(fmt, ...) printf("[INF] %s(%d): " fmt "\n", __FUNCTION__, __LINE__, ##__VA_ARGS__)
+#define AUDIO_ERROR_PRINT(fmt, ...) printf("[ERR] %s(%d): " fmt "\n", __FUNCTION__, __LINE__, ##__VA_ARGS__)
+#define AUDIO_DEBUG_PRINT(fmt, ...) printf("[DEB] %s(%d): " fmt "\n", __FUNCTION__, __LINE__, ##__VA_ARGS__)
 
 #endif

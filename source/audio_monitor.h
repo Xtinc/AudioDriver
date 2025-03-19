@@ -83,6 +83,7 @@ class UdevNotificationHandler
     void Stop();
 
   private:
+    void StartMonitoring();
     void HandleUdevEvent();
     bool IsAudioDevice(struct udev_device *dev);
     AudioDeviceInfo GetDeviceInfo(struct udev_device *dev);
@@ -117,8 +118,6 @@ class AudioDeviceMonitor : public std::enable_shared_from_this<AudioDeviceMonito
 
     // Unregister device change callback
     bool UnregisterCallback(void *owner);
-    
-    void Start();
 
 #if WINDOWS_OS_ENVIRONMENT
     // String conversion utility methods
@@ -132,14 +131,6 @@ class AudioDeviceMonitor : public std::enable_shared_from_this<AudioDeviceMonito
     // Internal device change handler function
     void HandleDeviceChange(AudioDeviceEvent event, const AudioDeviceInfo &device_info);
 
-#if LINUX_OS_ENVIRONMENT
-    // Start polling timer
-    void StartPollingTimer();
-
-    // Poll for device list changes
-    void PollDeviceChanges();
-#endif
-
 #if WINDOWS_OS_ENVIRONMENT
     AudioDeviceInfo GetDeviceInfo(IMMDevice *device, AudioDeviceType type = AudioDeviceType::All);
 #endif
@@ -152,8 +143,6 @@ class AudioDeviceMonitor : public std::enable_shared_from_this<AudioDeviceMonito
     DeviceNotificationClient *notification_client_;
 #elif LINUX_OS_ENVIRONMENT
     UdevNotificationHandler *udev_handler_;
-    std::unique_ptr<asio::steady_timer> polling_timer_;
-    std::vector<AudioDeviceInfo> last_device_list_;
 #endif
 
     std::mutex callbacks_mutex_;
