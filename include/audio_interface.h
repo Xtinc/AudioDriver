@@ -197,6 +197,7 @@ struct OToken : public AudioToken
 
 class IAStream;
 class OAStream;
+class NetWorker;
 class AudioPlayer;
 class AudioMonitor;
 
@@ -206,21 +207,36 @@ class AudioCenter
     AudioCenter();
     ~AudioCenter();
 
-    IToken create(IToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps, unsigned int ch);
-    OToken create(OToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps, unsigned int ch);
+    IToken create(IToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps, unsigned int ch,
+                  bool enable_reset = false);
+    OToken create(OToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps, unsigned int ch,
+                  bool enable_reset = false);
 
-    RetCode connect(IToken itoken, OToken otoken);    
+    RetCode connect(IToken itoken, OToken otoken);
+    RetCode disconnect(IToken itoken, OToken otoken);
+    RetCode connect(IToken itoken, OToken otoken, const std::string &ip);
+    RetCode disconnect(IToken itoken, OToken otoken, const std::string &ip);
+
+    RetCode mute(AudioToken token);
+    RetCode unmute(AudioToken token);
+    RetCode play(const std::string &path, int cycles, OToken otoken);
+    RetCode stop(const std::string &path);
+
+  private:
+    void handle_auto_reset();
 
   private:
     std::map<unsigned char, std::shared_ptr<IAStream>> ias_map;
     std::map<unsigned char, std::shared_ptr<OAStream>> oas_map;
+    std::map<unsigned char, AudioDeviceName> reset_devices;
 
+    std::shared_ptr<NetWorker> net_mgr;
     std::unique_ptr<AudioMonitor> monitor;
     std::unique_ptr<AudioPlayer> player;
 };
 
-void start_audio_center();
-void stop_audio_center();
+void start_audio_service();
+void stop_audio_service();
 
 #define AUDIO_INFO_PRINT(fmt, ...) printf("[INF] %s(%d): " fmt "\n", __FUNCTION__, __LINE__, ##__VA_ARGS__)
 #define AUDIO_ERROR_PRINT(fmt, ...) printf("[ERR] %s(%d): " fmt "\n", __FUNCTION__, __LINE__, ##__VA_ARGS__)

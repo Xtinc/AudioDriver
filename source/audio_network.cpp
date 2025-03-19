@@ -586,6 +586,42 @@ RetCode NetWorker::add_destination(uint8_t sender_id, uint8_t receiver_token, co
     return {RetCode::OK, "Destination added"};
 }
 
+RetCode NetWorker::del_destination(uint8_t sender_id, uint8_t receiver_token, const std::string &ip, uint16_t port)
+{
+    if (ip.empty())
+    {
+        return {RetCode::FAILED, "Invalid IP address"};
+    }
+
+    asio::ip::udp::endpoint endpoint;
+    RetCode res = resolve_endpoint(ip, port, endpoint);
+    if (res != RetCode::OK)
+    {
+        return res;
+    }
+
+    std::lock_guard<std::mutex> lock(senders_mutex);
+    auto iter = senders.find(sender_id);
+    if (iter == senders.end())
+    {
+        return {RetCode::FAILED, "Sender not registered"};
+    }
+
+    auto &dest_list = iter->second.destinations;
+    Destination target(endpoint, receiver_token);
+    
+    auto dest_iter = std::find(dest_list.begin(), dest_list.end(), target);
+    if (dest_iter == dest_list.end())
+    {
+        return {RetCode::NOACTION, "Destination not found"};
+    }
+    
+    dest_list.erase(dest_iter);
+    AUDIO_INFO_PRINT("Removed destination %s for sender %u to receiver %u", ip.c_str(), sender_id, receiver_token);
+    
+    return {RetCode::OK, "Destination removed"};
+}
+
 RetCode NetWorker::send_audio(uint8_t sender_id, const int16_t *data, unsigned int frames)
 {
     if (!data || frames == 0)

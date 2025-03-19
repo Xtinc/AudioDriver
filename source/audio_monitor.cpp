@@ -672,7 +672,7 @@ void UdevNotificationHandler::HandleUdevEvent()
                 return;
             }
 
-            AudioDeviceInfo device_info = GetDeviceInfo(dev);
+            AudioDeviceInfo device_info = GetDeviceInfo(dev, event);
 
             if (callback_ && !device_info.id.empty())
             {

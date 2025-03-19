@@ -44,7 +44,7 @@ BackgroundService::BackgroundService() : work_guard(asio::make_work_guard(io_con
 
 BackgroundService::~BackgroundService()
 {
-    stop();    
+    stop();
 #if WINDOWS_OS_ENVIRONMENT
     if (active_high_res_timer)
     {
@@ -236,11 +236,13 @@ RetCode OAStream::direct_push(unsigned char itoken, unsigned int chan, unsigned 
 void OAStream::mute()
 {
     muted.store(true);
+    AUDIO_INFO_PRINT("Token %u muted", token);
 }
 
 void OAStream::unmute()
 {
     muted.store(false);
+    AUDIO_INFO_PRINT("Token %u unmuted", token);
 }
 
 void OAStream::register_listener(const std::shared_ptr<IAStream> &ias)
@@ -489,13 +491,7 @@ RetCode IAStream::initialize_network(const std::shared_ptr<NetWorker> &nw)
     }
 
     networker = nw;
-    auto ret = nw->register_sender(token, ch, fs);
-    if (!ret)
-    {
-        AUDIO_ERROR_PRINT("Failed to register sender: %s", ret.what());
-        return {RetCode::FAILED, "Failed to register sender"};
-    }
-    return {RetCode::OK, "Network initialized"};
+    return nw->register_sender(token, ch, fs);
 }
 
 RetCode IAStream::connect(const std::shared_ptr<OAStream> &oas)
@@ -510,8 +506,29 @@ RetCode IAStream::connect(const std::shared_ptr<OAStream> &oas)
         return {RetCode::FAILED, "Invalid output stream"};
     }
 
+    std::lock_guard<std::mutex> grd(dest_mtx);
     dests.emplace_back(oas);
     return {RetCode::OK, "Connection established"};
+}
+
+RetCode IAStream::disconnect(const std::shared_ptr<OAStream> &oas)
+{
+    if (!ias_ready)
+    {
+        return {RetCode::FAILED, "Device not ready"};
+    }
+
+    if (!oas)
+    {
+        return {RetCode::FAILED, "Invalid output stream"};
+    }
+
+    std::lock_guard<std::mutex> grd(dest_mtx);
+    dests.erase(std::remove_if(dests.begin(), dests.end(),
+                               [oas](const std::weak_ptr<OAStream> &wp) { return wp.lock() == oas; }),
+                dests.end());
+
+    return {RetCode::OK, "Connection removed"};
 }
 
 RetCode IAStream::direct_push(const char *data, size_t len)
@@ -522,11 +539,13 @@ RetCode IAStream::direct_push(const char *data, size_t len)
 void IAStream::mute()
 {
     muted.store(true);
+    AUDIO_INFO_PRINT("Token %u muted", token);
 }
 
 void IAStream::unmute()
 {
     muted.store(false);
+    AUDIO_INFO_PRINT("Token %u unmuted", token);
 }
 
 void IAStream::execute_loop(TimePointer tp, unsigned int cnt)
@@ -677,25 +696,128 @@ RetCode IAStream::swap_device(idevice_ptr &new_device)
 }
 
 // AudioPlayer
-AudioPlayer::AudioPlayer(unsigned char _token) : token(_token), preemptive(0)
+AudioPlayer::AudioPlayer(unsigned char _token) : token(_token), preemptive(0), current_index(0), sequence_active(false)
 {
+}
+
+AudioPlayer::~AudioPlayer()
+{
+    stop_sequence();
 }
 
 RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared_ptr<OAStream> &sink)
 {
-    return play_tmpl(name, cycles, sink);
+    return play_tmpl(name, cycles, nullptr, sink);
 }
 
 RetCode AudioPlayer::stop(const std::string &name)
 {
-    std::unique_lock<std::mutex> lck(mtx);
-    if (sounds.find(name) != sounds.cend())
+    std::shared_ptr<IAStream> sender;
     {
-        if (auto np = sounds.at(name).lock())
+        std::lock_guard<std::mutex> grd(mtx);
+        auto iter = sounds.find(name);
+        if (iter == sounds.end())
         {
-            lck.unlock();
-            return np->stop();
+            return {RetCode::NOACTION, "Stream not found"};
+        }
+
+        sender = iter->second.lock();
+        if (!sender)
+        {
+            sounds.erase(iter);
+            return {RetCode::NOACTION, "Stream already expired"};
         }
     }
-    return RetCode::FAILED;
+    return sender->stop();
+}
+
+RetCode AudioPlayer::play_sequence(const std::vector<std::string> &file_list, const std::shared_ptr<OAStream> &sink)
+{
+    if (file_list.empty())
+    {
+        return {RetCode::FAILED, "Empty file list"};
+    }
+
+    if (!sink)
+    {
+        return {RetCode::FAILED, "Invalid output stream"};
+    }
+
+    stop_sequence();
+
+    {
+        std::lock_guard<std::mutex> grd(mtx);
+        sequence_files = file_list;
+        current_index = 0;
+        sequence_sink = sink;
+        sequence_active = true;
+    }
+
+    return play_tmpl(file_list[0], 1, &AudioPlayer::on_file_complete, sink);
+}
+
+RetCode AudioPlayer::stop_sequence()
+{
+    std::vector<std::string> files_to_stop;
+
+    {
+        std::lock_guard<std::mutex> grd(mtx);
+        if (!sequence_active)
+        {
+            return {RetCode::NOACTION, "No active sequence"};
+        }
+
+        files_to_stop = sequence_files;
+        sequence_active = false;
+        sequence_files.clear();
+        current_index = 0;
+        sequence_sink.reset();
+    }
+
+    for (const auto &file : files_to_stop)
+    {
+        stop(file);
+    }
+
+    return {RetCode::OK, "Sequence playback stopped"};
+}
+
+void AudioPlayer::on_file_complete(const std::string &name)
+{
+    std::string next_file;
+    std::shared_ptr<OAStream> sink;
+
+    {
+        std::lock_guard<std::mutex> grd(mtx);
+        if (!sequence_active)
+        {
+            return;
+        }
+
+        current_index++;
+
+        if (current_index < sequence_files.size())
+        {
+            next_file = sequence_files[current_index];
+            sink = sequence_sink;
+        }
+        else
+        {
+            sequence_active = false;
+            sequence_files.clear();
+            current_index = 0;
+            sequence_sink.reset();
+            return;
+        }
+    }
+
+    if (!next_file.empty() && sink)
+    {
+        RetCode result = play_tmpl(next_file, 1, &AudioPlayer::on_file_complete, sink);
+        if (!result)
+        {
+            AUDIO_ERROR_PRINT("Failed to play next file in sequence: %s - %s", next_file.c_str(), result.what());
+            on_file_complete(next_file);
+        }
+    }
 }
