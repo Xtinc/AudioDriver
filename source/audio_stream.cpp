@@ -6,7 +6,7 @@
 // CoInitializeEx is not thread-safe
 static std::once_flag coinit_flag;
 #endif
-
+constexpr unsigned int AUDIO_MAX_RESET_INTERVAL = 30;
 constexpr unsigned int AUDIO_MAX_COCURRECY_WORKER = 2;
 constexpr unsigned int SESSION_IDLE_TIMEOUT = 1000;
 constexpr AudioChannelMap DEFAULT_DUAL_MAP = {0, 1};
@@ -401,9 +401,9 @@ RetCode OAStream::create_device(const AudioDeviceName &_name)
 
 // IAStream
 IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs,
-                   unsigned int _ch)
-    : ias_ready(false), token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(_ch), timer(BG_SERVICE),
-      exec_strand(asio::make_strand(BG_SERVICE))
+                   unsigned int _ch, bool auto_reset)
+    : ias_ready(false), token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(_ch), exec_timer(BG_SERVICE),
+      exec_strand(asio::make_strand(BG_SERVICE)), auto_reset_enabled(auto_reset), reset_timer(BG_SERVICE)
 {
     auto ret = create_device(_name);
     if (ret)
@@ -416,6 +416,11 @@ IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
     }
 
     dests.reserve(4);
+
+    if (auto_reset_enabled)
+    {
+        schedule_auto_reset();
+    }
 }
 
 IAStream::~IAStream()
@@ -429,21 +434,33 @@ IAStream::~IAStream()
     }
 }
 
-RetCode IAStream::reset(const AudioDeviceName &_name)
+RetCode IAStream::reset()
 {
     stop();
 
-    auto ret = create_device(_name);
+    auto ret = create_device(AudioDeviceName(idevice->hw_name, 0));
     if (!ret)
     {
         AUDIO_ERROR_PRINT("Failed to create device: %s", ret.what());
     }
     ias_ready = true;
-    return start();
+    auto start_ret = start();
+
+    if (auto_reset_enabled)
+    {
+        schedule_auto_reset();
+    }
+
+    return start_ret;
 }
 
 RetCode IAStream::reset(const AudioDeviceName &_name, unsigned int _fs, unsigned int _ch)
 {
+    if (auto_reset_enabled)
+    {
+        return {RetCode::FAILED, "Auto reset enabled"};
+    }
+
     stop();
 
     auto ret = create_device(_name, _fs, _ch);
@@ -479,7 +496,13 @@ RetCode IAStream::stop()
         return {RetCode::OK, "Device already stopped"};
     }
 
-    timer.cancel();
+    exec_timer.cancel();
+
+    if (auto_reset_enabled)
+    {
+        reset_timer.cancel();
+    }
+
     return idevice->stop();
 }
 
@@ -560,8 +583,8 @@ void IAStream::execute_loop(TimePointer tp, unsigned int cnt)
         tp = std::chrono::steady_clock::now();
     }
 
-    timer.expires_at(tp + std::chrono::milliseconds(ti) * cnt);
-    timer.async_wait(asio::bind_executor(exec_strand, [tp, cnt, self = shared_from_this()](asio::error_code ec) {
+    exec_timer.expires_at(tp + std::chrono::milliseconds(ti) * cnt);
+    exec_timer.async_wait(asio::bind_executor(exec_strand, [tp, cnt, self = shared_from_this()](asio::error_code ec) {
         if (ec)
         {
             AUDIO_DEBUG_PRINT("Timer error: %s", ec.message().c_str());
@@ -695,6 +718,33 @@ RetCode IAStream::swap_device(idevice_ptr &new_device)
     return {RetCode::OK, "Device initialized successfully"};
 }
 
+void IAStream::schedule_auto_reset()
+{
+    if (!auto_reset_enabled || !ias_ready)
+    {
+        return;
+    }
+
+    constexpr auto reset_interval = std::chrono::minutes(AUDIO_MAX_RESET_INTERVAL);
+    reset_timer.expires_from_now(reset_interval);
+    reset_timer.async_wait(asio::bind_executor(exec_strand, [self = shared_from_this()](const asio::error_code &ec) {
+        if (ec)
+        {
+            AUDIO_DEBUG_PRINT("Auto reset timer error: %s", ec.message().c_str());
+            return;
+        }
+
+        AUDIO_INFO_PRINT("Performing scheduled reset for stream token %u", self->token);
+        auto result = self->reset();
+        if (!result)
+        {
+            AUDIO_ERROR_PRINT("Auto reset failed: %s", result.what());
+        }
+
+        self->schedule_auto_reset();
+    }));
+}
+
 // AudioPlayer
 AudioPlayer::AudioPlayer(unsigned char _token) : token(_token), preemptive(0), current_index(0), sequence_active(false)
 {
@@ -753,7 +803,7 @@ RetCode AudioPlayer::play_sequence(const std::vector<std::string> &file_list, co
         sequence_active = true;
     }
 
-    return play_tmpl(file_list[0], 1, &AudioPlayer::on_file_complete, sink);
+    return play_tmpl(file_list[0], 0, &AudioPlayer::on_file_complete, sink);
 }
 
 RetCode AudioPlayer::stop_sequence()

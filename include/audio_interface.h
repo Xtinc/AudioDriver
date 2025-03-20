@@ -217,18 +217,17 @@ class AudioCenter
     RetCode connect(IToken itoken, OToken otoken, const std::string &ip);
     RetCode disconnect(IToken itoken, OToken otoken, const std::string &ip);
 
+    RetCode start();
+    RetCode stop();
+
     RetCode mute(AudioToken token);
     RetCode unmute(AudioToken token);
     RetCode play(const std::string &path, int cycles, OToken otoken);
     RetCode stop(const std::string &path);
 
   private:
-    void handle_auto_reset();
-
-  private:
     std::map<unsigned char, std::shared_ptr<IAStream>> ias_map;
     std::map<unsigned char, std::shared_ptr<OAStream>> oas_map;
-    std::map<unsigned char, AudioDeviceName> reset_devices;
 
     std::shared_ptr<NetWorker> net_mgr;
     std::unique_ptr<AudioMonitor> monitor;

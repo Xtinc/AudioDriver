@@ -115,13 +115,13 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     using destinations = std::vector<std::weak_ptr<OAStream>>;
 
   public:
-    IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs, unsigned int _ch);
+    IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs, unsigned int _ch,
+             bool auto_reset = false);
     ~IAStream();
 
     RetCode start();
     RetCode stop();
     RetCode initialize_network(const std::shared_ptr<NetWorker> &nw);
-    RetCode reset(const AudioDeviceName &_name);
     RetCode reset(const AudioDeviceName &_name, unsigned int _fs, unsigned int _ch);
     RetCode connect(const std::shared_ptr<OAStream> &oas);
     RetCode disconnect(const std::shared_ptr<OAStream> &oas);
@@ -137,17 +137,22 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     RetCode create_device(const AudioDeviceName &_name, unsigned int _fs, unsigned int _ch);
     RetCode swap_device(idevice_ptr &new_device);
 
+    RetCode reset();
+    void schedule_auto_reset();
+
   public:
     const unsigned char token;
     const unsigned int ti;
     const unsigned int fs;
     const unsigned int ps;
     const unsigned int ch;
+    const bool auto_reset_enabled;
 
   private:
     std::atomic_bool ias_ready;
-    asio::steady_timer timer;
+    asio::steady_timer exec_timer;
     asio_strand exec_strand;
+    asio::steady_timer reset_timer;
 
     ibuffer_ptr usr_buf;
     ibuffer_ptr dev_buf;
