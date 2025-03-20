@@ -2,6 +2,7 @@
 #define AUDIO_INTERFACE_H
 
 #include <array>
+#include <atomic>
 #include <cinttypes>
 #include <cstdio>
 #include <map>
@@ -204,7 +205,7 @@ class AudioMonitor;
 class AudioCenter
 {
   public:
-    AudioCenter();
+    AudioCenter(bool enable_network);
     ~AudioCenter();
 
     IToken create(IToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps, unsigned int ch,
@@ -212,6 +213,7 @@ class AudioCenter
     OToken create(OToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps, unsigned int ch,
                   bool enable_reset = false);
 
+    RetCode prepare();
     RetCode connect(IToken itoken, OToken otoken);
     RetCode disconnect(IToken itoken, OToken otoken);
     RetCode connect(IToken itoken, OToken otoken, const std::string &ip);
@@ -226,6 +228,14 @@ class AudioCenter
     RetCode stop(const std::string &path);
 
   private:
+    enum class State
+    {
+        INIT,
+        CONNECTING,
+        READY
+    };
+
+    std::atomic<State> center_state;
     std::map<unsigned char, std::shared_ptr<IAStream>> ias_map;
     std::map<unsigned char, std::shared_ptr<OAStream>> oas_map;
 
@@ -233,9 +243,6 @@ class AudioCenter
     std::unique_ptr<AudioMonitor> monitor;
     std::unique_ptr<AudioPlayer> player;
 };
-
-void start_audio_service();
-void stop_audio_service();
 
 #define AUDIO_INFO_PRINT(fmt, ...) printf("[INF] %s(%d): " fmt "\n", __FUNCTION__, __LINE__, ##__VA_ARGS__)
 #define AUDIO_ERROR_PRINT(fmt, ...) printf("[ERR] %s(%d): " fmt "\n", __FUNCTION__, __LINE__, ##__VA_ARGS__)

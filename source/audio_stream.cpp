@@ -27,11 +27,11 @@ BackgroundService &BackgroundService::instance()
 BackgroundService::BackgroundService() : work_guard(asio::make_work_guard(io_context))
 {
 #if WINDOWS_OS_ENVIRONMENT
-    std::call_once(coinit_flag, []() { CoInitializeEx(NULL, COINIT_APARTMENTTHREADED); });
+    std::call_once(coinit_flag, []() { CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED); });
     TIMECAPS tc;
     if (timeGetDevCaps(&tc, sizeof(TIMECAPS)) == TIMERR_NOERROR)
     {
-        high_timer_resolution = (std::max)(tc.wPeriodMin, (std::min)((UINT)1, tc.wPeriodMax));
+        high_timer_resolution = (std::max)(tc.wPeriodMin, (std::min)(static_cast<UINT>(1), tc.wPeriodMax));
 
         if (timeBeginPeriod(high_timer_resolution) == TIMERR_NOERROR)
         {
@@ -40,29 +40,14 @@ BackgroundService::BackgroundService() : work_guard(asio::make_work_guard(io_con
         }
     }
 #endif
-}
 
-BackgroundService::~BackgroundService()
-{
-    stop();
-#if WINDOWS_OS_ENVIRONMENT
-    if (active_high_res_timer)
-    {
-        timeEndPeriod(high_timer_resolution);
-        AUDIO_INFO_PRINT("System timer resolution restored to default");
-    }
-#endif
-}
-
-void BackgroundService::start()
-{
     for (size_t i = 0; i < AUDIO_MAX_COCURRECY_WORKER; ++i)
     {
         io_thds.emplace_back([this]() { io_context.run(); });
     }
 }
 
-void BackgroundService::stop()
+BackgroundService::~BackgroundService()
 {
     work_guard.reset();
     io_context.stop();
@@ -74,7 +59,14 @@ void BackgroundService::stop()
             thread.join();
         }
     }
-    io_thds.clear();
+
+#if WINDOWS_OS_ENVIRONMENT
+    if (active_high_res_timer)
+    {
+        timeEndPeriod(high_timer_resolution);
+        AUDIO_INFO_PRINT("System timer resolution restored to default");
+    }
+#endif
 }
 
 asio::io_context &BackgroundService::context()
@@ -84,14 +76,20 @@ asio::io_context &BackgroundService::context()
 
 // OAStream
 OAStream::OAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs,
-                   unsigned int _ch)
-    : token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(_ch), oas_ready(false), timer(BG_SERVICE),
-      exec_strand(asio::make_strand(BG_SERVICE))
+                   unsigned int _ch, bool auto_reset)
+    : token(_token), ti(_ti), enable_reset(auto_reset), fs(_fs), ps(fs * ti / 1000), ch(_ch), usr_name(_name),
+      oas_ready(false), exec_timer(BG_SERVICE), exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE),
+      muted(false)
 {
     auto ret = create_device(_name);
     if (ret)
     {
         oas_ready = true;
+
+        if (enable_reset)
+        {
+            schedule_auto_reset();
+        }
     }
     else
     {
@@ -160,7 +158,12 @@ RetCode OAStream::stop()
         return {RetCode::OK, "Device already stopped"};
     }
 
-    timer.cancel();
+    exec_timer.cancel();
+
+    if (enable_reset)
+    {
+        reset_timer.cancel();
+    }
 
     {
         std::lock_guard<std::mutex> grd(session_mtx);
@@ -229,7 +232,7 @@ RetCode OAStream::direct_push(unsigned char itoken, unsigned int chan, unsigned 
         AUDIO_INFO_PRINT("%u receiver New connection: %u (IP: 0x%08X)", token, itoken, source_ip);
     }
 
-    bool success = it->second->session.store((const char *)data, frames * chan * sizeof(PCM_TYPE));
+    bool success = it->second->session.store(reinterpret_cast<const char *>(data), frames * chan * sizeof(PCM_TYPE));
     return success ? RetCode::OK : RetCode::NOACTION;
 }
 
@@ -272,8 +275,8 @@ void OAStream::execute_loop(TimePointer tp, unsigned int cnt)
         tp = std::chrono::steady_clock::now();
     }
 
-    timer.expires_at(tp + std::chrono::milliseconds(ti) * cnt);
-    timer.async_wait(asio::bind_executor(exec_strand, [tp, cnt, self = shared_from_this()](asio::error_code ec) {
+    exec_timer.expires_at(tp + std::chrono::milliseconds(ti) * cnt);
+    exec_timer.async_wait(asio::bind_executor(exec_strand, [tp, cnt, self = shared_from_this()](asio::error_code ec) {
         if (ec)
         {
             AUDIO_DEBUG_PRINT("Timer error: %s", ec.message().c_str());
@@ -399,16 +402,47 @@ RetCode OAStream::create_device(const AudioDeviceName &_name)
     return {RetCode::OK, "Device initialized successfully"};
 }
 
+void OAStream::schedule_auto_reset()
+{
+    if (!enable_reset || !oas_ready)
+    {
+        return;
+    }
+
+    constexpr auto reset_interval = std::chrono::minutes(AUDIO_MAX_RESET_INTERVAL);
+    reset_timer.expires_from_now(reset_interval);
+    reset_timer.async_wait(asio::bind_executor(exec_strand, [self = shared_from_this()](const asio::error_code &ec) {
+        if (ec)
+        {
+            AUDIO_DEBUG_PRINT("OAStream auto reset timer error: %s", ec.message().c_str());
+            return;
+        }
+
+        AUDIO_INFO_PRINT("Performing scheduled reset for OAStream token %u", self->token);
+        auto result = self->reset(self->usr_name);
+        if (!result)
+        {
+            AUDIO_ERROR_PRINT("OAStream auto reset failed: %s", result.what());
+        }
+        self->schedule_auto_reset();
+    }));
+}
+
 // IAStream
 IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs,
                    unsigned int _ch, bool auto_reset)
-    : ias_ready(false), token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(_ch), exec_timer(BG_SERVICE),
-      exec_strand(asio::make_strand(BG_SERVICE)), auto_reset_enabled(auto_reset), reset_timer(BG_SERVICE)
+    : token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(_ch), enable_reset(auto_reset), usr_name(_name),
+      ias_ready(false), exec_timer(BG_SERVICE), exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE)
 {
     auto ret = create_device(_name);
     if (ret)
     {
         ias_ready = true;
+
+        if (enable_reset)
+        {
+            schedule_auto_reset();
+        }
     }
     else
     {
@@ -416,11 +450,6 @@ IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
     }
 
     dests.reserve(4);
-
-    if (auto_reset_enabled)
-    {
-        schedule_auto_reset();
-    }
 }
 
 IAStream::~IAStream()
@@ -434,29 +463,28 @@ IAStream::~IAStream()
     }
 }
 
-RetCode IAStream::reset()
+RetCode IAStream::reset(const AudioDeviceName &_name)
 {
     stop();
 
-    auto ret = create_device(AudioDeviceName(idevice->hw_name, 0));
+    auto ret = create_device(_name);
     if (!ret)
     {
         AUDIO_ERROR_PRINT("Failed to create device: %s", ret.what());
     }
-    ias_ready = true;
-    auto start_ret = start();
-
-    if (auto_reset_enabled)
+    else
     {
-        schedule_auto_reset();
+        usr_name = _name;
     }
 
-    return start_ret;
+    ias_ready = true;
+
+    return start();
 }
 
 RetCode IAStream::reset(const AudioDeviceName &_name, unsigned int _fs, unsigned int _ch)
 {
-    if (auto_reset_enabled)
+    if (enable_reset)
     {
         return {RetCode::FAILED, "Auto reset enabled"};
     }
@@ -498,7 +526,7 @@ RetCode IAStream::stop()
 
     exec_timer.cancel();
 
-    if (auto_reset_enabled)
+    if (enable_reset)
     {
         reset_timer.cancel();
     }
@@ -554,7 +582,7 @@ RetCode IAStream::disconnect(const std::shared_ptr<OAStream> &oas)
     return {RetCode::OK, "Connection removed"};
 }
 
-RetCode IAStream::direct_push(const char *data, size_t len)
+RetCode IAStream::direct_push(const char *data, size_t len) const
 {
     return idevice->write(data, len);
 }
@@ -598,7 +626,7 @@ void IAStream::execute_loop(TimePointer tp, unsigned int cnt)
     }));
 }
 
-RetCode IAStream::process_data()
+RetCode IAStream::process_data() const
 {
     if (!ias_ready)
     {
@@ -720,7 +748,7 @@ RetCode IAStream::swap_device(idevice_ptr &new_device)
 
 void IAStream::schedule_auto_reset()
 {
-    if (!auto_reset_enabled || !ias_ready)
+    if (!enable_reset || !ias_ready)
     {
         return;
     }
@@ -735,7 +763,7 @@ void IAStream::schedule_auto_reset()
         }
 
         AUDIO_INFO_PRINT("Performing scheduled reset for stream token %u", self->token);
-        auto result = self->reset();
+        auto result = self->reset(self->usr_name);
         if (!result)
         {
             AUDIO_ERROR_PRINT("Auto reset failed: %s", result.what());
@@ -746,18 +774,46 @@ void IAStream::schedule_auto_reset()
 }
 
 // AudioPlayer
-AudioPlayer::AudioPlayer(unsigned char _token) : token(_token), preemptive(0), current_index(0), sequence_active(false)
+AudioPlayer::AudioPlayer(unsigned char _token) : token(_token), preemptive(0)
 {
 }
 
-AudioPlayer::~AudioPlayer()
-{
-    stop_sequence();
-}
+AudioPlayer::~AudioPlayer() = default;
 
 RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared_ptr<OAStream> &sink)
 {
-    return play_tmpl(name, cycles, nullptr, sink);
+    if (preemptive > 5)
+    {
+        return {RetCode::FAILED, "Too many player streams"};
+    }
+
+    auto *raw_sender = new IAStream(token + preemptive, AudioDeviceName(name, cycles),
+                                    enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2);
+
+    auto audio_sender = std::shared_ptr<IAStream>(raw_sender, [this, name](const IAStream *ptr) {
+        --preemptive;
+        std::lock_guard<std::mutex> grd(mtx);
+        auto iter = sounds.find(name);
+        if (iter != sounds.cend())
+        {
+            sounds.erase(iter);
+        }
+
+        delete ptr;
+    });
+
+    ++preemptive;
+    {
+        std::lock_guard<std::mutex> grd(mtx);
+        if (sounds.find(name) != sounds.cend())
+        {
+            return {RetCode::FAILED, "Stream already exists"};
+        }
+        sounds.emplace(name, audio_sender);
+    }
+
+    audio_sender->connect(sink);
+    return audio_sender->start();
 }
 
 RetCode AudioPlayer::stop(const std::string &name)
@@ -779,95 +835,4 @@ RetCode AudioPlayer::stop(const std::string &name)
         }
     }
     return sender->stop();
-}
-
-RetCode AudioPlayer::play_sequence(const std::vector<std::string> &file_list, const std::shared_ptr<OAStream> &sink)
-{
-    if (file_list.empty())
-    {
-        return {RetCode::FAILED, "Empty file list"};
-    }
-
-    if (!sink)
-    {
-        return {RetCode::FAILED, "Invalid output stream"};
-    }
-
-    stop_sequence();
-
-    {
-        std::lock_guard<std::mutex> grd(mtx);
-        sequence_files = file_list;
-        current_index = 0;
-        sequence_sink = sink;
-        sequence_active = true;
-    }
-
-    return play_tmpl(file_list[0], 0, &AudioPlayer::on_file_complete, sink);
-}
-
-RetCode AudioPlayer::stop_sequence()
-{
-    std::vector<std::string> files_to_stop;
-
-    {
-        std::lock_guard<std::mutex> grd(mtx);
-        if (!sequence_active)
-        {
-            return {RetCode::NOACTION, "No active sequence"};
-        }
-
-        files_to_stop = sequence_files;
-        sequence_active = false;
-        sequence_files.clear();
-        current_index = 0;
-        sequence_sink.reset();
-    }
-
-    for (const auto &file : files_to_stop)
-    {
-        stop(file);
-    }
-
-    return {RetCode::OK, "Sequence playback stopped"};
-}
-
-void AudioPlayer::on_file_complete(const std::string &name)
-{
-    std::string next_file;
-    std::shared_ptr<OAStream> sink;
-
-    {
-        std::lock_guard<std::mutex> grd(mtx);
-        if (!sequence_active)
-        {
-            return;
-        }
-
-        current_index++;
-
-        if (current_index < sequence_files.size())
-        {
-            next_file = sequence_files[current_index];
-            sink = sequence_sink;
-        }
-        else
-        {
-            sequence_active = false;
-            sequence_files.clear();
-            current_index = 0;
-            sequence_sink.reset();
-            return;
-        }
-    }
-
-    if (!next_file.empty() && sink)
-    {
-        RetCode result = play_tmpl(next_file, 1, &AudioPlayer::on_file_complete, sink);
-        if (!result)
-        {
-            AUDIO_ERROR_PRINT("Failed to play next file in sequence: %s - %s", next_file.c_str(), result.what());
-            on_file_complete(next_file);
-        }
-    }
 }

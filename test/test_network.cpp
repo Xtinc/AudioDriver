@@ -1,25 +1,17 @@
-#include "audio_stream.h"
+#include "audio_interface.h"
+#include <chrono>
+#include <thread>
 
 int main()
 {
-    BackgroundService::instance().start();
-    // auto net_mgr = std::make_shared<NetWorker>(BG_SERVICE);
-    auto ias = std::make_shared<IAStream>(12, AudioDeviceName("dukou_44100.wav", 0), 20, 44100, 2);
-    auto oas = std::make_shared<OAStream>(16, AudioDeviceName("N300", 0), 20, 44100, 2);
-    auto echo = std::make_shared<IAStream>(22, AudioDeviceName{"echo", 0}, 20, 24000, 1);
-    auto wave_oas = std::make_shared<OAStream>(33, AudioDeviceName{"wave.wav", 0}, 20, 44100, 2);
+    AudioCenter center(false);
 
-    ias->connect(wave_oas);
-    echo->connect(oas);
-    wave_oas->register_listener(echo);
+    auto ias = center.create(IToken(20), {"default", 0}, AudioBandWidth::Full, AudioPeriodSize::INR_20MS, 2);
+    auto oas = center.create(OToken(20), {"default", 0}, AudioBandWidth::Full, AudioPeriodSize::INR_20MS, 2);
 
-    ias->start();
-    wave_oas->start();
-    echo->start();
-    oas->start();
+    center.connect(ias, oas);
+    center.start();
 
-    oas->start();
     std::this_thread::sleep_for(std::chrono::seconds(300));
-    BackgroundService::instance().stop();
     return 0;
 }

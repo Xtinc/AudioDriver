@@ -49,8 +49,8 @@ class AudioDevice
 
   protected:
     AudioDevice(const std::string &name, bool capture, unsigned int fs, unsigned int ps, unsigned int ch)
-        : hw_name(name), is_capture_dev(capture), hstate(STREAM_CLOSED), dev_fs(fs), dev_ps(ps), dev_ch(ch), max_ch(0),
-          min_ch(0) {};
+        : hw_name(name), is_capture_dev(capture), dev_fs(fs), dev_ps(ps), dev_ch(ch), max_ch(0), min_ch(0),
+          hstate(STREAM_CLOSED) {};
 
   protected:
     enum Mode

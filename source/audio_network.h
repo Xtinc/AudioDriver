@@ -4,6 +4,7 @@
 #include "asio.hpp"
 #include "audio_interface.h"
 #include <mutex>
+#include <utility>
 #include <vector>
 
 /*                    Packet Frame Format
@@ -87,6 +88,9 @@ struct KFifo
     KFifo(size_t blk_sz, size_t blk_num, unsigned int channel);
     ~KFifo();
 
+    KFifo(const KFifo &) = delete;
+    KFifo &operator=(const KFifo &) = delete;
+
     bool store(const char *input_addr, size_t write_length);
     bool load(char *output_addr, size_t read_length);
     bool store_aside(size_t write_length);
@@ -109,9 +113,6 @@ struct KFifo
     char *memory_addr;
     char *buffer_addr;
     std::mutex io_mtx;
-
-    KFifo(const KFifo &) = delete;
-    KFifo &operator=(const KFifo &) = delete;
 
     size_t available_space() const
     {
@@ -183,7 +184,7 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
         asio::ip::udp::endpoint endpoint;
         uint8_t receiver_token;
 
-        Destination(const asio::ip::udp::endpoint &ep, uint8_t token) : endpoint(ep), receiver_token(token)
+        Destination(asio::ip::udp::endpoint ep, uint8_t token) : endpoint(std::move(ep)), receiver_token(token)
         {
         }
 

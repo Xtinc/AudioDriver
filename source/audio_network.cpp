@@ -138,9 +138,8 @@ uint8_t NetEncoder::encode_sample(int16_t sample, NetEncoder::State &state)
     }
 
     int step = ADPCM_STEP_TABLE[state.step_index];
-    int temp;
 
-    temp = step;
+    int temp = step;
     if (diff >= temp)
     {
         code |= 4;
@@ -201,7 +200,7 @@ const uint8_t *NetEncoder::encode(const int16_t *pcm_data, unsigned int frames, 
 
     for (unsigned int ch = 0; ch < channels; ch++)
     {
-        int16_t predictor_value = static_cast<int16_t>(encode_states[ch].predictor);
+        auto predictor_value = static_cast<int16_t>(encode_states[ch].predictor);
         out[0] = predictor_value & 0xFF;
         out[1] = (predictor_value >> 8) & 0xFF;
         out += 2;
@@ -609,16 +608,16 @@ RetCode NetWorker::del_destination(uint8_t sender_id, uint8_t receiver_token, co
 
     auto &dest_list = iter->second.destinations;
     Destination target(endpoint, receiver_token);
-    
+
     auto dest_iter = std::find(dest_list.begin(), dest_list.end(), target);
     if (dest_iter == dest_list.end())
     {
         return {RetCode::NOACTION, "Destination not found"};
     }
-    
+
     dest_list.erase(dest_iter);
     AUDIO_INFO_PRINT("Removed destination %s for sender %u to receiver %u", ip.c_str(), sender_id, receiver_token);
-    
+
     return {RetCode::OK, "Destination removed"};
 }
 
@@ -650,7 +649,7 @@ RetCode NetWorker::send_audio(uint8_t sender_id, const int16_t *data, unsigned i
         return {RetCode::FAILED, "Encoding failed"};
     }
 
-    NetPacketHeader header;
+    NetPacketHeader header{};
     header.sender_id = sender_id;
     header.channels = static_cast<uint8_t>(context.channels);
     header.magic_num = NET_MAGIC_NUM;
@@ -847,7 +846,7 @@ void NetWorker::DecoderContext::update_stats(uint32_t sequence, uint64_t timesta
 
 NetStatInfos NetWorker::DecoderContext::get_period_stats()
 {
-    NetStatInfos stats;
+    NetStatInfos stats{};
 
     if (period_packets_received + period_packets_lost > 0)
     {

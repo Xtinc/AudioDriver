@@ -22,34 +22,38 @@ static void print_device_change_info(AudioDeviceEvent event, const AudioDeviceIn
     }
 }
 
-void start_audio_service()
-{
-    BackgroundService::instance().start();
-}
-
-void stop_audio_service()
-{
-    BackgroundService::instance().stop();
-}
-
 // AudioCenter
-AudioCenter::AudioCenter()
+AudioCenter::AudioCenter(bool enable_network) : center_state(State::INIT)
 {
     monitor = std::make_unique<AudioMonitor>(BG_SERVICE);
     monitor->RegisterCallback(this, print_device_change_info);
     player = std::make_unique<AudioPlayer>(USER_MAX_AUDIO_TOKEN);
-    net_mgr = std::make_shared<NetWorker>(BG_SERVICE);
+    if (enable_network)
+    {
+        net_mgr = std::make_shared<NetWorker>(BG_SERVICE);
+    }
 }
 
 AudioCenter::~AudioCenter()
 {
-    stop();
+    auto ret = stop();
+    if (!ret)
+    {
+        AUDIO_ERROR_PRINT("Failed to stop AudioCenter: %s", ret.what());
+    }
+
     monitor->UnregisterCallback(this);
 }
 
 IToken AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps,
-                           unsigned int ch, bool enabel_reset)
+                           unsigned int ch, bool enable_reset)
 {
+    if (center_state.load() != State::INIT)
+    {
+        AUDIO_ERROR_PRINT("Cannot create stream, AudioCenter not in INIT state");
+        return {};
+    }
+
     if (token > USER_MAX_AUDIO_TOKEN)
     {
         AUDIO_ERROR_PRINT("Invalid token: %u", token.tok);
@@ -63,13 +67,19 @@ IToken AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBandW
     }
 
     AUDIO_DEBUG_PRINT("Create audio input stream: %u", token.tok);
-    ias_map[token] = std::make_shared<IAStream>(token, name, enum2val(ps), enum2val(bw), ch, enabel_reset);
+    ias_map[token] = std::make_shared<IAStream>(token, name, enum2val(ps), enum2val(bw), ch, enable_reset);
     return token;
 }
 
 OToken AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps,
                            unsigned int ch, bool enable_reset)
 {
+    if (center_state.load() != State::INIT)
+    {
+        AUDIO_ERROR_PRINT("Cannot create stream, AudioCenter not in INIT state");
+        return {};
+    }
+
     if (token > USER_MAX_AUDIO_TOKEN)
     {
         AUDIO_ERROR_PRINT("Invalid token: %u", token.tok);
@@ -83,12 +93,30 @@ OToken AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBandW
     }
 
     AUDIO_DEBUG_PRINT("Create audio output stream: %u", token.tok);
-    oas_map[token] = std::make_shared<OAStream>(token, name, enum2val(ps), enum2val(bw), ch);
+    oas_map[token] = std::make_shared<OAStream>(token, name, enum2val(ps), enum2val(bw), ch, enable_reset);
     return token;
+}
+
+RetCode AudioCenter::prepare()
+{
+    State expected = State::INIT;
+    if (!center_state.compare_exchange_strong(expected, State::CONNECTING))
+    {
+        return {RetCode::FAILED, "AudioCenter not in INIT state"};
+    }
+
+    AUDIO_INFO_PRINT("AudioCenter prepared for connections");
+    return RetCode::OK;
 }
 
 RetCode AudioCenter::connect(IToken itoken, OToken otoken)
 {
+    State current = center_state.load();
+    if (current != State::CONNECTING && current != State::READY)
+    {
+        return {RetCode::FAILED, "AudioCenter not in CONNECTING state"};
+    }
+
     if (itoken > USER_MAX_AUDIO_TOKEN || otoken > USER_MAX_AUDIO_TOKEN)
     {
         AUDIO_ERROR_PRINT("Invalid token: %u -> %u", itoken.tok, otoken.tok);
@@ -114,6 +142,12 @@ RetCode AudioCenter::connect(IToken itoken, OToken otoken)
 
 RetCode AudioCenter::disconnect(IToken itoken, OToken otoken)
 {
+    State current = center_state.load();
+    if (current != State::CONNECTING && current != State::READY)
+    {
+        return {RetCode::FAILED, "AudioCenter not in CONNECTING state"};
+    }
+
     auto ias = ias_map.find(itoken);
     if (ias == ias_map.end())
     {
@@ -133,10 +167,22 @@ RetCode AudioCenter::disconnect(IToken itoken, OToken otoken)
 
 RetCode AudioCenter::connect(IToken itoken, OToken otoken, const std::string &ip)
 {
+    State current = center_state.load();
+    if (current != State::CONNECTING && current != State::READY)
+    {
+        return {RetCode::FAILED, "AudioCenter not in CONNECTING state"};
+    }
+
     if (itoken > USER_MAX_AUDIO_TOKEN || otoken > USER_MAX_AUDIO_TOKEN)
     {
         AUDIO_ERROR_PRINT("Invalid token: %u -> %u", itoken.tok, otoken.tok);
         return {RetCode::EPARAM, "Invalid token"};
+    }
+
+    if (!net_mgr)
+    {
+        AUDIO_ERROR_PRINT("Network not enabled");
+        return {RetCode::FAILED, "Network not enabled"};
     }
 
     auto ias = ias_map.find(itoken);
@@ -157,6 +203,18 @@ RetCode AudioCenter::connect(IToken itoken, OToken otoken, const std::string &ip
 
 RetCode AudioCenter::disconnect(IToken itoken, OToken otoken, const std::string &ip)
 {
+    State current = center_state.load();
+    if (current != State::CONNECTING && current != State::READY)
+    {
+        return {RetCode::FAILED, "AudioCenter not in CONNECTING state"};
+    }
+
+    if (!net_mgr)
+    {
+        AUDIO_ERROR_PRINT("Network not enabled");
+        return {RetCode::FAILED, "Network not enabled"};
+    }
+
     auto ias = ias_map.find(itoken);
     if (ias == ias_map.end())
     {
@@ -169,15 +227,24 @@ RetCode AudioCenter::disconnect(IToken itoken, OToken otoken, const std::string 
 
 RetCode AudioCenter::start()
 {
-    auto ret = net_mgr->start();
-    if (!ret)
+    State expected = State::CONNECTING;
+    if (!center_state.compare_exchange_strong(expected, State::READY))
     {
-        AUDIO_ERROR_PRINT("Failed to start NetWorker %s", ret.what());
+        return {RetCode::FAILED, "AudioCenter not ready for start"};
+    }
+
+    if (net_mgr)
+    {
+        auto ret = net_mgr->start();
+        if (!ret)
+        {
+            AUDIO_ERROR_PRINT("Failed to start NetWorker: %s", ret.what());
+        }
     }
 
     for (const auto &pair : oas_map)
     {
-        ret = pair.second->start();
+        auto ret = pair.second->start();
         if (!ret)
         {
             AUDIO_ERROR_PRINT("Failed to start OAStream: %u", pair.first);
@@ -186,7 +253,7 @@ RetCode AudioCenter::start()
 
     for (const auto &pair : ias_map)
     {
-        ret = pair.second->start();
+        auto ret = pair.second->start();
         if (!ret)
         {
             AUDIO_ERROR_PRINT("Failed to start IAStream: %u", pair.first);
@@ -198,15 +265,23 @@ RetCode AudioCenter::start()
 
 RetCode AudioCenter::stop()
 {
-    auto ret = net_mgr->stop();
-    if (!ret)
+    if (center_state.load() != State::READY)
     {
-        AUDIO_ERROR_PRINT("Failed to stop NetWorker %s", ret.what());
+        return {RetCode::NOACTION, "AudioCenter not in READY state"};
+    }
+
+    if (net_mgr)
+    {
+        auto ret = net_mgr->stop();
+        if (!ret)
+        {
+            AUDIO_ERROR_PRINT("Failed to stop NetWorker %s", ret.what());
+        }
     }
 
     for (const auto &pair : oas_map)
     {
-        ret = pair.second->stop();
+        auto ret = pair.second->stop();
         if (!ret)
         {
             AUDIO_ERROR_PRINT("Failed to stop OAStream: %u", pair.first);
@@ -215,7 +290,7 @@ RetCode AudioCenter::stop()
 
     for (const auto &pair : ias_map)
     {
-        ret = pair.second->stop();
+        auto ret = pair.second->stop();
         if (!ret)
         {
             AUDIO_ERROR_PRINT("Failed to stop IAStream: %u", pair.first);
@@ -227,6 +302,11 @@ RetCode AudioCenter::stop()
 
 RetCode AudioCenter::mute(AudioToken token)
 {
+    if (center_state.load() != State::READY)
+    {
+        return {RetCode::FAILED, "AudioCenter not in READY state"};
+    }
+
     if (token > USER_MAX_AUDIO_TOKEN)
     {
         AUDIO_ERROR_PRINT("Invalid token: %u", token.tok);
@@ -251,6 +331,11 @@ RetCode AudioCenter::mute(AudioToken token)
 
 RetCode AudioCenter::unmute(AudioToken token)
 {
+    if (center_state.load() != State::READY)
+    {
+        return {RetCode::FAILED, "AudioCenter not in READY state"};
+    }
+
     if (token > USER_MAX_AUDIO_TOKEN)
     {
         AUDIO_ERROR_PRINT("Invalid token: %u", token.tok);
@@ -275,6 +360,11 @@ RetCode AudioCenter::unmute(AudioToken token)
 
 RetCode AudioCenter::play(const std::string &path, int cycles, OToken otoken)
 {
+    if (center_state.load() != State::READY)
+    {
+        return {RetCode::FAILED, "AudioCenter not in READY state"};
+    }
+
     auto oas = oas_map.find(otoken);
     if (oas == oas_map.end())
     {
@@ -287,5 +377,10 @@ RetCode AudioCenter::play(const std::string &path, int cycles, OToken otoken)
 
 RetCode AudioCenter::stop(const std::string &path)
 {
+    if (center_state.load() != State::READY)
+    {
+        return {RetCode::FAILED, "AudioCenter not in READY state"};
+    }
+
     return player->stop(path);
 }

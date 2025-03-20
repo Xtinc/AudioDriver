@@ -18,11 +18,11 @@ constexpr int16_t clamp_s16(double v)
     return static_cast<int16_t>(v < -32768 ? -32768 : 32767 < v ? 32767 : v);
 }
 
-void mix_channels(const int16_t *ssrc, unsigned int chan, int frames_num, int16_t *output)
+void mix_channels(const int16_t *ssrc, unsigned int chan, unsigned int frames_num, int16_t *output)
 {
     for (unsigned int i = 0; i < frames_num * chan; i++)
     {
-        auto res = (int32_t)output[i] + (int32_t)ssrc[i];
+        auto res = static_cast<int32_t>(output[i]) + static_cast<int32_t>(ssrc[i]);
         output[i] = clamp_s16(res);
     }
 }
@@ -53,14 +53,14 @@ SincInterpolator::SincInterpolator(int _order, int _precision, int _chan, double
     for (int offset = 0; offset <= quan; offset++)
     {
         auto scale = 0.0;
-        int startidx = idx;
+        int start_idx = idx;
         for (int i = -order + 1; i <= order; i++)
         {
-            kern[idx] = kernel_func((double)offset / quan - i, cutoff);
+            kern[idx] = kernel_func(static_cast<double>(offset) / quan - i, cutoff);
             scale += kern[idx];
             idx++;
         }
-        idx = startidx;
+        idx = start_idx;
         for (int i = -order + 1; i <= order; i++)
         {
             kern[idx++] /= scale;
@@ -123,7 +123,7 @@ double SincInterpolator::interpolator(double x, const double *input, const doubl
     const double *coffs = &kern[offset];
 
     double sum = 0.0;
-    for (int i = (int)floor(x) - order + 1; i <= (int)floor(x) + order; i += RS_BLKSIZE)
+    for (int i = static_cast<int>(floor(x)) - order + 1; i <= static_cast<int>(floor(x)) + order; i += RS_BLKSIZE)
     {
         const double *samp_ptr = nullptr;
         bool overlap = true;
@@ -165,9 +165,9 @@ double SincInterpolator::interpolator(double x, const double *input, const doubl
         }
         else
         {
-            for (int i = 0; i < RS_BLKSIZE; i++)
+            for (int j = 0; j < RS_BLKSIZE; j++)
             {
-                sum += samp_ptr[i] * coffs[i];
+                sum += samp_ptr[j] * coffs[j];
             }
         }
         coffs += RS_BLKSIZE;
@@ -236,7 +236,7 @@ RetCode LocSampler::process(const PCM_TYPE *input, unsigned int input_frames, PC
             float_input[i] = static_cast<double>(input[i * src_ch + ichan_map[c]]) / 32768.0;
         }
 
-        output_frames = (unsigned int)resampler->process(float_input, input_frames, float_output, c);
+        output_frames = static_cast<unsigned int>(resampler->process(float_input, input_frames, float_output, c));
     }
 
     for (unsigned int i = 0; i < output_frames; i++)
@@ -250,7 +250,7 @@ RetCode LocSampler::process(const PCM_TYPE *input, unsigned int input_frames, PC
     return RetCode::OK;
 }
 
-void LocSampler::convertChannels(const PCM_TYPE *input, unsigned int frames, PCM_TYPE *output)
+void LocSampler::convertChannels(const PCM_TYPE *input, unsigned int frames, PCM_TYPE *output) const
 {
     if (src_ch == 1 && dst_ch == 2)
     {

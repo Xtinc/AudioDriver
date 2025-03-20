@@ -5,7 +5,7 @@
 #include <array>
 #include <memory>
 
-void mix_channels(const int16_t *ssrc, unsigned int chan, int frames_num, int16_t *output);
+void mix_channels(const int16_t *ssrc, unsigned int chan, unsigned int frames_num, int16_t *output);
 
 class SincInterpolator
 {
@@ -63,7 +63,7 @@ class LocSampler
     std::unique_ptr<double[]> obuffer;
     std::unique_ptr<SincInterpolator> resampler;
 
-    void convertChannels(const PCM_TYPE *input, unsigned int frames, PCM_TYPE *output);
+    void convertChannels(const PCM_TYPE *input, unsigned int frames, PCM_TYPE *output) const;
 };
 
 #endif

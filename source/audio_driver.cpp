@@ -434,12 +434,12 @@ static std::wstring utf8_to_utf16(const std::string &str)
 {
     if (str.empty())
     {
-        return std::wstring();
+        return {};
     }
 
-    int size_needed = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.size(), NULL, 0);
+    int size_needed = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), static_cast<int>(str.size()), NULL, 0);
     std::wstring wstr(size_needed, 0);
-    MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.size(), &wstr[0], size_needed);
+    MultiByteToWideChar(CP_UTF8, 0, str.c_str(), static_cast<int>(str.size()), &wstr[0], size_needed);
     return wstr;
 }
 
@@ -447,12 +447,12 @@ static std::string utf16_to_utf8(const std::wstring &wstr)
 {
     if (wstr.empty())
     {
-        return std::string();
+        return {};
     }
 
-    int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), (int)wstr.size(), NULL, 0, NULL, NULL);
+    int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), static_cast<int>(wstr.size()), NULL, 0, NULL, NULL);
     std::string str(size_needed, 0);
-    WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), (int)wstr.size(), &str[0], size_needed, NULL, NULL);
+    WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), static_cast<int>(wstr.size()), &str[0], size_needed, NULL, NULL);
     return str;
 }
 
@@ -467,7 +467,7 @@ static std::pair<std::wstring, std::wstring> normailzed_device_name(const std::s
     std::pair<std::wstring, std::wstring> ret{L"default", L"default"};
 
     hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), NULL, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator),
-                          (LPVOID *)&enumerator);
+                          reinterpret_cast<LPVOID *>(&enumerator));
     if (FAILED(hr))
     {
         goto exit;
@@ -596,7 +596,7 @@ RetCode WasapiDriver::open()
     WAVEFORMATEX wfx = {};
 
     auto hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), NULL, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator),
-                               (LPVOID *)&enumerator);
+                               reinterpret_cast<LPVOID *>(&enumerator));
     if (FAILED(hr))
     {
         ret = {RetCode::FAILED, "CoCreateInstance failed"};
@@ -618,7 +618,7 @@ RetCode WasapiDriver::open()
         goto exit;
     }
 
-    hr = device->Activate(__uuidof(IAudioClient2), CLSCTX_ALL, NULL, (LPVOID *)&audio_client);
+    hr = device->Activate(__uuidof(IAudioClient2), CLSCTX_ALL, NULL, reinterpret_cast<LPVOID *>(&audio_client));
     if (FAILED(hr))
     {
         ret = {RetCode::FAILED, "IMMDevice::Activate failed"};
@@ -640,8 +640,8 @@ RetCode WasapiDriver::open()
         return {RetCode::FAILED, "IAudioClient::Initialize failed"};
     }
 
-    hr = is_capture_dev ? audio_client->GetService(__uuidof(IAudioCaptureClient), (LPVOID *)&capture)
-                        : audio_client->GetService(__uuidof(IAudioRenderClient), (LPVOID *)&render);
+    hr = is_capture_dev ? audio_client->GetService(__uuidof(IAudioCaptureClient), reinterpret_cast<LPVOID *>(&capture))
+                        : audio_client->GetService(__uuidof(IAudioRenderClient), reinterpret_cast<LPVOID *>(&render));
     if (FAILED(hr))
     {
         ret = {RetCode::FAILED, "IAudioClient::GetService failed"};
