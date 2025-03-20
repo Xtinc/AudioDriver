@@ -836,3 +836,82 @@ RetCode AudioPlayer::stop(const std::string &name)
     }
     return sender->stop();
 }
+
+RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared_ptr<NetWorker> &networker,
+                                 uint8_t remote_token, const std::string &remote_ip)
+{
+    if (!networker)
+    {
+        return {RetCode::FAILED, "NetWorker not provided"};
+    }
+
+    if (remote_ip.empty())
+    {
+        return {RetCode::FAILED, "Remote IP not provided"};
+    }
+
+    if (preemptive > 5)
+    {
+        return {RetCode::FAILED, "Too many player streams"};
+    }
+
+    auto *raw_sender = new IAStream(token + preemptive, AudioDeviceName(name, cycles),
+                                    enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2);
+
+    auto audio_sender = std::shared_ptr<IAStream>(raw_sender, [this, name](const IAStream *ptr) {
+        --preemptive;
+        std::lock_guard<std::mutex> grd(mtx);
+        auto iter = sounds.find(name);
+        if (iter != sounds.cend())
+        {
+            sounds.erase(iter);
+        }
+
+        delete ptr;
+        AUDIO_INFO_PRINT("Remote stream for file %s released", name.c_str());
+    });
+
+    auto init_result = audio_sender->initialize_network(networker);
+    if (!init_result)
+    {
+        AUDIO_ERROR_PRINT("Failed to initialize network for sender: %s", init_result.what());
+        return init_result;
+    }
+
+    auto add_result = networker->add_destination(audio_sender->token, remote_token, remote_ip);
+    if (!add_result)
+    {
+        AUDIO_ERROR_PRINT("Failed to add destination %s for token %u: %s", remote_ip.c_str(), remote_token,
+                          add_result.what());
+        return add_result;
+    }
+
+    AUDIO_INFO_PRINT("Added remote destination %s for token %u", remote_ip.c_str(), remote_token);
+
+    ++preemptive;
+    {
+        std::lock_guard<std::mutex> grd(mtx);
+        if (sounds.find(name) != sounds.cend())
+        {
+            --preemptive;
+            networker->del_destination(audio_sender->token, remote_token, remote_ip);
+            return {RetCode::FAILED, "Stream already exists"};
+        }
+        sounds.emplace(name, audio_sender);
+    }
+
+    auto start_result = audio_sender->start();
+    if (!start_result)
+    {
+        std::lock_guard<std::mutex> grd(mtx);
+        sounds.erase(name);
+        --preemptive;
+        networker->del_destination(audio_sender->token, remote_token, remote_ip);
+        AUDIO_ERROR_PRINT("Failed to start streaming: %s", start_result.what());
+        return start_result;
+    }
+
+    AUDIO_INFO_PRINT("Started remote playback of %s to %s for token %u", name.c_str(), remote_ip.c_str(), remote_token);
+
+    return {RetCode::OK, "Remote playback started"};
+}

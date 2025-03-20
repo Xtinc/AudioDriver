@@ -176,6 +176,8 @@ class AudioPlayer
     ~AudioPlayer();
 
     RetCode play(const std::string &name, int cycles, const std::shared_ptr<OAStream> &sink);
+    RetCode play(const std::string &name, int cycles, const std::shared_ptr<NetWorker> &networker, uint8_t remote_token,
+                 const std::string &remote_ip);
     RetCode stop(const std::string &name);
 
   private:
