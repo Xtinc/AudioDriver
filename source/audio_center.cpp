@@ -46,7 +46,7 @@ AudioCenter::~AudioCenter()
 }
 
 IToken AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps,
-                           unsigned int ch, bool enable_reset)
+                           unsigned int ch, bool enable_network, bool enable_reset)
 {
     if (center_state.load() != State::INIT)
     {
@@ -68,11 +68,17 @@ IToken AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBandW
 
     AUDIO_DEBUG_PRINT("Create audio input stream: %u", token.tok);
     ias_map[token] = std::make_shared<IAStream>(token, name, enum2val(ps), enum2val(bw), ch, enable_reset);
+
+    if (enable_network)
+    {
+        ias_map[token]->initialize_network(net_mgr);
+    }
+
     return token;
 }
 
 OToken AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps,
-                           unsigned int ch, bool enable_reset)
+                           unsigned int ch, bool enable_network, bool enable_reset)
 {
     if (center_state.load() != State::INIT)
     {
@@ -94,6 +100,12 @@ OToken AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBandW
 
     AUDIO_DEBUG_PRINT("Create audio output stream: %u", token.tok);
     oas_map[token] = std::make_shared<OAStream>(token, name, enum2val(ps), enum2val(bw), ch, enable_reset);
+
+    if (enable_network)
+    {
+        oas_map[token]->initialize_network(net_mgr);
+    }
+
     return token;
 }
 
@@ -191,13 +203,7 @@ RetCode AudioCenter::connect(IToken itoken, OToken otoken, const std::string &ip
         AUDIO_ERROR_PRINT("Invalid input token: %u", itoken.tok);
         return {RetCode::EPARAM, "Invalid input token"};
     }
-
-    auto ret = ias->second->initialize_network(net_mgr);
-    if (!ret)
-    {
-        return ret;
-    }
-
+    
     return net_mgr->add_destination(itoken, otoken, ip);
 }
 

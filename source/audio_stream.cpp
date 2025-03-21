@@ -438,11 +438,6 @@ IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
     if (ret)
     {
         ias_ready = true;
-
-        if (enable_reset)
-        {
-            schedule_auto_reset();
-        }
     }
     else
     {
@@ -465,6 +460,11 @@ IAStream::~IAStream()
 
 RetCode IAStream::reset(const AudioDeviceName &_name)
 {
+    if (enable_reset)
+    {
+        return {RetCode::FAILED, "Auto reset enabled, manual reset not allowed"};
+    }
+    
     stop();
 
     auto ret = create_device(_name);
@@ -486,7 +486,7 @@ RetCode IAStream::reset(const AudioDeviceName &_name, unsigned int _fs, unsigned
 {
     if (enable_reset)
     {
-        return {RetCode::FAILED, "Auto reset enabled"};
+        return {RetCode::FAILED, "Auto reset enabled, manual reset not allowed"};
     }
 
     stop();
@@ -511,6 +511,11 @@ RetCode IAStream::start()
     if (ret)
     {
         execute_loop({}, 0);
+    }
+
+    if (enable_reset)
+    {
+        schedule_auto_reset();
     }
 
     return ret;
@@ -763,14 +768,21 @@ void IAStream::schedule_auto_reset()
         }
 
         AUDIO_INFO_PRINT("Performing scheduled reset for stream token %u", self->token);
-        auto result = self->reset(self->usr_name);
+        auto result = self->reset_self();
         if (!result)
         {
             AUDIO_ERROR_PRINT("Auto reset failed: %s", result.what());
         }
-
-        self->schedule_auto_reset();
     }));
+}
+
+RetCode IAStream::reset_self()
+{
+    (void)stop();
+    idevice.reset();
+    idevice = make_audio_driver(PHSY_IAS, usr_name, fs, ps, ch);
+    ias_ready = true;
+    return start();
 }
 
 // AudioPlayer
@@ -838,7 +850,7 @@ RetCode AudioPlayer::stop(const std::string &name)
 }
 
 RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared_ptr<NetWorker> &networker,
-                                 uint8_t remote_token, const std::string &remote_ip)
+                          uint8_t remote_token, const std::string &remote_ip)
 {
     if (!networker)
     {

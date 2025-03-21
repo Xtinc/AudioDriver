@@ -205,15 +205,15 @@ class AudioMonitor;
 class AudioCenter
 {
   public:
-    AudioCenter(bool enable_network);
+    AudioCenter(bool enable_network = false);
     ~AudioCenter();
 
     IToken create(IToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps, unsigned int ch,
-                  bool enable_reset = false);
+                  bool enable_network = false, bool enable_reset = false);
     OToken create(OToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps, unsigned int ch,
-                  bool enable_reset = false);
+                  bool enable_network = false, bool enable_reset = false);
 
-    RetCode prepare();
+    RetCode prepare(); 
     RetCode connect(IToken itoken, OToken otoken);
     RetCode disconnect(IToken itoken, OToken otoken);
     RetCode connect(IToken itoken, OToken otoken, const std::string &ip);

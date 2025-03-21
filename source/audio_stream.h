@@ -142,6 +142,7 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     RetCode swap_device(idevice_ptr &new_device);
 
     void schedule_auto_reset();
+    RetCode reset_self();
 
   public:
     const unsigned char token;
