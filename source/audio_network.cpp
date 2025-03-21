@@ -473,8 +473,9 @@ void NetWorker::report()
         auto stats = pair.second.get_period_stats();
         auto token = pair.first;
 
-        AUDIO_INFO_PRINT("NETSTATS(%u) : [loss] %.2f%%, [jitter] %.2fms, [received] %u, [lost] %u", token,
-                         stats.packet_loss_rate, stats.average_jitter, stats.packets_received, stats.packets_lost);
+        AUDIO_INFO_PRINT("NETSTATS(%u) : [loss] %.2f%%, [jitter] %.2fms, [received] %u, [lost] %u, [out-of-order] %u",
+                         token, stats.packet_loss_rate, stats.average_jitter, stats.packets_received,
+                         stats.packets_lost, stats.packets_out_of_order);
     }
 }
 
@@ -812,19 +813,31 @@ void NetWorker::DecoderContext::update_stats(uint32_t sequence, uint64_t timesta
     packets_received++;
     period_packets_received++;
 
-    if (last_sequence == 0)
+    if (first_packet)
     {
+        first_packet = false;
         last_sequence = sequence;
+        highest_sequence_seen = sequence;
         last_timestamp = timestamp;
         last_arrival_time = arrival_time;
         return;
     }
 
-    if (sequence > last_sequence + 1)
+    if (sequence < highest_sequence_seen)
     {
-        uint32_t lost = sequence - last_sequence - 1;
-        packets_lost += lost;
-        period_packets_lost += lost;
+        packets_out_of_order++;
+        period_packets_out_of_order++;
+    }
+    else
+    {
+        if (sequence > last_sequence + 1)
+        {
+            uint32_t lost = sequence - last_sequence - 1;
+            packets_lost += lost;
+            period_packets_lost += lost;
+        }
+
+        highest_sequence_seen = sequence;
     }
 
     if (timestamp > last_timestamp)
@@ -862,9 +875,11 @@ NetStatInfos NetWorker::DecoderContext::get_period_stats()
     stats.packets_received = period_packets_received;
     stats.packets_lost = period_packets_lost;
     stats.max_jitter = max_jitter;
+    stats.packets_out_of_order = period_packets_out_of_order;
 
     period_packets_received = 0;
     period_packets_lost = 0;
+    period_packets_out_of_order = 0;
     period_total_jitter = 0.0;
     last_report_time = std::chrono::steady_clock::now();
 

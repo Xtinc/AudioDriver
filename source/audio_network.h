@@ -47,6 +47,7 @@ struct NetStatInfos
     double max_jitter;
     uint32_t packets_received;
     uint32_t packets_lost;
+    uint32_t packets_out_of_order;
 };
 
 template <typename T> constexpr typename std::underlying_type<T>::type enum2val(T e)
@@ -220,20 +221,26 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
         uint32_t packets_lost{0};
         double total_jitter{0.0};
         double max_jitter{0.0};
+        
+        uint32_t packets_out_of_order{0};
 
         uint32_t period_packets_received{0};
         uint32_t period_packets_lost{0};
         double period_total_jitter{0.0};
+        uint32_t period_packets_out_of_order{0};
+
+        uint32_t highest_sequence_seen{0};
+        bool first_packet{true};
 
         std::chrono::steady_clock::time_point last_report_time;
 
         DecoderContext(unsigned int ch, unsigned int max_frames)
-            : decoder(std::make_unique<NetDecoder>(ch, max_frames)), last_report_time(std::chrono::steady_clock::now())
+            : decoder(std::make_unique<NetDecoder>(ch, max_frames)), 
+              last_report_time(std::chrono::steady_clock::now())
         {
         }
 
         void update_stats(uint32_t sequence, uint64_t timestamp);
-
         NetStatInfos get_period_stats();
     };
 

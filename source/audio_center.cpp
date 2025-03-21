@@ -239,15 +239,6 @@ RetCode AudioCenter::start()
         return {RetCode::FAILED, "AudioCenter not ready for start"};
     }
 
-    if (net_mgr)
-    {
-        auto ret = net_mgr->start();
-        if (!ret)
-        {
-            AUDIO_ERROR_PRINT("Failed to start NetWorker: %s", ret.what());
-        }
-    }
-
     for (const auto &pair : oas_map)
     {
         auto ret = pair.second->start();
@@ -263,6 +254,15 @@ RetCode AudioCenter::start()
         if (!ret)
         {
             AUDIO_ERROR_PRINT("Failed to start IAStream: %u", pair.first);
+        }
+    }
+
+    if (net_mgr)
+    {
+        auto ret = net_mgr->start();
+        if (!ret)
+        {
+            AUDIO_ERROR_PRINT("Failed to start NetWorker: %s", ret.what());
         }
     }
 
