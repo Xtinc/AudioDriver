@@ -43,7 +43,10 @@ BackgroundService::BackgroundService() : work_guard(asio::make_work_guard(io_con
 
     for (size_t i = 0; i < AUDIO_MAX_COCURRECY_WORKER; ++i)
     {
-        io_thds.emplace_back([this]() { io_context.run(); });
+        io_thds.emplace_back([this]() {
+            set_current_thread_scheduler_policy();
+            io_context.run();
+        });
     }
 }
 
@@ -211,13 +214,13 @@ RetCode OAStream::direct_push(unsigned char itoken, unsigned int chan, unsigned 
         return {RetCode::FAILED, "Invalid data pointer"};
     }
 
-    unsigned int std_fr = sample_rate * ti / 1000;
     uint64_t composite_key = (static_cast<uint64_t>(source_ip) << 32) | itoken;
 
     std::lock_guard<std::mutex> grd(session_mtx);
     auto it = sessions.find(composite_key);
     if (it == sessions.end())
     {
+        unsigned int std_fr = (std::max)(frames, sample_rate * ti / 1000);
         auto imap = chan == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP;
         auto omap = ch == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP;
         auto result = sessions.emplace(composite_key,
@@ -464,7 +467,7 @@ RetCode IAStream::reset(const AudioDeviceName &_name)
     {
         return {RetCode::FAILED, "Auto reset enabled, manual reset not allowed"};
     }
-    
+
     stop();
 
     auto ret = create_device(_name);
