@@ -51,11 +51,12 @@ class AlsaDriver final : public AudioDevice
     void read_loop();
 
   private:
+    bool mmap_mode;
     snd_pcm_t *handle;
 };
 
 AlsaDriver::AlsaDriver(const std::string &name, bool capture, unsigned int fs, unsigned int ps, unsigned int ch)
-    : AudioDevice(name, capture, fs, ps, ch), handle(nullptr)
+    : AudioDevice(name, capture, fs, ps, ch), handle(nullptr), mmap_mode(true)
 {
 }
 
@@ -91,8 +92,8 @@ RetCode AlsaDriver::open()
     result = snd_pcm_hw_params_set_access(handle, hw_params, SND_PCM_ACCESS_MMAP_INTERLEAVED);
     if (result < 0)
     {
-        AUDIO_ERROR_PRINT("ALSA device [%s] set access failed: %s", hw_name.c_str(), snd_strerror(result));
-        return RetCode::EPARAM;
+        AUDIO_ERROR_PRINT("ALSA device [%s] set mmap access failed: %s", hw_name.c_str(), snd_strerror(result));
+        mmap_mode = false;
     }
 
     result = snd_pcm_hw_params_set_format(handle, hw_params, SND_PCM_FORMAT_S16_LE);
@@ -333,7 +334,7 @@ void AlsaDriver::write_loop()
 
         while (cptr > 0 && ok)
         {
-            auto result = snd_pcm_mmap_writei(handle, data, cptr);
+            auto result = mmap_mode ? snd_pcm_mmap_writei(handle, data, cptr) : snd_pcm_writei(handle, data, cptr);
             if (result == -EAGAIN)
             {
                 usleep(1000);
@@ -370,7 +371,7 @@ void AlsaDriver::read_loop()
         auto data = io_buffer->data();
         while (cptr > 0 && ok)
         {
-            auto result = snd_pcm_mmap_readi(handle, data, cptr);
+            auto result = mmap_mode ? snd_pcm_mmap_readi(handle, data, cptr) : snd_pcm_readi(handle, data, cptr);
             if (result == -EAGAIN)
             {
                 usleep(1000);

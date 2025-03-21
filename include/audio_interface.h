@@ -213,7 +213,7 @@ class AudioCenter
     OToken create(OToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps, unsigned int ch,
                   bool enable_network = false, bool enable_reset = false);
 
-    RetCode prepare(); 
+    RetCode prepare();
     RetCode connect(IToken itoken, OToken otoken);
     RetCode disconnect(IToken itoken, OToken otoken);
     RetCode connect(IToken itoken, OToken otoken, const std::string &ip);
@@ -225,6 +225,7 @@ class AudioCenter
     RetCode mute(AudioToken token);
     RetCode unmute(AudioToken token);
     RetCode play(const std::string &path, int cycles, OToken otoken);
+    RetCode play(const std::string &name, int cycles, OToken remote_token, const std::string &remote_ip);
     RetCode stop(const std::string &path);
 
   private:

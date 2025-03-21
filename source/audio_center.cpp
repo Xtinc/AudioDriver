@@ -203,7 +203,7 @@ RetCode AudioCenter::connect(IToken itoken, OToken otoken, const std::string &ip
         AUDIO_ERROR_PRINT("Invalid input token: %u", itoken.tok);
         return {RetCode::EPARAM, "Invalid input token"};
     }
-    
+
     return net_mgr->add_destination(itoken, otoken, ip);
 }
 
@@ -379,6 +379,22 @@ RetCode AudioCenter::play(const std::string &path, int cycles, OToken otoken)
     }
 
     return player->play(path, cycles, oas->second);
+}
+
+RetCode AudioCenter::play(const std::string &name, int cycles, OToken remote_token, const std::string &remote_ip)
+{
+    if (center_state.load() != State::READY)
+    {
+        return {RetCode::FAILED, "AudioCenter not in READY state"};
+    }
+
+    if (remote_token > USER_MAX_AUDIO_TOKEN)
+    {
+        AUDIO_ERROR_PRINT("Invalid remote token: %u", remote_token.tok);
+        return {RetCode::EPARAM, "Invalid remote token"};
+    }
+
+    return player->play(name, cycles, net_mgr, remote_token, remote_ip);
 }
 
 RetCode AudioCenter::stop(const std::string &path)
