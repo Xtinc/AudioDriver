@@ -46,6 +46,7 @@ struct RetCode
         INVSEEK,
         EPARAM,
         EXCEPTION,
+        ESTATE,
         OK = 0,
         NOACTION
     };
@@ -56,7 +57,6 @@ struct RetCode
     constexpr RetCode(Code e) : err(e), msg(get_default_message(e))
     {
     }
-
     template <size_t N> constexpr RetCode(Code e, const char (&literal)[N]) : err(e), msg(literal)
     {
     }
@@ -110,6 +110,8 @@ struct RetCode
             return "Invalid seek";
         case EXCEPTION:
             return "Throw exception";
+        case ESTATE:
+            return "Invalid state";
         case EPARAM:
             return "Invalid parameter";
         case NOACTION:
@@ -144,25 +146,25 @@ struct AudioToken
 
     unsigned char tok;
 
-    AudioToken() : tok(INVALID_TOKEN)
+    constexpr AudioToken() noexcept : tok(INVALID_TOKEN)
     {
     }
 
-    explicit AudioToken(unsigned char t) : tok(t)
+    constexpr explicit AudioToken(unsigned char t) noexcept : tok(t)
     {
     }
 
-    operator uint8_t() const
+    constexpr operator bool() const noexcept
     {
-        return tok;
+        return tok == INVALID_TOKEN;
     }
 
-    bool operator==(const AudioToken &other) const
+    constexpr bool operator==(const AudioToken &other) const noexcept
     {
         return tok == other.tok;
     }
 
-    bool operator!=(const AudioToken &other) const
+    constexpr bool operator!=(const AudioToken &other) const noexcept
     {
         return tok != other.tok;
     }
@@ -170,31 +172,37 @@ struct AudioToken
 
 struct IToken : public AudioToken
 {
-    IToken() : AudioToken(INVALID_TOKEN)
+    constexpr IToken() noexcept : AudioToken(INVALID_TOKEN)
     {
     }
-
-    explicit IToken(unsigned char t) : AudioToken{t}
+    constexpr explicit IToken(unsigned char t) noexcept : AudioToken(t <= USER_MAX_AUDIO_TOKEN / 2 ? t : INVALID_TOKEN)
     {
     }
-
     using AudioToken::operator==;
     using AudioToken::operator!=;
 };
 
 struct OToken : public AudioToken
 {
-    OToken() : AudioToken(INVALID_TOKEN)
+    constexpr OToken() noexcept : AudioToken(INVALID_TOKEN)
     {
     }
-
-    explicit OToken(unsigned char t) : AudioToken{t}
+    constexpr explicit OToken(unsigned char t) noexcept : AudioToken(t > USER_MAX_AUDIO_TOKEN / 2 ? t : INVALID_TOKEN)
     {
     }
-
     using AudioToken::operator==;
     using AudioToken::operator!=;
 };
+
+constexpr IToken operator""_itk(unsigned long long val) noexcept
+{
+    return IToken(static_cast<unsigned char>(val));
+}
+
+constexpr OToken operator""_otk(unsigned long long val) noexcept
+{
+    return OToken(static_cast<unsigned char>(val));
+}
 
 class IAStream;
 class OAStream;
@@ -208,10 +216,10 @@ class AudioCenter
     AudioCenter(bool enable_network = false);
     ~AudioCenter();
 
-    IToken create(IToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps, unsigned int ch,
-                  bool enable_network = false, bool enable_reset = false);
-    OToken create(OToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps, unsigned int ch,
-                  bool enable_network = false, bool enable_reset = false);
+    RetCode create(IToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps, unsigned int ch,
+                   bool enable_network = false, bool enable_reset = false);
+    RetCode create(OToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps, unsigned int ch,
+                   bool enable_network = false, bool enable_reset = false);
 
     RetCode prepare();
     RetCode connect(IToken itoken, OToken otoken);

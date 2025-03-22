@@ -88,11 +88,6 @@ OAStream::OAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
     if (ret)
     {
         oas_ready = true;
-
-        if (enable_reset)
-        {
-            schedule_auto_reset();
-        }
     }
     else
     {
@@ -148,6 +143,11 @@ RetCode OAStream::start()
     if (ret)
     {
         execute_loop({}, 0);
+    }
+
+    if (enable_reset)
+    {
+        schedule_auto_reset();
     }
 
     return ret;
@@ -422,13 +422,21 @@ void OAStream::schedule_auto_reset()
         }
 
         AUDIO_INFO_PRINT("Performing scheduled reset for OAStream token %u", self->token);
-        auto result = self->reset(self->usr_name);
+        auto result = self->reset_self();
         if (!result)
         {
             AUDIO_ERROR_PRINT("OAStream auto reset failed: %s", result.what());
         }
-        self->schedule_auto_reset();
     }));
+}
+
+RetCode OAStream::reset_self()
+{
+    (void)stop();
+    odevice.reset();
+    odevice = make_audio_driver(PHSY_OAS, usr_name, fs, ps, ch);
+    oas_ready = true;
+    return start();
 }
 
 // IAStream

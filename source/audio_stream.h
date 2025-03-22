@@ -82,6 +82,7 @@ class OAStream : public std::enable_shared_from_this<OAStream>
     void process_data();
     RetCode create_device(const AudioDeviceName &_name);
     void schedule_auto_reset();
+    RetCode reset_self();
 
   public:
     const unsigned char token;
@@ -140,7 +141,6 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     RetCode create_device(const AudioDeviceName &_name);
     RetCode create_device(const AudioDeviceName &_name, unsigned int _fs, unsigned int _ch);
     RetCode swap_device(idevice_ptr &new_device);
-
     void schedule_auto_reset();
     RetCode reset_self();
 
