@@ -154,9 +154,9 @@ struct AudioToken
     {
     }
 
-    constexpr operator bool() const noexcept
+    constexpr operator unsigned char() const noexcept
     {
-        return tok == INVALID_TOKEN;
+        return tok;
     }
 
     constexpr bool operator==(const AudioToken &other) const noexcept
@@ -222,18 +222,14 @@ class AudioCenter
                    bool enable_network = false, bool enable_reset = false);
 
     RetCode prepare();
-    RetCode connect(IToken itoken, OToken otoken);
-    RetCode disconnect(IToken itoken, OToken otoken);
-    RetCode connect(IToken itoken, OToken otoken, const std::string &ip);
-    RetCode disconnect(IToken itoken, OToken otoken, const std::string &ip);
+    RetCode connect(IToken itoken, OToken otoken, const std::string &ip = "");
+    RetCode disconnect(IToken itoken, OToken otoken, const std::string &ip = "");
 
     RetCode start();
     RetCode stop();
 
-    RetCode mute(AudioToken token);
-    RetCode unmute(AudioToken token);
-    RetCode play(const std::string &path, int cycles, OToken otoken);
-    RetCode play(const std::string &name, int cycles, OToken remote_token, const std::string &remote_ip);
+    RetCode mute(AudioToken token, bool enable);
+    RetCode play(const std::string &name, int cycles, OToken otoken, const std::string &ip = "");
     RetCode stop(const std::string &path);
 
   private:

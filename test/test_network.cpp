@@ -6,12 +6,12 @@ int main()
 {
     AudioCenter center(true);
 
-    auto ias = center.create(IToken(20), {"dukou.wav", 0}, AudioBandWidth::Full, AudioPeriodSize::INR_20MS, 2, true);
-    auto oas = center.create(OToken(20), {"default", 0}, AudioBandWidth::Full, AudioPeriodSize::INR_20MS, 2, true);
+    // auto ias = center.create(IToken(20), {"dukou.wav", 0}, AudioBandWidth::Full, AudioPeriodSize::INR_20MS, 2, true);
+    auto oas = center.create(OToken(120), {"default", 0}, AudioBandWidth::Full, AudioPeriodSize::INR_20MS, 2, true);
     center.prepare();
-    center.connect(ias, oas, "127.0.0.1");
     center.start();
+    center.play("dukou.wav", 10, OToken(120), "192.168.1.6");
 
-    std::this_thread::sleep_for(std::chrono::seconds(300));
+    std::this_thread::sleep_for(std::chrono::minutes(300));
     return 0;
 }

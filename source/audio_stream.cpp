@@ -909,8 +909,6 @@ RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared
         return add_result;
     }
 
-    AUDIO_INFO_PRINT("Added remote destination %s for token %u", remote_ip.c_str(), remote_token);
-
     ++preemptive;
     {
         std::lock_guard<std::mutex> grd(mtx);
