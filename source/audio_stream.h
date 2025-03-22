@@ -48,7 +48,7 @@ class OAStream : public std::enable_shared_from_this<OAStream>
 
         SessionContext(unsigned int src_fs, unsigned int src_ch, unsigned int dst_fs, unsigned int dst_ch,
                        unsigned int max_frames, const AudioChannelMap &imap, const AudioChannelMap &omap)
-            : session(max_frames * sizeof(PCM_TYPE), 4, src_ch),
+            : session(max_frames * sizeof(PCM_TYPE), 5, src_ch),
               sampler(src_fs, src_ch, dst_fs, dst_ch, max_frames, imap, omap)
         {
         }

@@ -879,7 +879,7 @@ RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared
     }
 
     auto *raw_sender = new IAStream(token + preemptive, AudioDeviceName(name, cycles),
-                                    enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2);
+                                    enum2val(AudioPeriodSize::INR_40MS), enum2val(AudioBandWidth::Full), 2);
 
     auto audio_sender = std::shared_ptr<IAStream>(raw_sender, [this, name](const IAStream *ptr) {
         --preemptive;
