@@ -1105,6 +1105,74 @@ RetCode EchoDevice::read(char *data, size_t len)
     return io_buffer->load(data, len) ? RetCode::OK : RetCode::NOACTION;
 }
 
+// Null device
+class NullDevice final : public AudioDevice
+{
+  public:
+    NullDevice(const std::string &name, bool capture, unsigned int fs, unsigned int ps, unsigned int ch)
+        : AudioDevice(name, capture, fs, ps, ch)
+    {
+    }
+
+    ~NullDevice() override
+    {
+        (void)stop();
+    }
+
+    RetCode open() override
+    {
+        hstate = STREAM_OPENED;
+        AUDIO_INFO_PRINT("Null device [%s] opened. fs = %u, ps = %u, chan = %u", hw_name.c_str(), dev_fs, dev_ps,
+                         dev_ch);
+        return {RetCode::OK, "Success"};
+    }
+
+    RetCode start() override
+    {
+        Mode expected = STREAM_OPENED;
+        if (!hstate.compare_exchange_strong(expected, STREAM_RUNNING) &&
+            !(expected = STREAM_STOPPED, hstate.compare_exchange_strong(expected, STREAM_RUNNING)))
+        {
+            return {RetCode::FAILED, "stream not opened or stopped"};
+        }
+
+        AUDIO_DEBUG_PRINT("Null device [%s] started", hw_name.c_str());
+        return {RetCode::OK, "Success"};
+    }
+
+    RetCode stop() override
+    {
+        Mode expected = STREAM_RUNNING;
+        if (!hstate.compare_exchange_strong(expected, STREAM_STOPPED))
+        {
+            return {RetCode::OK, "Not running"};
+        }
+
+        AUDIO_DEBUG_PRINT("Null device [%s] stopped", hw_name.c_str());
+        return {RetCode::OK, "Success"};
+    }
+
+    RetCode write(const char *data, size_t len) override
+    {
+        if (hstate != STREAM_RUNNING)
+        {
+            return {RetCode::FAILED, "Device not running"};
+        }
+
+        return {RetCode::OK, "Success"};
+    }
+
+    RetCode read(char *data, size_t len) override
+    {
+        if (hstate != STREAM_RUNNING)
+        {
+            return {RetCode::FAILED, "Device not running"};
+        }
+
+        return {RetCode::OK, "Success"};
+    }
+};
+
 std::unique_ptr<AudioDevice> make_audio_driver(int type, const AudioDeviceName &name, unsigned int fs, unsigned int ps,
                                                unsigned int ch)
 {
@@ -1134,8 +1202,16 @@ std::unique_ptr<AudioDevice> make_audio_driver(int type, const AudioDeviceName &
     {
         return std::make_unique<WaveDevice>(name.first, false, fs, ps, ch, name.second);
     }
-    else
+    else if (type == ECHO_IAS)
     {
         return std::make_unique<EchoDevice>(name.first, fs, ps, ch);
+    }
+    else if (type == NULL_IAS)
+    {
+        return std::make_unique<NullDevice>(name.first, true, fs, ps, ch);
+    }
+    else
+    {
+        return std::make_unique<NullDevice>(name.first, false, fs, ps, ch);
     }
 }

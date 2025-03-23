@@ -210,6 +210,32 @@ RetCode AudioCenter::disconnect(IToken itoken, OToken otoken, const std::string 
     return ias->second->disconnect(oas->second);
 }
 
+RetCode AudioCenter::register_callback(IToken token, AudioInputCallBack cb, void *ptr)
+{
+    if (center_state.load() != State::CONNECTING)
+    {
+        AUDIO_ERROR_PRINT("AudioCenter not in CONNECTING state");
+        return {RetCode::ESTATE, "AudioCenter not in CONNECTING state"};
+    }
+
+    if (!token)
+    {
+        AUDIO_ERROR_PRINT("Invalid token: %u", token.tok);
+        return {RetCode::EPARAM, "Invalid token"};
+    }
+
+    auto ias = ias_map.find(token);
+    if (ias == ias_map.end())
+    {
+        AUDIO_ERROR_PRINT("Invalid input token: %u", token.tok);
+        return {RetCode::EPARAM, "Invalid input token"};
+    }
+
+    ias->second->register_callback(cb, ptr);
+    AUDIO_DEBUG_PRINT("Callback registered for input stream %u", token.tok);
+    return RetCode::OK;
+}
+
 RetCode AudioCenter::start()
 {
     State expected = State::CONNECTING;

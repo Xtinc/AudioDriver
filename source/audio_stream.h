@@ -134,6 +134,7 @@ class IAStream : public std::enable_shared_from_this<IAStream>
 
     void mute();
     void unmute();
+    void register_callback(AudioInputCallBack cb, void *ptr);
 
   private:
     void execute_loop(TimePointer tp, unsigned int cnt);
@@ -168,6 +169,9 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     destinations dests;
     network_ptr networker;
     std::atomic_bool muted;
+
+    AudioInputCallBack usr_cb;
+    void *usr_ptr;
 };
 
 class AudioPlayer

@@ -369,9 +369,20 @@ void OAStream::process_data()
 
 RetCode OAStream::create_device(const AudioDeviceName &_name)
 {
-    auto new_device = check_wave_file_name(_name.first) ? make_audio_driver(WAVE_OAS, _name, fs, ps, ch)
-                                                        : make_audio_driver(PHSY_OAS, _name, fs, ps, ch);
-
+    std::unique_ptr<AudioDevice> new_device;
+    if (_name.first == "null")
+    {
+        new_device = make_audio_driver(NULL_OAS, _name, fs, ps, ch);
+    }
+    else if (check_wave_file_name(_name.first))
+    {
+        new_device = make_audio_driver(WAVE_OAS, _name, fs, ps, ch);
+    }
+    else
+    {
+        new_device = make_audio_driver(PHSY_OAS, _name, fs, ps, ch);
+    }
+    
     if (!new_device)
     {
         return {RetCode::FAILED, "Failed to create audio driver"};
@@ -443,7 +454,8 @@ RetCode OAStream::reset_self()
 IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs,
                    unsigned int _ch, bool auto_reset)
     : token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(_ch), enable_reset(auto_reset), usr_name(_name),
-      ias_ready(false), exec_timer(BG_SERVICE), exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE)
+      ias_ready(false), exec_timer(BG_SERVICE), exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE),
+      muted(false), usr_cb(nullptr), usr_ptr(nullptr)
 {
     auto ret = create_device(_name);
     if (ret)
@@ -615,6 +627,12 @@ void IAStream::unmute()
     AUDIO_INFO_PRINT("Token %u unmuted", token);
 }
 
+void IAStream::register_callback(AudioInputCallBack cb, void *ptr)
+{
+    usr_cb = cb;
+    usr_ptr = ptr;
+}
+
 void IAStream::execute_loop(TimePointer tp, unsigned int cnt)
 {
     if (!ias_ready)
@@ -687,6 +705,11 @@ RetCode IAStream::process_data() const
         np->send_audio(token, src, dev_fr);
     }
 
+    if (usr_cb)
+    {
+        usr_cb(src, ch, dev_fr, usr_ptr);
+    }
+
     return RetCode::OK;
 }
 
@@ -696,6 +719,10 @@ RetCode IAStream::create_device(const AudioDeviceName &_name)
     if (_name.first == "echo")
     {
         new_device = make_audio_driver(ECHO_IAS, _name, fs, ps, ch);
+    }
+    else if (_name.first == "null")
+    {
+        new_device = make_audio_driver(NULL_IAS, _name, fs, ps, ch);
     }
     else if (check_wave_file_name(_name.first))
     {

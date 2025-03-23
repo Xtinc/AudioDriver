@@ -11,6 +11,8 @@
 #define WAVE_IAS 0x63
 #define WAVE_OAS 0x64
 #define ECHO_IAS 0x65
+#define NULL_IAS 0x66
+#define NULL_OAS 0x67
 
 class AudioDevice
 {

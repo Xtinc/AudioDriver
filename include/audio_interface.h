@@ -32,6 +32,7 @@
 typedef int16_t PCM_TYPE;
 typedef std::pair<std::string, unsigned int> AudioDeviceName;
 typedef std::array<unsigned int, 2> AudioChannelMap;
+typedef void (*AudioInputCallBack)(const int16_t *data, unsigned int chan_num, unsigned int frame_num, void *user_ptr);
 
 struct RetCode
 {
@@ -224,6 +225,7 @@ class AudioCenter
     RetCode prepare();
     RetCode connect(IToken itoken, OToken otoken, const std::string &ip = "");
     RetCode disconnect(IToken itoken, OToken otoken, const std::string &ip = "");
+    RetCode register_callback(IToken token, AudioInputCallBack cb, void *ptr);
 
     RetCode start();
     RetCode stop();
