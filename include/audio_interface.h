@@ -231,6 +231,7 @@ class AudioCenter
     RetCode stop();
 
     RetCode mute(AudioToken token, bool enable);
+    RetCode mute(OToken token, IToken itoken, bool enable, const std::string &ip = "");
     RetCode play(const std::string &name, int cycles, OToken otoken, const std::string &ip = "");
     RetCode stop(const std::string &path);
 

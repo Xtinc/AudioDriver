@@ -43,12 +43,13 @@ class OAStream : public std::enable_shared_from_this<OAStream>
 {
     struct SessionContext
     {
+        bool enabled;
         SessionData session;
         LocSampler sampler;
 
         SessionContext(unsigned int src_fs, unsigned int src_ch, unsigned int dst_fs, unsigned int dst_ch,
                        unsigned int max_frames, const AudioChannelMap &imap, const AudioChannelMap &omap)
-            : session(max_frames * sizeof(PCM_TYPE), 5, src_ch),
+            : enabled(true), session(max_frames * sizeof(PCM_TYPE), 5, src_ch),
               sampler(src_fs, src_ch, dst_fs, dst_ch, max_frames, imap, omap)
         {
         }
@@ -73,6 +74,8 @@ class OAStream : public std::enable_shared_from_this<OAStream>
 
     void mute();
     void unmute();
+    RetCode mute(unsigned char token, const std::string &ip = "");
+    RetCode unmute(unsigned char token, const std::string &ip = "");
 
     void register_listener(const std::shared_ptr<IAStream> &ias);
     void unregister_listener();

@@ -251,6 +251,120 @@ void OAStream::unmute()
     AUDIO_INFO_PRINT("Token %u unmuted", token);
 }
 
+RetCode OAStream::mute(unsigned char itoken, const std::string &ip)
+{
+    if (ip.empty())
+    {
+        std::lock_guard<std::mutex> grd(session_mtx);
+        int muted_count = 0;
+
+        for (auto &session_pair : sessions)
+        {
+            if ((session_pair.first & 0xFF) == itoken)
+            {
+                session_pair.second->enabled = false;
+                muted_count++;
+            }
+        }
+
+        if (muted_count > 0)
+        {
+            AUDIO_INFO_PRINT("Muted %d sessions with token %u (all IPs)", muted_count, itoken);
+            return RetCode::OK;
+        }
+        else
+        {
+            AUDIO_INFO_PRINT("No sessions found with token %u to mute", itoken);
+            return {RetCode::NOACTION, "Session not found"};
+        }
+    }
+
+    uint32_t ip_address = 0;
+    try
+    {
+        asio::ip::address_v4 addr = asio::ip::make_address_v4(ip);
+        ip_address = addr.to_uint();
+
+        uint64_t composite_key = (static_cast<uint64_t>(ip_address) << 32) | itoken;
+
+        std::lock_guard<std::mutex> grd(session_mtx);
+        auto it = sessions.find(composite_key);
+        if (it != sessions.end())
+        {
+            it->second->enabled = false;
+            AUDIO_INFO_PRINT("Muted session from IP %s with token %u", ip.c_str(), itoken);
+            return RetCode::OK;
+        }
+        else
+        {
+            AUDIO_ERROR_PRINT("Cannot find session from IP %s with token %u", ip.c_str(), itoken);
+            return {RetCode::NOACTION, "Session not found"};
+        }
+    }
+    catch (const std::exception &e)
+    {
+        AUDIO_ERROR_PRINT("Invalid IP address format: %s - %s", ip.c_str(), e.what());
+        return {RetCode::FAILED, "Invalid IP address format"};
+    }
+}
+
+RetCode OAStream::unmute(unsigned char itoken, const std::string &ip)
+{
+    if (ip.empty())
+    {
+        std::lock_guard<std::mutex> grd(session_mtx);
+        int unmuted_count = 0;
+
+        for (auto &session_pair : sessions)
+        {
+            if ((session_pair.first & 0xFF) == itoken)
+            {
+                session_pair.second->enabled = true;
+                unmuted_count++;
+            }
+        }
+
+        if (unmuted_count > 0)
+        {
+            AUDIO_INFO_PRINT("Unmuted %d sessions with token %u (all IPs)", unmuted_count, itoken);
+            return RetCode::OK;
+        }
+        else
+        {
+            AUDIO_INFO_PRINT("No sessions found with token %u to unmute", itoken);
+            return {RetCode::NOACTION, "Session not found"};
+        }
+    }
+
+    uint32_t ip_address = 0;
+    try
+    {
+        asio::ip::address_v4 addr = asio::ip::make_address_v4(ip);
+        ip_address = addr.to_uint();
+
+        uint64_t composite_key = (static_cast<uint64_t>(ip_address) << 32) | itoken;
+
+        std::lock_guard<std::mutex> grd(session_mtx);
+        auto it = sessions.find(composite_key);
+        if (it != sessions.end())
+        {
+            it->second->enabled = true;
+            AUDIO_INFO_PRINT("Unmuted session from IP %s with token %u", ip.c_str(), itoken);
+            return RetCode::OK;
+        }
+        else
+        {
+            AUDIO_ERROR_PRINT("Cannot find session from IP %s with token %u", ip.c_str(), itoken);
+            return {RetCode::NOACTION, "Session not found"};
+        }
+    }
+    catch (const std::exception &e)
+    {
+        AUDIO_ERROR_PRINT("Invalid IP address format: %s - %s", ip.c_str(), e.what());
+        return {RetCode::FAILED, "Invalid IP address format"};
+    }
+}
+
 void OAStream::register_listener(const std::shared_ptr<IAStream> &ias)
 {
     ias->reset({odevice->hw_name, 0}, fs, ch);
@@ -322,7 +436,7 @@ void OAStream::process_data()
             }
             context->session.idle_count = 0;
 
-            if (muted)
+            if (muted || (!context->enabled))
             {
                 break;
             }
@@ -382,7 +496,7 @@ RetCode OAStream::create_device(const AudioDeviceName &_name)
     {
         new_device = make_audio_driver(PHSY_OAS, _name, fs, ps, ch);
     }
-    
+
     if (!new_device)
     {
         return {RetCode::FAILED, "Failed to create audio driver"};

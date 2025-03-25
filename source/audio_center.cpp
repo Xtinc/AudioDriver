@@ -350,6 +350,32 @@ RetCode AudioCenter::mute(AudioToken token, bool enable)
     return {RetCode::FAILED, "Token not found"};
 }
 
+RetCode AudioCenter::mute(OToken otoken, IToken itoken, bool enable, const std::string &ip)
+{
+    const char *action = enable ? "Muting" : "Unmuting";
+
+    if (center_state.load() != State::READY)
+    {
+        AUDIO_ERROR_PRINT("Cannot %s, AudioCenter not in READY state", action);
+        return {RetCode::ESTATE, "AudioCenter not in READY state"};
+    }
+
+    if (!otoken)
+    {
+        AUDIO_ERROR_PRINT("Cannot %s, invalid token: %u", action, otoken.tok);
+        return {RetCode::EPARAM, "Invalid token"};
+    }
+
+    auto oas = oas_map.find(otoken);
+    if (oas == oas_map.end())
+    {
+        AUDIO_ERROR_PRINT("Invalid output token: %u", otoken.tok);
+        return {RetCode::EPARAM, "Invalid output token"};
+    }
+
+    return enable ? oas->second->mute(itoken, ip) : oas->second->unmute(itoken, ip);
+}
+
 RetCode AudioCenter::play(const std::string &name, int cycles, OToken otoken, const std::string &ip)
 {
     if (center_state.load() != State::READY)
