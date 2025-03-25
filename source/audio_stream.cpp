@@ -12,6 +12,11 @@ constexpr unsigned int SESSION_IDLE_TIMEOUT = 1000;
 constexpr AudioChannelMap DEFAULT_DUAL_MAP = {0, 1};
 constexpr AudioChannelMap DEFAULT_MONO_MAP = {0, 0};
 
+inline float volume2gain(unsigned int vol)
+{
+    return vol < 50 ? 0.68f * vol - 34.0f : 0.12f * vol - 4.0f;
+}
+
 static bool check_wave_file_name(const std::string &dev_name)
 {
     return dev_name.size() >= 4 && dev_name.compare(dev_name.size() - 4, 4, ".wav") == 0;
@@ -82,7 +87,7 @@ OAStream::OAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
                    unsigned int _ch, bool auto_reset)
     : token(_token), ti(_ti), enable_reset(auto_reset), fs(_fs), ps(fs * ti / 1000), ch(_ch), usr_name(_name),
       oas_ready(false), exec_timer(BG_SERVICE), exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE),
-      muted(false)
+      volume(50), muted(false)
 {
     auto ret = create_device(_name);
     if (ret)
@@ -93,6 +98,7 @@ OAStream::OAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
     {
         AUDIO_ERROR_PRINT("Failed to create device: %s", ret.what());
     }
+    compressor = std::make_unique<DRCompressor>(static_cast<float>(fs));
 }
 
 RetCode OAStream::initialize_network(const std::shared_ptr<NetWorker> &nw)
@@ -197,6 +203,7 @@ RetCode OAStream::reset(const AudioDeviceName &_name)
         np->reset(_name, fs, ch);
     }
 
+    compressor = std::make_unique<DRCompressor>(static_cast<float>(fs));
     oas_ready = true;
     return start();
 }
@@ -365,6 +372,23 @@ RetCode OAStream::unmute(unsigned char itoken, const std::string &ip)
     }
 }
 
+RetCode OAStream::set_volume(unsigned int vol)
+{
+    if (vol > 100)
+    {
+        AUDIO_ERROR_PRINT("Invalid volume value: %u", vol);
+        return {RetCode::EPARAM, "Invalid volume value"};
+    }
+    AUDIO_INFO_PRINT("Token %u volume set to %u, gain: %.2f db", token, vol, volume2gain(vol));
+    volume.store(vol);
+    return RetCode::OK;
+}
+
+unsigned int OAStream::get_volume() const
+{
+    return volume.load();
+}
+
 void OAStream::register_listener(const std::shared_ptr<IAStream> &ias)
 {
     ias->reset({odevice->hw_name, 0}, fs, ch);
@@ -438,7 +462,8 @@ void OAStream::process_data()
 
             if (muted || (!context->enabled))
             {
-                break;
+                ++it;
+                continue;
             }
 
             unsigned int output_frames = ps;
@@ -465,6 +490,12 @@ void OAStream::process_data()
             mix_channels(src, ch, output_frames, reinterpret_cast<PCM_TYPE *>(databuf.get()));
             ++it;
         }
+    }
+
+    auto gain = volume.load();
+    if (gain != 50)
+    {
+        compressor->process(reinterpret_cast<PCM_TYPE *>(databuf.get()), ps, ch, volume2gain(gain));
     }
 
     odevice->write(databuf.get(), ps * ch * sizeof(PCM_TYPE));
@@ -560,6 +591,7 @@ RetCode OAStream::reset_self()
     (void)stop();
     odevice.reset();
     odevice = make_audio_driver(PHSY_OAS, usr_name, fs, ps, ch);
+    compressor->reset();
     oas_ready = true;
     return start();
 }
@@ -569,7 +601,7 @@ IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
                    unsigned int _ch, bool auto_reset)
     : token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(_ch), enable_reset(auto_reset), usr_name(_name),
       ias_ready(false), exec_timer(BG_SERVICE), exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE),
-      muted(false), usr_cb(nullptr), usr_ptr(nullptr)
+      volume(50), muted(false), usr_cb(nullptr), usr_ptr(nullptr)
 {
     auto ret = create_device(_name);
     if (ret)
@@ -581,6 +613,7 @@ IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
         AUDIO_ERROR_PRINT("Failed to create device: %s", ret.what());
     }
 
+    compressor = std::make_unique<DRCompressor>(static_cast<float>(fs));
     dests.reserve(4);
 }
 
@@ -614,6 +647,7 @@ RetCode IAStream::reset(const AudioDeviceName &_name)
         usr_name = _name;
     }
 
+    compressor->reset();
     ias_ready = true;
 
     return start();
@@ -633,6 +667,8 @@ RetCode IAStream::reset(const AudioDeviceName &_name, unsigned int _fs, unsigned
     {
         AUDIO_ERROR_PRINT("Failed to create device: %s", ret.what());
     }
+
+    compressor = std::make_unique<DRCompressor>(static_cast<float>(fs));
     ias_ready = true;
     return start();
 }
@@ -741,6 +777,23 @@ void IAStream::unmute()
     AUDIO_INFO_PRINT("Token %u unmuted", token);
 }
 
+RetCode IAStream::set_volume(unsigned int vol)
+{
+    if (vol > 100)
+    {
+        AUDIO_ERROR_PRINT("Invalid volume value: %u", vol);
+        return {RetCode::EPARAM, "Invalid volume value"};
+    }
+    AUDIO_INFO_PRINT("Token %u volume set to %u, gain: %.2f db", token, vol, volume2gain(vol));
+    volume.store(vol);
+    return RetCode::OK;
+}
+
+unsigned int IAStream::get_volume() const
+{
+    return volume.load();
+}
+
 void IAStream::register_callback(AudioInputCallBack cb, void *ptr)
 {
     usr_cb = cb;
@@ -795,7 +848,7 @@ RetCode IAStream::process_data() const
         return RetCode::OK;
     }
 
-    ret = sampler->process(reinterpret_cast<const PCM_TYPE *>(dev_buf.get()), dev_fr,
+    ret = sampler->process(reinterpret_cast<PCM_TYPE *>(dev_buf.get()), dev_fr,
                            reinterpret_cast<PCM_TYPE *>(usr_buf.get()), dev_fr);
 
     if (ret != RetCode::OK && ret != RetCode::NOACTION)
@@ -804,8 +857,15 @@ RetCode IAStream::process_data() const
         return ret;
     }
 
-    const PCM_TYPE *src = (ret == RetCode::NOACTION) ? reinterpret_cast<const PCM_TYPE *>(dev_buf.get())
-                                                     : reinterpret_cast<const PCM_TYPE *>(usr_buf.get());
+    PCM_TYPE *src = (ret == RetCode::NOACTION) ? reinterpret_cast<PCM_TYPE *>(dev_buf.get())
+                                               : reinterpret_cast<PCM_TYPE *>(usr_buf.get());
+
+    auto gain = volume.load();
+    if (gain != 50)
+    {
+        compressor->process(src, dev_fr, ch, volume2gain(gain));
+    }
+
     for (const auto &dest : dests)
     {
         if (auto np = dest.lock())

@@ -316,6 +316,38 @@ RetCode AudioCenter::stop()
     return RetCode::OK;
 }
 
+RetCode AudioCenter::set_volume(AudioToken token, unsigned int vol)
+{
+    if (center_state.load() != State::READY)
+    {
+        AUDIO_ERROR_PRINT("AudioCenter not in READY state");
+        return {RetCode::ESTATE, "AudioCenter not in READY state"};
+    }
+
+    if (!token)
+    {
+        AUDIO_ERROR_PRINT("Invalid token: %u", token.tok);
+        return {RetCode::EPARAM, "Invalid token"};
+    }
+
+    auto ias = ias_map.find(token);
+    if (ias != ias_map.end())
+    {
+        ias->second->set_volume(vol);
+        return RetCode::OK;
+    }
+
+    auto oas = oas_map.find(token);
+    if (oas != oas_map.end())
+    {
+        oas->second->set_volume(vol);
+        return RetCode::OK;
+    }
+
+    AUDIO_DEBUG_PRINT("Token not found: %u", token.tok);
+    return {RetCode::FAILED, "Token not found"};
+}
+
 RetCode AudioCenter::mute(AudioToken token, bool enable)
 {
     const char *action = enable ? "Muting" : "Unmuting";

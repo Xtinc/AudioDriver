@@ -66,4 +66,34 @@ class LocSampler
     void convertChannels(const PCM_TYPE *input, unsigned int frames, PCM_TYPE *output) const;
 };
 
+class DRCompressor
+{
+  public:
+    DRCompressor(float sample_rate, float threshold = -4.0f, float ratio = 2.0f, float attack = 0.1f,
+                 float release = 0.2f, float knee_width = 10.0f);
+
+    RetCode process(PCM_TYPE *buffer, unsigned int frames, unsigned int channels, float gain = 0.0);
+
+    void reset();
+
+  private:
+    float compute_gain(float inputLevel);
+    float sample2db(PCM_TYPE sample) const;
+    float db2sample(float db) const;
+
+  private:
+    const float threshold;
+    const float ratio;
+    const float attack;
+    const float release;
+    const float knee_width;
+
+    float current_gain;
+    float attack_coeff;
+    float release_coeff;
+
+    float knee_threshold_lower;
+    float knee_threshold_upper;
+};
+
 #endif
