@@ -183,6 +183,8 @@ RetCode AlsaDriver::open()
     io_buffer = std::make_unique<KFifo>(dev_ps * sizeof(PCM_TYPE), 4, dev_ch);
     AUDIO_INFO_PRINT("ALSA device [%s] opened. fs = %u, ps = %u, chan = %u, min_chan = %u, max_chan = %u",
                      hw_name.c_str(), dev_fs, dev_ps, dev_ch, min_ch, max_ch);
+
+    timer_cnt = std::make_unique<TimerCounter>(hw_name);
     return RetCode::OK;
 }
 
@@ -352,6 +354,11 @@ void AlsaDriver::write_loop()
             data += result * dev_ch * sizeof(PCM_TYPE);
             cptr -= result;
         }
+
+        if ((*timer_cnt)())
+        {
+            AUDIO_DEBUG_PRINT("Alsa device [%s] write loop timeout", hw_name.c_str());
+        }
     }
 
     hstate = STREAM_STOPPED;
@@ -393,6 +400,11 @@ void AlsaDriver::read_loop()
         if (ok && !io_buffer->store_aside(dev_ps * dev_ch * sizeof(PCM_TYPE)))
         {
             AUDIO_DEBUG_PRINT("ALSA device [%s] buffer overflow", hw_name.c_str());
+        }
+
+        if ((*timer_cnt)())
+        {
+            AUDIO_DEBUG_PRINT("ALSA device [%s] read loop timeout", hw_name.c_str());
         }
     }
 
@@ -672,6 +684,7 @@ RetCode WasapiDriver::open()
     io_buffer = std::make_unique<KFifo>(dev_ps * sizeof(PCM_TYPE), 4, dev_ch);
     AUDIO_INFO_PRINT("WASAPI %s device [%s] opened. fs = %u, ps = %u, chan = %u, min_chan = %u, max_chan = %u",
                      capture ? "capture" : "playback", hw_name.c_str(), dev_fs, dev_ps, dev_ch, min_ch, max_ch);
+    timer_cnt = std::make_unique<TimerCounter>(hw_name);
 
 exit:
     SafeRelease(&enumerator);
@@ -808,6 +821,11 @@ void WasapiDriver::write_loop()
             ok = false;
             break;
         }
+
+        if ((*timer_cnt)())
+        {
+            AUDIO_DEBUG_PRINT("WASAPI device [%s] write loop timeout", hw_name.c_str());
+        }
     }
 
     if (!ok)
@@ -895,6 +913,11 @@ void WasapiDriver::read_loop()
                 break;
             }
         } while (packet_sz > 0);
+
+        if ((*timer_cnt)())
+        {
+            AUDIO_DEBUG_PRINT("WASAPI device [%s] read loop timeout", hw_name.c_str());
+        }
     }
 
     if (!ok)

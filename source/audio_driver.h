@@ -14,6 +14,65 @@
 #define NULL_IAS 0x66
 #define NULL_OAS 0x67
 
+struct TimerCounter
+{
+    TimerCounter(const std::string &_name)
+        : counter(0), avg_interval(0), name(_name), last_print_time(std::chrono::steady_clock::now()),
+          last_cycle_time(std::chrono::steady_clock::now()), sample_count(0)
+    {
+    }
+
+    bool operator()()
+    {
+        auto now = std::chrono::steady_clock::now();
+        auto diff = std::chrono::duration_cast<std::chrono::microseconds>(now - last_cycle_time).count();
+        last_cycle_time = now;
+
+        updateAverage(static_cast<unsigned int>(diff));
+
+        if (now - last_print_time > std::chrono::minutes(1) && counter > 0)
+        {
+            AUDIO_ERROR_PRINT("%s time out %u in last 1 minutes. avg interval: %uus", name.c_str(), counter,
+                              avg_interval);
+            last_print_time = now;
+            counter = 0;
+        }
+
+        if (sample_count >= 100 && 5 * diff > 8 * avg_interval)
+        {
+            counter++;
+            return true;
+        }
+        return false;
+    }
+
+  private:
+    void updateAverage(unsigned int current_interval)
+    {
+        ++sample_count;
+
+        if (sample_count == 1)
+        {
+            avg_interval = current_interval;
+        }
+        else if (sample_count <= 100)
+        {
+            avg_interval = ((avg_interval * (sample_count - 1)) + current_interval) / sample_count;
+        }
+        else
+        {
+            avg_interval = (avg_interval * 9 + current_interval) / 10;
+        }
+    }
+
+    unsigned int counter;
+    unsigned int avg_interval;
+    const std::string &name;
+    std::chrono::steady_clock::time_point last_print_time;
+    std::chrono::steady_clock::time_point last_cycle_time;
+    unsigned int sample_count;
+};
+
 class AudioDevice
 {
   public:
@@ -66,6 +125,7 @@ class AudioDevice
     using AtomicMode = std::atomic<Mode>;
     using thd_ptr = std::unique_ptr<std::thread>;
     using buf_ptr = std::unique_ptr<KFifo>;
+    using cnt_ptr = std::unique_ptr<TimerCounter>;
 
     unsigned int dev_fs;
     unsigned int dev_ps;
@@ -76,6 +136,7 @@ class AudioDevice
     AtomicMode hstate;
     thd_ptr worker_td;
     buf_ptr io_buffer;
+    cnt_ptr timer_cnt;
 };
 
 void set_current_thread_scheduler_policy();
