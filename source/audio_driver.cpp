@@ -227,7 +227,7 @@ RetCode AlsaDriver::start()
 RetCode AlsaDriver::stop()
 {
     Mode expected = STREAM_RUNNING;
-    if (!hstate.compare_exchange_strong(expected, STREAM_STOPPED))
+    if (!hstate.compare_exchange_strong(expected, STREAM_STOPPED) && hstate != STREAM_STOPPED)
     {
         return RetCode::NOACTION;
     }
@@ -731,7 +731,7 @@ RetCode WasapiDriver::start()
 RetCode WasapiDriver::stop()
 {
     Mode expected = STREAM_RUNNING;
-    if (!hstate.compare_exchange_strong(expected, STREAM_STOPPED))
+    if (!hstate.compare_exchange_strong(expected, STREAM_STOPPED) && hstate != STREAM_STOPPED)
     {
         return {RetCode::FAILED, "Not running"};
     }

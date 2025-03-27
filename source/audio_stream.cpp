@@ -6,7 +6,7 @@
 // CoInitializeEx is not thread-safe
 static std::once_flag coinit_flag;
 #endif
-constexpr unsigned int AUDIO_MAX_RESET_INTERVAL = 30;
+constexpr unsigned int AUDIO_MAX_RESET_INTERVAL = 1;
 constexpr unsigned int AUDIO_MAX_COCURRECY_WORKER = 2;
 constexpr unsigned int SESSION_IDLE_TIMEOUT = 1000;
 constexpr AudioChannelMap DEFAULT_DUAL_MAP = {0, 1};
@@ -32,7 +32,7 @@ BackgroundService &BackgroundService::instance()
 BackgroundService::BackgroundService() : work_guard(asio::make_work_guard(io_context))
 {
 #if WINDOWS_OS_ENVIRONMENT
-    std::call_once(coinit_flag, []() { CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED); });
+    std::call_once(coinit_flag, []() { CoInitializeEx(nullptr, COINIT_MULTITHREADED); });
     TIMECAPS tc;
     if (timeGetDevCaps(&tc, sizeof(TIMECAPS)) == TIMERR_NOERROR)
     {
@@ -49,8 +49,18 @@ BackgroundService::BackgroundService() : work_guard(asio::make_work_guard(io_con
     for (size_t i = 0; i < AUDIO_MAX_COCURRECY_WORKER; ++i)
     {
         io_thds.emplace_back([this]() {
+#if WINDOWS_OS_ENVIRONMENT
+            HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+            bool com_initialized = SUCCEEDED(hr);
+#endif
             set_current_thread_scheduler_policy();
             io_context.run();
+#if WINDOWS_OS_ENVIRONMENT
+            if (com_initialized)
+            {
+                CoUninitialize();
+            }
+#endif
         });
     }
 }

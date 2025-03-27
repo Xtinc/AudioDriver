@@ -6,7 +6,7 @@ int main()
 {
     AudioCenter center(true);
 
-    center.create(IToken(20), {"dukou.wav", 0}, AudioBandWidth::Full, AudioPeriodSize::INR_20MS, 2, true);
+    center.create(IToken(20), {"default", 0}, AudioBandWidth::Full, AudioPeriodSize::INR_20MS, 2, true, true);
     center.create(OToken(120), {"default", 0}, AudioBandWidth::Full, AudioPeriodSize::INR_20MS, 2, true);
     center.prepare();
     center.start();
