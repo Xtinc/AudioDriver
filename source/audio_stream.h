@@ -89,7 +89,7 @@ class OAStream : public std::enable_shared_from_this<OAStream>
     void process_data();
     RetCode create_device(const AudioDeviceName &_name);
     void schedule_auto_reset();
-    RetCode reset_self();
+    void reset_self();
 
   public:
     const unsigned char token;
@@ -106,6 +106,7 @@ class OAStream : public std::enable_shared_from_this<OAStream>
     asio::steady_timer exec_timer;
     asio_strand exec_strand;
     asio::steady_timer reset_timer;
+    asio_strand reset_strand;
 
     obuffer_ptr mix_buf;
     obuffer_ptr databuf;
@@ -150,12 +151,12 @@ class IAStream : public std::enable_shared_from_this<IAStream>
 
   private:
     void execute_loop(TimePointer tp, unsigned int cnt);
-    RetCode process_data() const;
+    RetCode process_data();
     RetCode create_device(const AudioDeviceName &_name);
     RetCode create_device(const AudioDeviceName &_name, unsigned int _fs, unsigned int _ch);
     RetCode swap_device(idevice_ptr &new_device);
     void schedule_auto_reset();
-    RetCode reset_self();
+    void reset_self();
 
   public:
     const unsigned char token;
@@ -171,6 +172,7 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     asio::steady_timer exec_timer;
     asio_strand exec_strand;
     asio::steady_timer reset_timer;
+    asio_strand reset_strand;
 
     ibuffer_ptr usr_buf;
     ibuffer_ptr dev_buf;

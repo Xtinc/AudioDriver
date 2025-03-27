@@ -35,7 +35,8 @@ void set_current_thread_scheduler_policy()
 class AlsaDriver final : public AudioDevice
 {
   public:
-    AlsaDriver(const std::string &name, bool capture, unsigned int fs, unsigned int ps, unsigned int ch);
+    AlsaDriver(const std::string &name, bool capture, unsigned int fs, unsigned int ps, unsigned int ch,
+               bool enable_strict_recover);
     ~AlsaDriver() override;
 
     RetCode open() override;
@@ -55,8 +56,9 @@ class AlsaDriver final : public AudioDevice
     snd_pcm_t *handle;
 };
 
-AlsaDriver::AlsaDriver(const std::string &name, bool capture, unsigned int fs, unsigned int ps, unsigned int ch)
-    : AudioDevice(name, capture, fs, ps, ch), handle(nullptr), mmap_mode(true)
+AlsaDriver::AlsaDriver(const std::string &name, bool capture, unsigned int fs, unsigned int ps, unsigned int ch,
+                       bool enable_strict_recover)
+    : AudioDevice(name, capture, fs, ps, ch, enable_strict_recover), handle(nullptr), mmap_mode(true)
 {
 }
 
@@ -264,6 +266,11 @@ RetCode AlsaDriver::write(const char *data, size_t len)
         return {RetCode::EWRITE, "Capture device does not support write"};
     }
 
+    if (hstate == STREAM_STOPPED)
+    {
+        return {RetCode::ESTATE, "Stream stopped"};
+    }
+
     if (!io_buffer->store(data, len))
     {
         return {RetCode::NOACTION, "Buffer full"};
@@ -276,6 +283,11 @@ RetCode AlsaDriver::read(char *data, size_t len)
     if (!is_capture_dev)
     {
         return {RetCode::EREAD, "Playback device does not support read"};
+    }
+
+    if (hstate == STREAM_STOPPED)
+    {
+        return {RetCode::ESTATE, "Stream stopped"};
     }
 
     if (!io_buffer->load(data, len))
@@ -358,6 +370,7 @@ void AlsaDriver::write_loop()
         if ((*timer_cnt)())
         {
             AUDIO_DEBUG_PRINT("Alsa device [%s] write loop timeout", hw_name.c_str());
+            ok = !strict_recover;
         }
     }
 
@@ -405,6 +418,7 @@ void AlsaDriver::read_loop()
         if ((*timer_cnt)())
         {
             AUDIO_DEBUG_PRINT("ALSA device [%s] read loop timeout", hw_name.c_str());
+            ok = !strict_recover;
         }
     }
 
@@ -483,26 +497,26 @@ static std::pair<std::wstring, std::wstring> normailzed_device_name(const std::s
                           reinterpret_cast<LPVOID *>(&enumerator));
     if (FAILED(hr))
     {
-        goto exit;
+        goto SAFE_EXIT;
     }
 
     hr = enumerator->EnumAudioEndpoints(capture ? eCapture : eRender, DEVICE_STATE_ACTIVE, &collection);
     if (FAILED(hr))
     {
-        goto exit;
+        goto SAFE_EXIT;
     }
 
     UINT count;
     hr = collection->GetCount(&count);
     if (FAILED(hr))
     {
-        goto exit;
+        goto SAFE_EXIT;
     }
 
     if (count == 0)
     {
         AUDIO_INFO_PRINT("No endpoints found.");
-        goto exit;
+        goto SAFE_EXIT;
     }
 
     for (ULONG i = 0; i < count; i++)
@@ -546,7 +560,7 @@ static std::pair<std::wstring, std::wstring> normailzed_device_name(const std::s
         SafeRelease(&device);
     }
 
-exit:
+SAFE_EXIT:
     SafeRelease(&enumerator);
     SafeRelease(&collection);
     SafeRelease(&device);
@@ -558,7 +572,7 @@ class WasapiDriver final : public AudioDevice
 {
   public:
     WasapiDriver(const std::string &friendly_name, const std::wstring &device_name, bool capture, unsigned int fs,
-                 unsigned int ps, unsigned int ch);
+                 unsigned int ps, unsigned int ch, bool enable_strict_recover);
     ~WasapiDriver() override;
 
     RetCode open() override;
@@ -580,9 +594,9 @@ class WasapiDriver final : public AudioDevice
 };
 
 WasapiDriver::WasapiDriver(const std::string &friendly_name, const std::wstring &device_name, bool capture,
-                           unsigned int fs, unsigned int ps, unsigned int ch)
-    : AudioDevice(friendly_name, capture, fs, ps, ch), uuid_name(device_name), h_event(NULL), audio_client(NULL),
-      render(NULL), capture(NULL)
+                           unsigned int fs, unsigned int ps, unsigned int ch, bool enable_strict_recover)
+    : AudioDevice(friendly_name, capture, fs, ps, ch, enable_strict_recover), uuid_name(device_name), h_event(NULL),
+      audio_client(NULL), render(NULL), capture(NULL)
 {
 }
 
@@ -613,7 +627,7 @@ RetCode WasapiDriver::open()
     if (FAILED(hr))
     {
         ret = {RetCode::FAILED, "CoCreateInstance failed"};
-        goto exit;
+        goto SAFE_EXIT;
     }
 
     if (hw_name == "default")
@@ -628,14 +642,14 @@ RetCode WasapiDriver::open()
     if (FAILED(hr))
     {
         ret = {RetCode::FAILED, "IMMDeviceEnumerator::GetDefaultAudioEndpoint failed"};
-        goto exit;
+        goto SAFE_EXIT;
     }
 
     hr = device->Activate(__uuidof(IAudioClient2), CLSCTX_ALL, NULL, reinterpret_cast<LPVOID *>(&audio_client));
     if (FAILED(hr))
     {
         ret = {RetCode::FAILED, "IMMDevice::Activate failed"};
-        goto exit;
+        goto SAFE_EXIT;
     }
 
     wfx.wFormatTag = WAVE_FORMAT_PCM;
@@ -658,27 +672,27 @@ RetCode WasapiDriver::open()
     if (FAILED(hr))
     {
         ret = {RetCode::FAILED, "IAudioClient::GetService failed"};
-        goto exit;
+        goto SAFE_EXIT;
     }
 
     hr = audio_client->GetBufferSize(&dev_ps);
     if (FAILED(hr))
     {
         ret = {RetCode::FAILED, "IAudioClient::GetBufferSize failed"};
-        goto exit;
+        goto SAFE_EXIT;
     }
 
     h_event = CreateEvent(NULL, FALSE, FALSE, NULL);
     if (h_event == NULL)
     {
         ret = {RetCode::FAILED, "Create Event failed"};
-        goto exit;
+        goto SAFE_EXIT;
     }
     hr = audio_client->SetEventHandle(h_event);
     if (FAILED(hr))
     {
         ret = {RetCode::FAILED, "IAudioClient::SetEventHandle failed"};
-        goto exit;
+        goto SAFE_EXIT;
     }
     hstate = STREAM_OPENED;
     io_buffer = std::make_unique<KFifo>(dev_ps * sizeof(PCM_TYPE), 4, dev_ch);
@@ -686,7 +700,7 @@ RetCode WasapiDriver::open()
                      capture ? "capture" : "playback", hw_name.c_str(), dev_fs, dev_ps, dev_ch, min_ch, max_ch);
     timer_cnt = std::make_unique<TimerCounter>(hw_name);
 
-exit:
+SAFE_EXIT:
     SafeRelease(&enumerator);
     SafeRelease(&device);
     return ret;
@@ -746,6 +760,11 @@ RetCode WasapiDriver::write(const char *data, size_t len)
         return {RetCode::FAILED, "Capture device does not support write"};
     }
 
+    if (hstate == STREAM_STOPPED)
+    {
+        return {RetCode::ESTATE, "Stream stopped"};
+    }
+
     if (!io_buffer->store(data, len))
     {
         return {RetCode::NOACTION, "Buffer full"};
@@ -758,6 +777,11 @@ RetCode WasapiDriver::read(char *data, size_t len)
     if (!is_capture_dev)
     {
         return {RetCode::EREAD, "Playback device does not support read"};
+    }
+
+    if (hstate == STREAM_STOPPED)
+    {
+        return {RetCode::ESTATE, "Stream stopped"};
     }
 
     if (!io_buffer->load(data, len))
@@ -825,6 +849,7 @@ void WasapiDriver::write_loop()
         if ((*timer_cnt)())
         {
             AUDIO_DEBUG_PRINT("WASAPI device [%s] write loop timeout", hw_name.c_str());
+            ok = !strict_recover;
         }
     }
 
@@ -884,27 +909,24 @@ void WasapiDriver::read_loop()
                 break;
             }
 
-            if (frames == 0)
+            if (frames != 0)
             {
-                goto release_buffer;
-            }
-
-            if (flags & AUDCLNT_BUFFERFLAGS_SILENT)
-            {
-                if (!io_buffer->store_aside(frames * dev_ch * sizeof(PCM_TYPE)))
+                if (flags & AUDCLNT_BUFFERFLAGS_SILENT)
                 {
-                    AUDIO_DEBUG_PRINT("WASAPI device [%s] buffer overflow", hw_name.c_str());
+                    if (!io_buffer->store_aside(frames * dev_ch * sizeof(PCM_TYPE)))
+                    {
+                        AUDIO_DEBUG_PRINT("WASAPI device [%s] buffer overflow", hw_name.c_str());
+                    }
                 }
-            }
-            else
-            {
-                if (!io_buffer->store(reinterpret_cast<char *>(data), frames * dev_ch * sizeof(PCM_TYPE)))
+                else
                 {
-                    AUDIO_DEBUG_PRINT("WASAPI device [%s] buffer overflow", hw_name.c_str());
+                    if (!io_buffer->store(reinterpret_cast<char *>(data), frames * dev_ch * sizeof(PCM_TYPE)))
+                    {
+                        AUDIO_DEBUG_PRINT("WASAPI device [%s] buffer overflow", hw_name.c_str());
+                    }
                 }
             }
 
-        release_buffer:
             hr = capture->ReleaseBuffer(frames);
             if (FAILED(hr))
             {
@@ -917,6 +939,7 @@ void WasapiDriver::read_loop()
         if ((*timer_cnt)())
         {
             AUDIO_DEBUG_PRINT("WASAPI device [%s] read loop timeout", hw_name.c_str());
+            ok = !strict_recover;
         }
     }
 
@@ -951,7 +974,7 @@ class WaveDevice final : public AudioDevice
 
 WaveDevice::WaveDevice(const std::string &name, bool capture, unsigned int fs, unsigned int ps, unsigned int ch,
                        unsigned int cyc)
-    : AudioDevice(name, capture, fs, ps, ch), cycles(cyc), wav_file(std::make_unique<WavFile>())
+    : AudioDevice(name, capture, fs, ps, ch, false), cycles(cyc), wav_file(std::make_unique<WavFile>())
 {
 }
 
@@ -1078,7 +1101,7 @@ class EchoDevice final : public AudioDevice
 };
 
 EchoDevice::EchoDevice(const std::string &name, unsigned int fs, unsigned int ps, unsigned int ch)
-    : AudioDevice("echo_" + name, true, fs, ps, ch)
+    : AudioDevice("echo_" + name, true, fs, ps, ch, false)
 {
 }
 
@@ -1133,7 +1156,7 @@ class NullDevice final : public AudioDevice
 {
   public:
     NullDevice(const std::string &name, bool capture, unsigned int fs, unsigned int ps, unsigned int ch)
-        : AudioDevice(name, capture, fs, ps, ch)
+        : AudioDevice(name, capture, fs, ps, ch, false)
     {
     }
 
@@ -1197,24 +1220,26 @@ class NullDevice final : public AudioDevice
 };
 
 std::unique_ptr<AudioDevice> make_audio_driver(int type, const AudioDeviceName &name, unsigned int fs, unsigned int ps,
-                                               unsigned int ch)
+                                               unsigned int ch, bool enable_strict_recover)
 {
     if (type == PHSY_IAS)
     {
 #if WINDOWS_OS_ENVIRONMENT
         auto ret = normailzed_device_name(name.first, true);
-        return std::make_unique<WasapiDriver>(utf16_to_utf8(ret.first), ret.second, true, fs, ps, ch);
+        return std::make_unique<WasapiDriver>(utf16_to_utf8(ret.first), ret.second, true, fs, ps, ch,
+                                              enable_strict_recover);
 #elif LINUX_OS_ENVIRONMENT
-        return std::make_unique<AlsaDriver>(normailzed_device_name(name), true, fs, ps, ch);
+        return std::make_unique<AlsaDriver>(normailzed_device_name(name), true, fs, ps, ch, enable_strict_recover);
 #endif
     }
     else if (type == PHSY_OAS)
     {
 #if WINDOWS_OS_ENVIRONMENT
         auto ret = normailzed_device_name(name.first, false);
-        return std::make_unique<WasapiDriver>(utf16_to_utf8(ret.first), ret.second, false, fs, ps, ch);
+        return std::make_unique<WasapiDriver>(utf16_to_utf8(ret.first), ret.second, false, fs, ps, ch,
+                                              enable_strict_recover);
 #elif LINUX_OS_ENVIRONMENT
-        return std::make_unique<AlsaDriver>(normailzed_device_name(name), false, fs, ps, ch);
+        return std::make_unique<AlsaDriver>(normailzed_device_name(name), false, fs, ps, ch, enable_strict_recover);
 #endif
     }
     else if (type == WAVE_IAS)

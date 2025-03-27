@@ -87,7 +87,7 @@ OAStream::OAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
                    unsigned int _ch, bool auto_reset)
     : token(_token), ti(_ti), enable_reset(auto_reset), fs(_fs), ps(fs * ti / 1000), ch(_ch), usr_name(_name),
       oas_ready(false), exec_timer(BG_SERVICE), exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE),
-      volume(50), muted(false)
+      reset_strand(asio::make_strand(BG_SERVICE)), volume(50), muted(false)
 {
     auto ret = create_device(_name);
     if (ret)
@@ -498,7 +498,12 @@ void OAStream::process_data()
         compressor->process(reinterpret_cast<PCM_TYPE *>(databuf.get()), ps, ch, volume2gain(gain));
     }
 
-    odevice->write(databuf.get(), ps * ch * sizeof(PCM_TYPE));
+    auto ret = odevice->write(databuf.get(), ps * ch * sizeof(PCM_TYPE));
+    if (ret == RetCode::ESTATE && enable_reset)
+    {
+        AUDIO_INFO_PRINT("Device reset detected for token %u", token);
+        reset_self();
+    }
 
     std::shared_ptr<IAStream> np;
     {
@@ -517,15 +522,15 @@ RetCode OAStream::create_device(const AudioDeviceName &_name)
     std::unique_ptr<AudioDevice> new_device;
     if (_name.first == "null")
     {
-        new_device = make_audio_driver(NULL_OAS, _name, fs, ps, ch);
+        new_device = make_audio_driver(NULL_OAS, _name, fs, ps, ch, false);
     }
     else if (check_wave_file_name(_name.first))
     {
-        new_device = make_audio_driver(WAVE_OAS, _name, fs, ps, ch);
+        new_device = make_audio_driver(WAVE_OAS, _name, fs, ps, ch, false);
     }
     else
     {
-        new_device = make_audio_driver(PHSY_OAS, _name, fs, ps, ch);
+        new_device = make_audio_driver(PHSY_OAS, _name, fs, ps, ch, enable_reset);
     }
 
     if (!new_device)
@@ -578,22 +583,25 @@ void OAStream::schedule_auto_reset()
         }
 
         AUDIO_INFO_PRINT("Performing scheduled reset for OAStream token %u", self->token);
-        auto result = self->reset_self();
-        if (!result)
-        {
-            AUDIO_ERROR_PRINT("OAStream auto reset failed: %s", result.what());
-        }
+        self->reset_self();
     }));
 }
 
-RetCode OAStream::reset_self()
+void OAStream::reset_self()
 {
-    (void)stop();
-    odevice.reset();
-    odevice = make_audio_driver(PHSY_OAS, usr_name, fs, ps, ch);
-    compressor->reset();
-    oas_ready = true;
-    return start();
+    asio::post(reset_strand, [self = shared_from_this()]() {
+        (void)self->stop();
+        self->odevice.reset();
+        self->odevice = make_audio_driver(PHSY_OAS, self->usr_name, self->fs, self->ps, self->ch, self->enable_reset);
+
+        self->compressor->reset();
+        self->oas_ready = true;
+        auto ret = self->start();
+        if (!ret)
+        {
+            AUDIO_ERROR_PRINT("Failed to restart OAStream: %s", ret.what());
+        }
+    });
 }
 
 // IAStream
@@ -601,7 +609,7 @@ IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
                    unsigned int _ch, bool auto_reset)
     : token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(_ch), enable_reset(auto_reset), usr_name(_name),
       ias_ready(false), exec_timer(BG_SERVICE), exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE),
-      volume(50), muted(false), usr_cb(nullptr), usr_ptr(nullptr)
+      reset_strand(asio::make_strand(BG_SERVICE)), volume(50), muted(false), usr_cb(nullptr), usr_ptr(nullptr)
 {
     auto ret = create_device(_name);
     if (ret)
@@ -827,7 +835,7 @@ void IAStream::execute_loop(TimePointer tp, unsigned int cnt)
     }));
 }
 
-RetCode IAStream::process_data() const
+RetCode IAStream::process_data()
 {
     if (!ias_ready)
     {
@@ -836,6 +844,13 @@ RetCode IAStream::process_data() const
 
     auto dev_fr = idevice->fs() * ti / 1000;
     auto ret = idevice->read(dev_buf.get(), dev_fr * idevice->ch() * sizeof(PCM_TYPE));
+
+    if (ret == RetCode::ESTATE && enable_reset)
+    {
+        AUDIO_INFO_PRINT("Device reset detected for token %u", token);
+        reset_self();
+        return RetCode::OK;
+    }
 
     if (ret != RetCode::OK && ret != RetCode::NOACTION)
     {
@@ -892,19 +907,19 @@ RetCode IAStream::create_device(const AudioDeviceName &_name)
     std::unique_ptr<AudioDevice> new_device;
     if (_name.first == "echo")
     {
-        new_device = make_audio_driver(ECHO_IAS, _name, fs, ps, ch);
+        new_device = make_audio_driver(ECHO_IAS, _name, fs, ps, ch, false);
     }
     else if (_name.first == "null")
     {
-        new_device = make_audio_driver(NULL_IAS, _name, fs, ps, ch);
+        new_device = make_audio_driver(NULL_IAS, _name, fs, ps, ch, false);
     }
     else if (check_wave_file_name(_name.first))
     {
-        new_device = make_audio_driver(WAVE_IAS, _name, fs, ps, ch);
+        new_device = make_audio_driver(WAVE_IAS, _name, fs, ps, ch, false);
     }
     else
     {
-        new_device = make_audio_driver(PHSY_IAS, _name, fs, ps, ch);
+        new_device = make_audio_driver(PHSY_IAS, _name, fs, ps, ch, enable_reset);
     }
 
     if (!new_device)
@@ -924,7 +939,7 @@ RetCode IAStream::create_device(const AudioDeviceName &_name)
 
 RetCode IAStream::create_device(const AudioDeviceName &_name, unsigned int _fs, unsigned int _ch)
 {
-    auto new_device = make_audio_driver(ECHO_IAS, _name, _fs, _fs * ti / 1000, _ch);
+    auto new_device = make_audio_driver(ECHO_IAS, _name, _fs, _fs * ti / 1000, _ch, false);
     if (!new_device)
     {
         return {RetCode::FAILED, "Failed to create audio driver"};
@@ -980,21 +995,29 @@ void IAStream::schedule_auto_reset()
         }
 
         AUDIO_INFO_PRINT("Performing scheduled reset for stream token %u", self->token);
-        auto result = self->reset_self();
-        if (!result)
-        {
-            AUDIO_ERROR_PRINT("Auto reset failed: %s", result.what());
-        }
+        self->reset_self();
     }));
 }
 
-RetCode IAStream::reset_self()
+void IAStream::reset_self()
 {
-    (void)stop();
-    idevice.reset();
-    idevice = make_audio_driver(PHSY_IAS, usr_name, fs, ps, ch);
-    ias_ready = true;
-    return start();
+    asio::post(reset_strand, [self = shared_from_this()]() {
+        (void)self->stop();
+        self->idevice.reset();
+        self->idevice = make_audio_driver(PHSY_IAS, self->usr_name, self->fs, self->ps, self->ch, self->enable_reset);
+        auto ret = self->idevice->open();
+        if (!ret)
+        {
+            AUDIO_ERROR_PRINT("Failed to open capture device [%s]: %s", self->usr_name.first.c_str(), ret.what());
+        }
+        self->compressor->reset();
+        self->ias_ready = true;
+        ret = self->start();
+        if (!ret)
+        {
+            AUDIO_ERROR_PRINT("Failed to start capture device [%s]: %s", self->usr_name.first.c_str(), ret.what());
+        }
+    });
 }
 
 // AudioPlayer

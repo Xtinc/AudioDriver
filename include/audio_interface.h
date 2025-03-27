@@ -38,7 +38,7 @@ struct RetCode
 {
     enum Code
     {
-        FAILED = -10,
+        FAILED = -11,
         EOPEN,
         NOPEN,
         INVFMT,
@@ -48,6 +48,7 @@ struct RetCode
         EPARAM,
         EXCEPTION,
         ESTATE,
+        ETIMEOUT,
         OK = 0,
         NOACTION
     };
@@ -117,6 +118,8 @@ struct RetCode
             return "Invalid parameter";
         case NOACTION:
             return "No action";
+        case ETIMEOUT:
+            return "Operation timeout";
         default:
             return "Unknown error";
         }
@@ -229,7 +232,7 @@ class AudioCenter
 
     RetCode start();
     RetCode stop();
-    
+
     RetCode set_volume(AudioToken token, unsigned int vol);
     RetCode mute(AudioToken token, bool enable);
     RetCode mute(OToken token, IToken itoken, bool enable, const std::string &ip = "");

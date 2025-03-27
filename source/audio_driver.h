@@ -107,11 +107,13 @@ class AudioDevice
   public:
     const std::string hw_name;
     const bool is_capture_dev;
+    const bool strict_recover;
 
   protected:
-    AudioDevice(const std::string &name, bool capture, unsigned int fs, unsigned int ps, unsigned int ch)
-        : hw_name(name), is_capture_dev(capture), dev_fs(fs), dev_ps(ps), dev_ch(ch), max_ch(0), min_ch(0),
-          hstate(STREAM_CLOSED) {};
+    AudioDevice(const std::string &name, bool capture, unsigned int fs, unsigned int ps, unsigned int ch,
+                bool enable_strict_recover)
+        : hw_name(name), is_capture_dev(capture), strict_recover(enable_strict_recover), dev_fs(fs), dev_ps(ps),
+          dev_ch(ch), max_ch(0), min_ch(0), hstate(STREAM_CLOSED) {};
 
   protected:
     enum Mode
@@ -142,6 +144,6 @@ class AudioDevice
 void set_current_thread_scheduler_policy();
 
 std::unique_ptr<AudioDevice> make_audio_driver(int type, const AudioDeviceName &name, unsigned int fs, unsigned int ps,
-                                               unsigned int ch);
+                                               unsigned int ch, bool enable_strict_recover);
 
 #endif
