@@ -26,7 +26,7 @@
 #define LINUX_OS_ENVIRONMENT 0
 #endif
 
-#define USER_MAX_AUDIO_TOKEN 200
+#define USER_MAX_AUDIO_TOKEN 201
 #define NETWORK_AUDIO_TRANS_PORT 52282
 
 typedef int16_t PCM_TYPE;
@@ -191,7 +191,8 @@ struct OToken : public AudioToken
     constexpr OToken() noexcept : AudioToken(INVALID_TOKEN)
     {
     }
-    constexpr explicit OToken(unsigned char t) noexcept : AudioToken(t > USER_MAX_AUDIO_TOKEN / 2 ? t : INVALID_TOKEN)
+    constexpr explicit OToken(unsigned char t) noexcept
+        : AudioToken(t < USER_MAX_AUDIO_TOKEN ? (t > USER_MAX_AUDIO_TOKEN / 2 ? t : INVALID_TOKEN) : INVALID_TOKEN)
     {
     }
     using AudioToken::operator==;
@@ -207,6 +208,9 @@ constexpr OToken operator""_otk(unsigned long long val) noexcept
 {
     return OToken(static_cast<unsigned char>(val));
 }
+
+constexpr auto USR_DUMMY_IN = 100_itk;
+constexpr auto USR_DUMMY_OUT = 100_otk;
 
 class IAStream;
 class OAStream;

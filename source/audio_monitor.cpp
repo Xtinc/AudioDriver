@@ -836,35 +836,34 @@ AudioMonitor::~AudioMonitor()
 #endif
 }
 
-bool AudioMonitor::RegisterCallback(void *owner, DeviceChangeCallback callback)
+bool AudioMonitor::RegisterCallback(DeviceChangeCallback callback)
 {
-    if (!owner || !callback)
+    if (!callback)
         return false;
 
-    std::lock_guard<std::mutex> lock(callbacks_mutex_);
-    callbacks_[owner] = std::move(callback);
+    std::lock_guard<std::mutex> lock(callback_mutex_);
+    callback_ = std::move(callback);
     return true;
 }
 
-bool AudioMonitor::UnregisterCallback(void *owner)
+bool AudioMonitor::UnregisterCallback()
 {
-    if (!owner)
-        return false;
-
-    std::lock_guard<std::mutex> lock(callbacks_mutex_);
-    return callbacks_.erase(owner) > 0;
+    std::lock_guard<std::mutex> lock(callback_mutex_);
+    if (callback_)
+    {
+        callback_ = nullptr;
+        return true;
+    }
+    return false;
 }
 
 void AudioMonitor::HandleDeviceChange(AudioDeviceEvent event, const AudioDeviceInfo &device_info)
 {
-    // Use strand to ensure callbacks are executed sequentially on the IO thread
-    asio::post(io_context_, [this, event, device_info]() {
-        std::lock_guard<std::mutex> lock(callbacks_mutex_);
-        for (const auto &pair : callbacks_)
-        {
-            pair.second(event, device_info);
-        }
-    });
+    std::lock_guard<std::mutex> lock(callback_mutex_);
+    if (callback_)
+    {
+        callback_(event, device_info);
+    }
 }
 
 #if WINDOWS_OS_ENVIRONMENT

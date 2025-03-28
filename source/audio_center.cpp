@@ -26,7 +26,6 @@ static void print_device_change_info(AudioDeviceEvent event, const AudioDeviceIn
 AudioCenter::AudioCenter(bool enable_network) : center_state(State::INIT)
 {
     monitor = std::make_unique<AudioMonitor>(BG_SERVICE);
-    monitor->RegisterCallback(this, print_device_change_info);
     player = std::make_unique<AudioPlayer>(USER_MAX_AUDIO_TOKEN);
     if (enable_network)
     {
@@ -42,7 +41,7 @@ AudioCenter::~AudioCenter()
         AUDIO_ERROR_PRINT("Failed to stop AudioCenter: %s", ret.what());
     }
 
-    monitor->UnregisterCallback(this);
+    monitor->UnregisterCallback();
 }
 
 RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps,
@@ -122,6 +121,13 @@ RetCode AudioCenter::prepare()
         return {RetCode::ESTATE, "AudioCenter not in INIT state"};
     }
 
+    ias_map.emplace(USR_DUMMY_IN,
+                    std::make_shared<IAStream>(USR_DUMMY_IN, AudioDeviceName("null", 0),
+                                               enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2));
+    oas_map.emplace(USR_DUMMY_OUT,
+                    std::make_shared<OAStream>(USR_DUMMY_OUT, AudioDeviceName("null", 0),
+                                               enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2));
+    monitor->RegisterCallback(print_device_change_info);
     AUDIO_DEBUG_PRINT("AudioCenter successfully prepared - transitioning from INIT to CONNECTING");
     return RetCode::OK;
 }

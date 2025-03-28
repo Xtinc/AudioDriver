@@ -111,10 +111,10 @@ class AudioMonitor
     bool DeviceExists(const std::string &device_id);
 
     // Register device change callback
-    bool RegisterCallback(void *owner, DeviceChangeCallback callback);
+    bool RegisterCallback(DeviceChangeCallback callback);
 
     // Unregister device change callback
-    bool UnregisterCallback(void *owner);
+    bool UnregisterCallback();
 
 #if WINDOWS_OS_ENVIRONMENT
     // String conversion utility methods
@@ -140,8 +140,8 @@ class AudioMonitor
     UdevNotificationHandler *udev_handler_;
 #endif
 
-    std::mutex callbacks_mutex_;
-    std::map<void *, DeviceChangeCallback> callbacks_;
+    std::mutex callback_mutex_;
+    DeviceChangeCallback callback_;
 };
 
 #endif // AUDIO_DEVICE_MONITOR_HEADER
