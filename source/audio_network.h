@@ -83,6 +83,121 @@ constexpr uint8_t NET_MAGIC_NUM = 0xBA;
 constexpr unsigned int NETWORK_MAX_FRAMES = enum2val(AudioPeriodSize::INR_40MS) * enum2val(AudioBandWidth::Full) / 1000;
 constexpr unsigned int NETWORK_MAX_BUFFER_SIZE = NETWORK_MAX_FRAMES + 2 * sizeof(NetPacketHeader);
 
+/*                   Info Label Format
+ 0                   1                   2                   3
+ 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                           ias_ip                             |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                           oas_ip                             |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                   |C|M|    ias_token    |    oas_token    |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+ias_ip: IAStream IP address, 32-bit
+oas_ip: OAStream IP address, 32-bit
+C: Connected, 1-bit
+M: Muted, 1-bit
+ias_token: IAStream token, 8-bit
+oas_token: OAStream token, 8-bit
+*/
+
+class InfoLabel
+{
+  private:
+    uint32_t ias_ip_value;
+    uint32_t oas_ip_value;
+    uint32_t flags_value;
+
+    enum Positions
+    {
+        CONNECTED_POS = 0,
+        MUTED_POS = 1,
+        IAS_TOKEN_POS = 8,
+        OAS_TOKEN_POS = 16
+    };
+
+    enum Masks
+    {
+        CONNECTED_MASK = 1U << CONNECTED_POS,
+        MUTED_MASK = 1U << MUTED_POS,
+        IAS_TOKEN_MASK = 0xFFU << IAS_TOKEN_POS,
+        OAS_TOKEN_MASK = 0xFFU << OAS_TOKEN_POS
+    };
+
+  public:
+    InfoLabel(uint32_t ias_ip, uint32_t oas_ip, bool connected, bool muted, uint8_t ias_token, uint8_t oas_token)
+        : ias_ip_value(ias_ip), oas_ip_value(oas_ip)
+    {
+        flags_value = (connected ? CONNECTED_MASK : 0) | (muted ? MUTED_MASK : 0) |
+                      (static_cast<uint32_t>(ias_token) << IAS_TOKEN_POS) |
+                      (static_cast<uint32_t>(oas_token) << OAS_TOKEN_POS);
+    }
+
+    uint32_t &ias_ip()
+    {
+        return ias_ip_value;
+    }
+
+    uint32_t &oas_ip()
+    {
+        return oas_ip_value;
+    }
+
+    bool connected() const
+    {
+        return (flags_value & CONNECTED_MASK) != 0;
+    }
+
+    InfoLabel &set_connected(bool connected)
+    {
+        if (connected)
+        {
+            flags_value |= CONNECTED_MASK;
+        }
+        else
+        {
+            flags_value &= ~CONNECTED_MASK;
+        }
+        return *this;
+    }
+
+    bool muted() const
+    {
+        return (flags_value & MUTED_MASK) != 0;
+    }
+
+    InfoLabel &set_muted(bool muted)
+    {
+        if (muted)
+            flags_value |= MUTED_MASK;
+        else
+            flags_value &= ~MUTED_MASK;
+        return *this;
+    }
+
+    uint8_t itok() const
+    {
+        return static_cast<uint8_t>((flags_value & IAS_TOKEN_MASK) >> IAS_TOKEN_POS);
+    }
+
+    InfoLabel &set_itok(uint8_t token)
+    {
+        flags_value = (flags_value & ~IAS_TOKEN_MASK) | (static_cast<uint32_t>(token) << IAS_TOKEN_POS);
+        return *this;
+    }
+
+    uint8_t otok() const
+    {
+        return static_cast<uint8_t>((flags_value & OAS_TOKEN_MASK) >> OAS_TOKEN_POS);
+    }
+
+    InfoLabel &set_otok(uint8_t token)
+    {
+        flags_value = (flags_value & ~OAS_TOKEN_MASK) | (static_cast<uint32_t>(token) << OAS_TOKEN_POS);
+        return *this;
+    }
+};
+
 struct KFifo
 {
   public:
@@ -221,7 +336,7 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
         uint32_t packets_lost{0};
         double total_jitter{0.0};
         double max_jitter{0.0};
-        
+
         uint32_t packets_out_of_order{0};
 
         uint32_t period_packets_received{0};
@@ -235,8 +350,7 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
         std::chrono::steady_clock::time_point last_report_time;
 
         DecoderContext(unsigned int ch, unsigned int max_frames)
-            : decoder(std::make_unique<NetDecoder>(ch, max_frames)), 
-              last_report_time(std::chrono::steady_clock::now())
+            : decoder(std::make_unique<NetDecoder>(ch, max_frames)), last_report_time(std::chrono::steady_clock::now())
         {
         }
 
@@ -261,6 +375,8 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
 
     RetCode register_receiver(uint8_t token, ReceiveCallback callback);
     RetCode unregister_receiver(uint8_t token);
+
+    std::vector<InfoLabel> report_conns();
 
   private:
     void report();

@@ -519,6 +519,24 @@ RetCode NetWorker::unregister_receiver(uint8_t token)
     return {RetCode::OK, "Receiver unregistered"};
 }
 
+std::vector<InfoLabel> NetWorker::report_conns()
+{
+    std::vector<InfoLabel> result;
+    std::lock_guard<std::mutex> lock(senders_mutex);
+
+    for (const auto &pair : senders)
+    {
+        const auto &context = pair.second;
+        for (const auto &dest : context.destinations)
+        {
+            result.emplace_back(0x7F000001, dest.endpoint.address().to_v4().to_uint(), true, false, pair.first,
+                                dest.receiver_token);
+        }
+    }
+
+    return result;
+}
+
 RetCode NetWorker::register_sender(uint8_t sender_id, unsigned int channels, unsigned int sample_rate)
 {
     if (!socket || !socket->is_open())

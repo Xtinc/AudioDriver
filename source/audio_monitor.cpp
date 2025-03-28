@@ -738,7 +738,7 @@ AudioDeviceInfo UdevNotificationHandler::GetDeviceInfo(struct udev_device *dev, 
     if (sscanf(sysname, "card%d", &card_num) == 1)
     {
         char card_id[32];
-        snprintf(card_id, sizeof(card_id), "hw:%d", card_num);
+        snprintf(card_id, sizeof(card_id), "hw:%d,0", card_num);
 
         // Get more descriptive name if possible
         info.name = get_device_description(card_id);

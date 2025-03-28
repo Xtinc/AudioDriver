@@ -414,6 +414,25 @@ void OAStream::unregister_listener()
     listener.reset();
 }
 
+std::vector<InfoLabel> OAStream::report_conns()
+{
+    std::vector<InfoLabel> result;
+    result.reserve(6);
+    auto oas_muted = muted.load();
+
+    std::lock_guard<std::mutex> grd(session_mtx);
+    for (const auto &session_pair : sessions)
+    {
+        const auto &context = session_pair.second;
+        uint32_t ias_ip = session_pair.first >> 32;
+        uint8_t itoken = session_pair.first & 0xFF;
+
+        result.emplace_back(ias_ip, 0x7F000001, context->enabled, oas_muted, itoken, token);
+    }
+
+    return result;
+}
+
 void OAStream::execute_loop(TimePointer tp, unsigned int cnt)
 {
     if (!oas_ready)
@@ -816,6 +835,24 @@ void IAStream::register_callback(AudioInputCallBack cb, void *ptr)
 {
     usr_cb = cb;
     usr_ptr = ptr;
+}
+
+std::vector<InfoLabel> IAStream::report_conns()
+{
+    std::vector<InfoLabel> result;
+    result.reserve(6);
+    auto ias_muted = muted.load();
+
+    std::lock_guard<std::mutex> grd(dest_mtx);
+    for (auto iter : dests)
+    {
+        if (auto np = iter.lock())
+        {
+            result.emplace_back(0x7F000001, 0x7F000001, false, ias_muted, token, np->token);
+        }
+    }
+
+    return result;
 }
 
 void IAStream::execute_loop(TimePointer tp, unsigned int cnt)
