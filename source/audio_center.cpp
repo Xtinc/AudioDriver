@@ -143,7 +143,7 @@ static void merge_label(std::vector<InfoLabel> &ias_label, std::vector<InfoLabel
 
     for (const auto &label : merged_labels)
     {
-        auto itok = label.itok();
+        auto itok = label.ias_composite;
         if (itok != last_label)
         {
             ias_tokens.push_back(itok);
@@ -157,7 +157,7 @@ static void merge_label(std::vector<InfoLabel> &ias_label, std::vector<InfoLabel
 
     for (const auto &label : merged_labels)
     {
-        auto otok = label.otok();
+        auto otok = label.oas_composite;
         if (otok != last_label)
         {
             oas_tokens.push_back(otok);
