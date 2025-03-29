@@ -139,7 +139,7 @@ static void merge_label(std::vector<InfoLabel> &ias_label, std::vector<InfoLabel
 
     uint64_t last_label = 0;
     std::sort(merged_labels.begin(), merged_labels.end(),
-              [](const InfoLabel &a, const InfoLabel &b) { return a.itok() < b.itok(); });
+              [](const InfoLabel &a, const InfoLabel &b) { return a.ias_composite < b.ias_composite; });
 
     for (const auto &label : merged_labels)
     {
@@ -153,7 +153,7 @@ static void merge_label(std::vector<InfoLabel> &ias_label, std::vector<InfoLabel
 
     last_label = 0;
     std::sort(merged_labels.begin(), merged_labels.end(),
-              [](const InfoLabel &a, const InfoLabel &b) { return a.otok() < b.otok(); });
+              [](const InfoLabel &a, const InfoLabel &b) { return a.oas_composite < b.oas_composite; });
 
     for (const auto &label : merged_labels)
     {
@@ -173,7 +173,7 @@ static void merge_label(std::vector<InfoLabel> &ias_label, std::vector<InfoLabel
 
     i = 0;
     j = 0;
-    last_label = merged_labels[0].itok();
+    last_label = merged_labels[0].ias_composite;
 
     for (auto ele : merged_labels)
     {
@@ -182,16 +182,16 @@ static void merge_label(std::vector<InfoLabel> &ias_label, std::vector<InfoLabel
             break;
         }
 
-        if (ele.itok() != last_label)
+        if (ele.ias_composite != last_label)
         {
-            last_label = ele.itok();
+            last_label = ele.ias_composite;
             i++;
             j = 0;
         }
 
         while (j < oas_cnt)
         {
-            if (ele.otok() == oas_tokens[j])
+            if (ele.oas_composite == oas_tokens[j])
             {
                 merged_matrix[i * oas_cnt + j] = ele;
             }
@@ -641,7 +641,7 @@ RetCode AudioCenter::stop(const std::string &path)
 
 void AudioCenter::schedule_report_timer() const
 {
-    auto timer = std::make_shared<asio::steady_timer>(BG_SERVICE, std::chrono::seconds(87));
+    auto timer = std::make_shared<asio::steady_timer>(BG_SERVICE, std::chrono::seconds(3));
     timer->async_wait([this, timer](const asio::error_code &error) {
         if (!error && center_state.load() == State::READY)
         {
