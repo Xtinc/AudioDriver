@@ -529,8 +529,8 @@ std::vector<InfoLabel> NetWorker::report_conns()
         const auto &context = pair.second;
         for (const auto &dest : context.destinations)
         {
-            result.emplace_back(0x7F000001, dest.endpoint.address().to_v4().to_uint(), true, false, pair.first,
-                                dest.receiver_token);
+            result.emplace_back(0x7F000001, pair.first, dest.endpoint.address().to_v4().to_uint(), dest.receiver_token,
+                                true, false, false);
         }
     }
 

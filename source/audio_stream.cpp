@@ -231,8 +231,7 @@ RetCode OAStream::direct_push(unsigned char itoken, unsigned int chan, unsigned 
         return {RetCode::FAILED, "Invalid data pointer"};
     }
 
-    uint64_t composite_key = (static_cast<uint64_t>(source_ip) << 32) | itoken;
-
+    uint64_t composite_key = InfoLabel::make_composite(source_ip, itoken);
     std::lock_guard<std::mutex> grd(session_mtx);
     auto it = sessions.find(composite_key);
     if (it == sessions.end())
@@ -423,11 +422,8 @@ std::vector<InfoLabel> OAStream::report_conns()
     std::lock_guard<std::mutex> grd(session_mtx);
     for (const auto &session_pair : sessions)
     {
-        const auto &context = session_pair.second;
-        uint32_t ias_ip = session_pair.first >> 32;
-        uint8_t itoken = session_pair.first & 0xFF;
-
-        result.emplace_back(ias_ip, 0x7F000001, context->enabled, oas_muted, itoken, token);
+        result.emplace_back(session_pair.first, InfoLabel::make_composite(0x7F000001, token),
+                            session_pair.second->enabled, false, oas_muted);
     }
 
     return result;
@@ -848,7 +844,7 @@ std::vector<InfoLabel> IAStream::report_conns()
     {
         if (auto np = iter.lock())
         {
-            result.emplace_back(0x7F000001, 0x7F000001, false, ias_muted, token, np->token);
+            result.emplace_back(0x7F000001, token, 0x7F000001, np->token, false, ias_muted, false);
         }
     }
 

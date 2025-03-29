@@ -61,7 +61,7 @@ struct TimerCounter
         }
         else
         {
-            avg_interval = (avg_interval * 9 + current_interval) / 10;
+            avg_interval = (avg_interval * 99 + current_interval) / 100;
         }
     }
 

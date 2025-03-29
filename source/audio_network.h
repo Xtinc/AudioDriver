@@ -84,117 +84,229 @@ constexpr unsigned int NETWORK_MAX_FRAMES = enum2val(AudioPeriodSize::INR_40MS) 
 constexpr unsigned int NETWORK_MAX_BUFFER_SIZE = NETWORK_MAX_FRAMES + 2 * sizeof(NetPacketHeader);
 
 /*                   Info Label Format
- 0                   1                   2                   3
- 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                           ias_ip                             |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                           oas_ip                             |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                   |C|M|    ias_token    |    oas_token    |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-ias_ip: IAStream IP address, 32-bit
-oas_ip: OAStream IP address, 32-bit
+ 0                   1                   2                   3                   4                   5 6 7 0 1 2 3 4 5 6
+7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6
+7
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                           ias_ip (32 bits)                           |                        reserved |  ias_token |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                           oas_ip (32 bits)                           |                        reserved |  oas_token |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                                                                |C|I|O| |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 C: Connected, 1-bit
-M: Muted, 1-bit
-ias_token: IAStream token, 8-bit
-oas_token: OAStream token, 8-bit
+I: IAS Muted, 1-bit
+O: OAS Muted, 1-bit
 */
 
 class InfoLabel
 {
   private:
-    uint32_t ias_ip_value;
-    uint32_t oas_ip_value;
-    uint32_t flags_value;
+    uint64_t ias_composite;
+    uint64_t oas_composite;
+    uint32_t flags;
 
-    enum Positions
+    enum FlagPositions
     {
         CONNECTED_POS = 0,
-        MUTED_POS = 1,
-        IAS_TOKEN_POS = 8,
-        OAS_TOKEN_POS = 16
+        IAS_MUTED_POS = 1,
+        OAS_MUTED_POS = 2
     };
 
-    enum Masks
+    enum FlagMasks
     {
         CONNECTED_MASK = 1U << CONNECTED_POS,
-        MUTED_MASK = 1U << MUTED_POS,
-        IAS_TOKEN_MASK = 0xFFU << IAS_TOKEN_POS,
-        OAS_TOKEN_MASK = 0xFFU << OAS_TOKEN_POS
+        IAS_MUTED_MASK = 1U << IAS_MUTED_POS,
+        OAS_MUTED_MASK = 1U << OAS_MUTED_POS
     };
 
   public:
-    InfoLabel(uint32_t ias_ip, uint32_t oas_ip, bool connected, bool muted, uint8_t ias_token, uint8_t oas_token)
-        : ias_ip_value(ias_ip), oas_ip_value(oas_ip)
+    InfoLabel(uint32_t ias_ip, uint8_t ias_token, uint32_t oas_ip, uint8_t oas_token, bool connected, bool ias_muted,
+              bool oas_muted)
+        : ias_composite(make_composite(ias_ip, ias_token)), oas_composite(make_composite(oas_ip, oas_token)), flags(0)
     {
-        flags_value = (connected ? CONNECTED_MASK : 0) | (muted ? MUTED_MASK : 0) |
-                      (static_cast<uint32_t>(ias_token) << IAS_TOKEN_POS) |
-                      (static_cast<uint32_t>(oas_token) << OAS_TOKEN_POS);
+        if (connected)
+        {
+            flags |= CONNECTED_MASK;
+        }
+        if (ias_muted)
+        {
+            flags |= IAS_MUTED_MASK;
+        }
+        if (oas_muted)
+        {
+            flags |= OAS_MUTED_MASK;
+        }
     }
 
-    uint32_t &ias_ip()
+    InfoLabel(uint64_t ias_comp, uint64_t oas_comp, bool connected, bool ias_muted, bool oas_muted)
+        : ias_composite(ias_comp), oas_composite(oas_comp), flags(0)
     {
-        return ias_ip_value;
+        if (connected)
+        {
+            flags |= CONNECTED_MASK;
+        }
+        if (ias_muted)
+        {
+            flags |= IAS_MUTED_MASK;
+        }
+        if (oas_muted)
+        {
+            flags |= OAS_MUTED_MASK;
+        }
     }
 
-    uint32_t &oas_ip()
+    uint64_t ias_comp() const
     {
-        return oas_ip_value;
+        return ias_composite;
+    }
+
+    InfoLabel &set_ias_comp(uint64_t comp)
+    {
+        ias_composite = comp;
+        return *this;
+    }
+
+    uint64_t oas_comp() const
+    {
+        return oas_composite;
+    }
+
+    InfoLabel &set_oas_comp(uint64_t comp)
+    {
+        oas_composite = comp;
+        return *this;
+    }
+
+    uint32_t ias_ip() const
+    {
+        return extract_ip(ias_composite);
+    }
+
+    InfoLabel &set_ias_ip(uint32_t ip)
+    {
+        ias_composite = (ias_composite & 0xFFFFFFFF) | (static_cast<uint64_t>(ip) << 32);
+        return *this;
+    }
+
+    uint8_t ias_token() const
+    {
+        return extract_token(ias_composite);
+    }
+
+    InfoLabel &set_ias_token(uint8_t token)
+    {
+        ias_composite = (ias_composite & ~0xFFULL) | token;
+        return *this;
+    }
+
+    uint32_t oas_ip() const
+    {
+        return extract_ip(oas_composite);
+    }
+
+    InfoLabel &set_oas_ip(uint32_t ip)
+    {
+        oas_composite = (oas_composite & 0xFFFFFFFF) | (static_cast<uint64_t>(ip) << 32);
+        return *this;
+    }
+
+    uint8_t oas_token() const
+    {
+        return extract_token(oas_composite);
+    }
+
+    InfoLabel &set_oas_token(uint8_t token)
+    {
+        oas_composite = (oas_composite & ~0xFFULL) | token;
+        return *this;
     }
 
     bool connected() const
     {
-        return (flags_value & CONNECTED_MASK) != 0;
+        return (flags & CONNECTED_MASK) != 0;
     }
 
     InfoLabel &set_connected(bool connected)
     {
         if (connected)
-        {
-            flags_value |= CONNECTED_MASK;
-        }
+            flags |= CONNECTED_MASK;
         else
-        {
-            flags_value &= ~CONNECTED_MASK;
-        }
+            flags &= ~CONNECTED_MASK;
         return *this;
     }
 
-    bool muted() const
+    bool ias_muted() const
     {
-        return (flags_value & MUTED_MASK) != 0;
+        return (flags & IAS_MUTED_MASK) != 0;
     }
 
-    InfoLabel &set_muted(bool muted)
+    InfoLabel &set_ias_muted(bool muted)
     {
         if (muted)
-            flags_value |= MUTED_MASK;
+            flags |= IAS_MUTED_MASK;
         else
-            flags_value &= ~MUTED_MASK;
+            flags &= ~IAS_MUTED_MASK;
+        return *this;
+    }
+
+    bool oas_muted() const
+    {
+        return (flags & OAS_MUTED_MASK) != 0;
+    }
+
+    InfoLabel &set_oas_muted(bool muted)
+    {
+        if (muted)
+            flags |= OAS_MUTED_MASK;
+        else
+            flags &= ~OAS_MUTED_MASK;
         return *this;
     }
 
     uint8_t itok() const
     {
-        return static_cast<uint8_t>((flags_value & IAS_TOKEN_MASK) >> IAS_TOKEN_POS);
+        return ias_token();
     }
 
     InfoLabel &set_itok(uint8_t token)
     {
-        flags_value = (flags_value & ~IAS_TOKEN_MASK) | (static_cast<uint32_t>(token) << IAS_TOKEN_POS);
-        return *this;
+        return set_ias_token(token);
     }
 
     uint8_t otok() const
     {
-        return static_cast<uint8_t>((flags_value & OAS_TOKEN_MASK) >> OAS_TOKEN_POS);
+        return oas_token();
     }
 
     InfoLabel &set_otok(uint8_t token)
     {
-        flags_value = (flags_value & ~OAS_TOKEN_MASK) | (static_cast<uint32_t>(token) << OAS_TOKEN_POS);
-        return *this;
+        return set_oas_token(token);
+    }
+
+    bool operator==(const InfoLabel &other) const
+    {
+        return ias_composite == other.ias_composite && oas_composite == other.oas_composite && flags == other.flags;
+    }
+
+    bool operator!=(const InfoLabel &other) const
+    {
+        return !(*this == other);
+    }
+
+    static uint32_t extract_ip(uint64_t composite)
+    {
+        return static_cast<uint32_t>(composite >> 32);
+    }
+
+    static uint8_t extract_token(uint64_t composite)
+    {
+        return static_cast<uint8_t>(composite & 0xFF);
+    }
+
+    static uint64_t make_composite(uint32_t ip, uint8_t token)
+    {
+        return (static_cast<uint64_t>(ip) << 32) | token;
     }
 };
 
