@@ -83,7 +83,7 @@ class OAStream : public std::enable_shared_from_this<OAStream>
 
     void register_listener(const std::shared_ptr<IAStream> &ias);
     void unregister_listener();
-    std::vector<InfoLabel> report_conns();
+    void report_conns(std::vector<InfoLabel> &result);
 
   private:
     void execute_loop(TimePointer tp, unsigned int cnt);
@@ -149,7 +149,7 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     unsigned int get_volume() const;
 
     void register_callback(AudioInputCallBack cb, void *ptr);
-    std::vector<InfoLabel> report_conns();
+    void report_conns(std::vector<InfoLabel> &result);
 
   private:
     void execute_loop(TimePointer tp, unsigned int cnt);
@@ -192,7 +192,7 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     void *usr_ptr;
 };
 
-class AudioPlayer
+class AudioPlayer : public std::enable_shared_from_this<AudioPlayer>
 {
   public:
     explicit AudioPlayer(unsigned char _token);

@@ -210,7 +210,7 @@ constexpr OToken operator""_otk(unsigned long long val) noexcept
 }
 
 constexpr auto USR_DUMMY_IN = 100_itk;
-constexpr auto USR_DUMMY_OUT = 100_otk;
+constexpr auto USR_DUMMY_OUT = 200_otk;
 
 class IAStream;
 class OAStream;
@@ -244,6 +244,10 @@ class AudioCenter
     RetCode stop(const std::string &path);
 
   private:
+    void schedule_report_timer() const;
+    void report_connections() const;
+
+  private:
     enum class State
     {
         INIT,
@@ -257,7 +261,7 @@ class AudioCenter
 
     std::shared_ptr<NetWorker> net_mgr;
     std::unique_ptr<AudioMonitor> monitor;
-    std::unique_ptr<AudioPlayer> player;
+    std::shared_ptr<AudioPlayer> player;
 };
 
 #define AUDIO_INFO_PRINT(fmt, ...) printf("[INF] %s(%d): " fmt "\n", __FUNCTION__, __LINE__, ##__VA_ARGS__)

@@ -2,22 +2,26 @@
 
 int main(int argc, char **argv)
 {
-    AudioPlayer player(USER_MAX_AUDIO_TOKEN);
-    auto oas = std::make_shared<OAStream>(12, AudioDeviceName("default", 0), enum2val(AudioPeriodSize::INR_20MS),
-                                          enum2val(AudioBandWidth::Full), 2);
-    oas->start();
-    AUDIO_DEBUG_PRINT("Start playing: %s", player.play("dukou.wav", 1, oas).msg);
+    AudioCenter center(false);
+    center.create(110_otk, AudioDeviceName("default", 0), AudioBandWidth::Full, AudioPeriodSize::INR_20MS, 2, false,
+                  false);
+    center.prepare();
+    center.connect(USR_DUMMY_IN, USR_DUMMY_OUT);
+    center.start();
+    center.play("CaliforniaHotel.wav", 0, 110_otk);
+
     std::this_thread::sleep_for(std::chrono::seconds(5));
-    oas->set_volume(0);
+    center.set_volume(110_otk, 0);
     std::this_thread::sleep_for(std::chrono::seconds(5));
-    oas->set_volume(25);
+    center.set_volume(110_otk, 25);
     std::this_thread::sleep_for(std::chrono::seconds(5));
-    oas->set_volume(50);
+    center.set_volume(110_otk, 45);
     std::this_thread::sleep_for(std::chrono::seconds(5));
-    oas->set_volume(75);
+    center.set_volume(110_otk, 75);
     std::this_thread::sleep_for(std::chrono::seconds(5));
-    oas->set_volume(100);
-    std::this_thread::sleep_for(std::chrono::minutes(4));
+    center.mute(USR_DUMMY_IN, true);
+    center.set_volume(110_otk, 100);
+    std::this_thread::sleep_for(std::chrono::minutes(6));
     // AUDIO_DEBUG_PRINT("Stop playing: %s", player.stop("dukou_44100.wav").msg);
     return 0;
 }

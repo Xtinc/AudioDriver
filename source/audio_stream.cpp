@@ -413,20 +413,15 @@ void OAStream::unregister_listener()
     listener.reset();
 }
 
-std::vector<InfoLabel> OAStream::report_conns()
+void OAStream::report_conns(std::vector<InfoLabel> &result)
 {
-    std::vector<InfoLabel> result;
-    result.reserve(6);
     auto oas_muted = muted.load();
-
     std::lock_guard<std::mutex> grd(session_mtx);
     for (const auto &session_pair : sessions)
     {
-        result.emplace_back(session_pair.first, InfoLabel::make_composite(0x7F000001, token),
+        result.emplace_back(session_pair.first, InfoLabel::make_composite(0, token),
                             session_pair.second->enabled, false, oas_muted);
     }
-
-    return result;
 }
 
 void OAStream::execute_loop(TimePointer tp, unsigned int cnt)
@@ -833,22 +828,17 @@ void IAStream::register_callback(AudioInputCallBack cb, void *ptr)
     usr_ptr = ptr;
 }
 
-std::vector<InfoLabel> IAStream::report_conns()
+void IAStream::report_conns(std::vector<InfoLabel> &result)
 {
-    std::vector<InfoLabel> result;
-    result.reserve(6);
     auto ias_muted = muted.load();
-
     std::lock_guard<std::mutex> grd(dest_mtx);
     for (auto iter : dests)
     {
         if (auto np = iter.lock())
         {
-            result.emplace_back(0x7F000001, token, 0x7F000001, np->token, false, ias_muted, false);
+            result.emplace_back(0, token, 0, np->token, false, ias_muted, false);
         }
     }
-
-    return result;
 }
 
 void IAStream::execute_loop(TimePointer tp, unsigned int cnt)
@@ -1070,7 +1060,7 @@ AudioPlayer::AudioPlayer(unsigned char _token) : token(_token), preemptive(0)
 
 AudioPlayer::~AudioPlayer() = default;
 
-RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared_ptr<OAStream> &sink)
+RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared_ptr<OAStream> &sink) 
 {
     if (preemptive > 5)
     {
@@ -1080,13 +1070,13 @@ RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared
     auto *raw_sender = new IAStream(token + preemptive, AudioDeviceName(name, cycles),
                                     enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2);
 
-    auto audio_sender = std::shared_ptr<IAStream>(raw_sender, [this, name](const IAStream *ptr) {
-        --preemptive;
-        std::lock_guard<std::mutex> grd(mtx);
-        auto iter = sounds.find(name);
-        if (iter != sounds.cend())
+    auto audio_sender = std::shared_ptr<IAStream>(raw_sender, [self = shared_from_this(), name](const IAStream *ptr) {
+        --(self->preemptive);
+        std::lock_guard<std::mutex> grd(self->mtx);
+        auto iter = self->sounds.find(name);
+        if (iter != self->sounds.cend())
         {
-            sounds.erase(iter);
+            self->sounds.erase(iter);
         }
 
         delete ptr;

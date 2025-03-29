@@ -2,6 +2,7 @@
 #include "audio_monitor.h"
 #include "audio_network.h"
 #include "audio_stream.h"
+#include <iomanip>
 
 static void print_device_change_info(AudioDeviceEvent event, const AudioDeviceInfo &info)
 {
@@ -22,11 +23,190 @@ static void print_device_change_info(AudioDeviceEvent event, const AudioDeviceIn
     }
 }
 
+static void print_merge_label(const std::vector<uint64_t> &vheader, const std::vector<uint64_t> &hheader,
+                              const std::vector<InfoLabel> &matrix, size_t rows, size_t cols)
+{
+    std::ostringstream oss;
+    const int width = 16;
+
+    oss << "+" << std::string(width, '-') << "+";
+    for (size_t i = 0; i < cols; i++)
+    {
+        oss << std::string(width, '-') << "+";
+    }
+    oss << "\n|    TOKEN@IP    |";
+
+    for (size_t i = 0; i < cols; i++)
+    {
+        uint8_t token = InfoLabel::extract_token(hheader[i]);
+        uint32_t ip = InfoLabel::extract_ip(hheader[i]);
+        char buf[20];
+        snprintf(buf, sizeof(buf), "%03d@0x%08X", token, ip);
+        oss << " " << buf << " |";
+    }
+    oss << "\n";
+    oss << "+" << std::string(width, '-') << "+";
+    for (size_t i = 0; i < cols; i++)
+    {
+        oss << std::string(width, '-') << "+";
+    }
+    oss << "\n";
+
+    for (size_t i = 0; i < rows; i++)
+    {
+        uint8_t vtoken = InfoLabel::extract_token(vheader[i]);
+        uint32_t vip = InfoLabel::extract_ip(vheader[i]);
+        char row_buf[20];
+        snprintf(row_buf, sizeof(row_buf), "%03d@0x%08X", vtoken, vip);
+        oss << "| " << row_buf << " |";
+
+        for (size_t j = 0; j < cols; j++)
+        {
+            const auto &ele = matrix[i * cols + j];
+            if (ele == InfoLabel{})
+            {
+                oss << " " << std::setw(width) << "|";
+            }
+            else
+            {
+                char status[20];
+                snprintf(status, sizeof(status), "      %c%c%c       |", ele.ias_muted() ? 'x' : '-',
+                         ele.connected() ? 'C' : '-', ele.oas_muted() ? 'x' : '-');
+                oss << status;
+            }
+        }
+        oss << "\n";
+    }
+
+    oss << "+" << std::string(width, '-') << "+";
+    for (size_t i = 0; i < cols; i++)
+    {
+        oss << std::string(width, '-') << "+";
+    }
+
+    AUDIO_INFO_PRINT("\n%s", oss.str().c_str());
+}
+
+static void merge_label(std::vector<InfoLabel> &ias_label, std::vector<InfoLabel> &oas_label)
+{
+    if (ias_label.empty() && oas_label.empty())
+    {
+        return;
+    }
+
+    std::sort(ias_label.begin(), ias_label.end());
+    std::sort(oas_label.begin(), oas_label.end());
+    std::vector<InfoLabel> merged_labels;
+    merged_labels.reserve(ias_label.size() + oas_label.size());
+
+    size_t i = 0;
+    size_t j = 0;
+
+    while (i < ias_label.size() && j < oas_label.size())
+    {
+        if (ias_label[i] < oas_label[j])
+        {
+            merged_labels.push_back(ias_label[i++]);
+        }
+        else if (ias_label[i] > oas_label[j])
+        {
+            merged_labels.push_back(oas_label[j++]);
+        }
+        else
+        {
+            auto temp = ias_label[i++];
+            temp.set_connected(oas_label[j].connected());
+            temp.set_oas_muted(oas_label[j].oas_muted());
+            merged_labels.push_back(temp);
+            j++;
+        }
+    }
+
+    while (i < ias_label.size())
+    {
+        merged_labels.push_back(ias_label[i++]);
+    }
+
+    while (j < oas_label.size())
+    {
+        merged_labels.push_back(oas_label[j++]);
+    }
+
+    std::vector<uint64_t> ias_tokens;
+    std::vector<uint64_t> oas_tokens;
+    ias_label.reserve(merged_labels.size());
+    oas_label.reserve(merged_labels.size());
+
+    uint64_t last_label = 0;
+    std::sort(merged_labels.begin(), merged_labels.end(),
+              [](const InfoLabel &a, const InfoLabel &b) { return a.itok() < b.itok(); });
+
+    for (const auto &label : merged_labels)
+    {
+        auto itok = label.itok();
+        if (itok != last_label)
+        {
+            ias_tokens.push_back(itok);
+            last_label = itok;
+        }
+    }
+
+    last_label = 0;
+    std::sort(merged_labels.begin(), merged_labels.end(),
+              [](const InfoLabel &a, const InfoLabel &b) { return a.otok() < b.otok(); });
+
+    for (const auto &label : merged_labels)
+    {
+        auto otok = label.otok();
+        if (otok != last_label)
+        {
+            oas_tokens.push_back(otok);
+            last_label = otok;
+        }
+    }
+
+    auto ias_cnt = ias_tokens.size();
+    auto oas_cnt = oas_tokens.size();
+
+    std::vector<InfoLabel> merged_matrix(ias_cnt * oas_cnt, InfoLabel{});
+    std::sort(merged_labels.begin(), merged_labels.end());
+
+    i = 0;
+    j = 0;
+    last_label = merged_labels[0].itok();
+
+    for (auto ele : merged_labels)
+    {
+        if (i == ias_cnt)
+        {
+            break;
+        }
+
+        if (ele.itok() != last_label)
+        {
+            last_label = ele.itok();
+            i++;
+            j = 0;
+        }
+
+        while (j < oas_cnt)
+        {
+            if (ele.otok() == oas_tokens[j])
+            {
+                merged_matrix[i * oas_cnt + j] = ele;
+            }
+            j++;
+        }
+    }
+
+    print_merge_label(ias_tokens, oas_tokens, merged_matrix, ias_cnt, oas_cnt);
+}
+
 // AudioCenter
 AudioCenter::AudioCenter(bool enable_network) : center_state(State::INIT)
 {
     monitor = std::make_unique<AudioMonitor>(BG_SERVICE);
-    player = std::make_unique<AudioPlayer>(USER_MAX_AUDIO_TOKEN);
+    player = std::make_shared<AudioPlayer>(USER_MAX_AUDIO_TOKEN);
     if (enable_network)
     {
         net_mgr = std::make_shared<NetWorker>(BG_SERVICE);
@@ -278,6 +458,7 @@ RetCode AudioCenter::start()
         }
     }
 
+    schedule_report_timer();
     AUDIO_DEBUG_PRINT("AudioCenter successfully started - transitioned to READY state");
     return RetCode::OK;
 }
@@ -289,6 +470,8 @@ RetCode AudioCenter::stop()
         AUDIO_ERROR_PRINT("AudioCenter not in READY state");
         return {RetCode::NOACTION, "AudioCenter not in READY state"};
     }
+
+    center_state.store(State::INIT);
 
     if (net_mgr)
     {
@@ -317,7 +500,6 @@ RetCode AudioCenter::stop()
         }
     }
 
-    center_state.store(State::INIT);
     AUDIO_DEBUG_PRINT("AudioCenter successfully stopped - reset to INIT state");
     return RetCode::OK;
 }
@@ -455,4 +637,41 @@ RetCode AudioCenter::stop(const std::string &path)
 
     AUDIO_INFO_PRINT("Stopping file %s", path.c_str());
     return player->stop(path);
+}
+
+void AudioCenter::schedule_report_timer() const
+{
+    auto timer = std::make_shared<asio::steady_timer>(BG_SERVICE, std::chrono::seconds(87));
+    timer->async_wait([this, timer](const asio::error_code &error) {
+        if (!error && center_state.load() == State::READY)
+        {
+            report_connections();
+            schedule_report_timer();
+        }
+    });
+}
+
+void AudioCenter::report_connections() const
+{
+    std::vector<InfoLabel> ias_label;
+    std::vector<InfoLabel> oas_label;
+    ias_label.reserve(6);
+    oas_label.reserve(6);
+
+    for (const auto &pair : ias_map)
+    {
+        pair.second->report_conns(ias_label);
+    }
+
+    for (const auto &pair : oas_map)
+    {
+        pair.second->report_conns(oas_label);
+    }
+
+    if (net_mgr)
+    {
+        net_mgr->report_conns(ias_label);
+    }
+
+    merge_label(ias_label, oas_label);
 }

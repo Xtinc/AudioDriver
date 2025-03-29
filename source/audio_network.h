@@ -83,29 +83,30 @@ constexpr uint8_t NET_MAGIC_NUM = 0xBA;
 constexpr unsigned int NETWORK_MAX_FRAMES = enum2val(AudioPeriodSize::INR_40MS) * enum2val(AudioBandWidth::Full) / 1000;
 constexpr unsigned int NETWORK_MAX_BUFFER_SIZE = NETWORK_MAX_FRAMES + 2 * sizeof(NetPacketHeader);
 
-/*                   Info Label Format
- 0                   1                   2                   3                   4                   5 6 7 0 1 2 3 4 5 6
-7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6
-7
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                           ias_ip (32 bits)                           |                        reserved |  ias_token |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                           oas_ip (32 bits)                           |                        reserved |  oas_token |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                                                                |C|I|O| |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/*                                                            Info Label Format
+0                   1                   2                   3                   4                   5 6 0 1 2 3 4 5 6 7
+8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                           ias_ip (32 bits)                           |                               reserved |
+ias_token
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                           oas_ip (32 bits)                           |                               reserved |
+oas_token
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                                                              |C|I|O| |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 C: Connected, 1-bit
 I: IAS Muted, 1-bit
 O: OAS Muted, 1-bit
 */
 
-class InfoLabel
+struct InfoLabel
 {
-  private:
     uint64_t ias_composite;
     uint64_t oas_composite;
     uint32_t flags;
 
+  private:
     enum FlagPositions
     {
         CONNECTED_POS = 0,
@@ -121,6 +122,10 @@ class InfoLabel
     };
 
   public:
+    InfoLabel() : ias_composite(0), oas_composite(0), flags(0)
+    {
+    }
+
     InfoLabel(uint32_t ias_ip, uint8_t ias_token, uint32_t oas_ip, uint8_t oas_token, bool connected, bool ias_muted,
               bool oas_muted)
         : ias_composite(make_composite(ias_ip, ias_token)), oas_composite(make_composite(oas_ip, oas_token)), flags(0)
@@ -154,28 +159,6 @@ class InfoLabel
         {
             flags |= OAS_MUTED_MASK;
         }
-    }
-
-    uint64_t ias_comp() const
-    {
-        return ias_composite;
-    }
-
-    InfoLabel &set_ias_comp(uint64_t comp)
-    {
-        ias_composite = comp;
-        return *this;
-    }
-
-    uint64_t oas_comp() const
-    {
-        return oas_composite;
-    }
-
-    InfoLabel &set_oas_comp(uint64_t comp)
-    {
-        oas_composite = comp;
-        return *this;
     }
 
     uint32_t ias_ip() const
@@ -230,9 +213,13 @@ class InfoLabel
     InfoLabel &set_connected(bool connected)
     {
         if (connected)
+        {
             flags |= CONNECTED_MASK;
+        }
         else
+        {
             flags &= ~CONNECTED_MASK;
+        }
         return *this;
     }
 
@@ -284,14 +271,41 @@ class InfoLabel
         return set_oas_token(token);
     }
 
-    bool operator==(const InfoLabel &other) const
+    bool operator<(const InfoLabel &other) const
     {
-        return ias_composite == other.ias_composite && oas_composite == other.oas_composite && flags == other.flags;
+        if (ias_composite < other.ias_composite)
+        {
+            return true;
+        }
+        else if (ias_composite > other.ias_composite)
+        {
+            return false;
+        }
+        else
+        {
+            return oas_composite < other.oas_composite;
+        }
     }
 
-    bool operator!=(const InfoLabel &other) const
+    bool operator>(const InfoLabel &other) const
     {
-        return !(*this == other);
+        if (ias_composite > other.ias_composite)
+        {
+            return true;
+        }
+        else if (ias_composite < other.ias_composite)
+        {
+            return false;
+        }
+        else
+        {
+            return oas_composite > other.oas_composite;
+        }
+    }
+
+    bool operator==(const InfoLabel &other) const
+    {
+        return ias_composite == other.ias_composite && oas_composite == other.oas_composite;
     }
 
     static uint32_t extract_ip(uint64_t composite)
@@ -488,7 +502,7 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     RetCode register_receiver(uint8_t token, ReceiveCallback callback);
     RetCode unregister_receiver(uint8_t token);
 
-    std::vector<InfoLabel> report_conns();
+    void report_conns(std::vector<InfoLabel> &result);
 
   private:
     void report();
