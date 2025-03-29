@@ -718,52 +718,67 @@ AudioDeviceInfo UdevNotificationHandler::GetDeviceInfo(struct udev_device *dev, 
         return info;
     }
 
-    // Get device ID
     const char *dev_path = udev_device_get_devpath(dev);
     if (dev_path)
     {
         info.id = dev_path;
     }
 
-    // Get device name
     const char *sysname = udev_device_get_sysname(dev);
-
     if (!sysname)
     {
         return info;
     }
 
-    // Extract card number from sysname
+    usleep(1000000); // 100ms delay to ensure device is ready
+
     int card_num = -1;
     if (sscanf(sysname, "card%d", &card_num) == 1)
     {
         char card_id[32];
         snprintf(card_id, sizeof(card_id), "hw:%d,0", card_num);
+        info.id = card_id;
 
-        // Get more descriptive name if possible
         info.name = get_device_description(card_id);
-        // If we couldn't get a proper name, use the card ID
         if (info.name.empty())
         {
             info.name = card_id;
         }
 
-        if (event == AudioDeviceEvent::Added || event == AudioDeviceEvent::StateChanged)
+        if (event == AudioDeviceEvent::Removed)
         {
-
-            // Assume the device is available but verify
-            snd_pcm_t *pcm = nullptr;
-            info.is_active = (snd_pcm_open(&pcm, card_id, SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK) >= 0);
-            if (pcm)
+            info.is_active = false;
+            info.type = AudioDeviceType::All;
+            info.is_default = false;
+        }
+        else
+        {
+            snd_pcm_t *pcm_play = nullptr;
+            bool can_play = (snd_pcm_open(&pcm_play, card_id, SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK) >= 0);
+            if (can_play && pcm_play)
             {
-                snd_pcm_close(pcm);
+                snd_pcm_close(pcm_play);
             }
 
-            // Determine device type
-            info.type = get_device_type(card_id);
+            snd_pcm_t *pcm_cap = nullptr;
+            bool can_capture = (snd_pcm_open(&pcm_cap, card_id, SND_PCM_STREAM_CAPTURE, SND_PCM_NONBLOCK) >= 0);
+            if (can_capture && pcm_cap)
+            {
+                snd_pcm_close(pcm_cap);
+            }
 
-            // Check if it is the default device
-            info.is_default = is_default_device(card_id, info.type);
+            if (can_play && can_capture)
+                info.type = AudioDeviceType::All;
+            else if (can_play)
+                info.type = AudioDeviceType::Playback;
+            else if (can_capture)
+                info.type = AudioDeviceType::Capture;
+            else
+                info.type = AudioDeviceType::All;
+
+            info.is_active = can_play || can_capture;
+
+            info.is_default = false;
         }
     }
     else
