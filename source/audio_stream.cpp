@@ -6,7 +6,7 @@
 // CoInitializeEx is not thread-safe
 static std::once_flag coinit_flag;
 #endif
-constexpr unsigned int AUDIO_MAX_RESET_INTERVAL = 1;
+constexpr unsigned int AUDIO_MAX_RESET_INTERVAL = 30;
 constexpr unsigned int AUDIO_MAX_COCURRECY_WORKER = 2;
 constexpr unsigned int SESSION_IDLE_TIMEOUT = 1000;
 constexpr AudioChannelMap DEFAULT_DUAL_MAP = {0, 1};
