@@ -80,6 +80,7 @@ class OAStream : public std::enable_shared_from_this<OAStream>
 
     RetCode set_volume(unsigned int vol);
     unsigned int get_volume() const;
+    AudioDeviceName name() const;
 
     void register_listener(const std::shared_ptr<IAStream> &ias);
     void unregister_listener();
@@ -147,6 +148,7 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     void unmute();
     RetCode set_volume(unsigned int vol);
     unsigned int get_volume() const;
+    AudioDeviceName name() const;
 
     void register_callback(AudioInputCallBack cb, void *ptr);
     void report_conns(std::vector<InfoLabel> &result);

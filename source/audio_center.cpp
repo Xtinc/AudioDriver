@@ -301,13 +301,60 @@ RetCode AudioCenter::prepare()
         return {RetCode::ESTATE, "AudioCenter not in INIT state"};
     }
 
-    ias_map.emplace(USR_DUMMY_IN,
-                    std::make_shared<IAStream>(USR_DUMMY_IN, AudioDeviceName("null", 0),
-                                               enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2));
-    oas_map.emplace(USR_DUMMY_OUT,
-                    std::make_shared<OAStream>(USR_DUMMY_OUT, AudioDeviceName("null", 0),
-                                               enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2));
-    monitor->RegisterCallback(print_device_change_info);
+    ias_map.emplace(USR_DUMMY_IN, std::make_shared<IAStream>(USR_DUMMY_IN, AudioDeviceName("null", 0),
+                                                             enum2val(AudioPeriodSize::INR_20MS),
+                                                             enum2val(AudioBandWidth::CDQuality), 2));
+    oas_map.emplace(USR_DUMMY_OUT, std::make_shared<OAStream>(USR_DUMMY_OUT, AudioDeviceName("null", 0),
+                                                              enum2val(AudioPeriodSize::INR_20MS),
+                                                              enum2val(AudioBandWidth::CDQuality), 2));
+    monitor->RegisterCallback([this](AudioDeviceEvent event, const AudioDeviceInfo &info) {
+        auto ias = ias_map.find(USR_DUMMY_IN);
+        if (ias == ias_map.end())
+        {
+            AUDIO_ERROR_PRINT("Dummy input stream not found");
+            return;
+        }
+
+        auto oas = oas_map.find(USR_DUMMY_OUT);
+        if (oas == oas_map.end())
+        {
+            AUDIO_ERROR_PRINT("Dummy output stream not found");
+            return;
+        }
+
+        switch (event)
+        {
+        case AudioDeviceEvent::Added:
+            AUDIO_INFO_PRINT("New device: %s", info.name.c_str());
+            if (info.type == AudioDeviceType::Capture)
+            {
+                ias->second->reset({info.id, 0});
+            }
+            else if (info.type == AudioDeviceType::Playback)
+            {
+                oas->second->reset({info.id, 0});
+            }
+            else
+            {
+                ias->second->reset({info.id, 0});
+                oas->second->reset({info.id, 0});
+            }
+            break;
+        case AudioDeviceEvent::Removed:
+            AUDIO_INFO_PRINT("Del device: %s", info.name.c_str());
+            if (ias->second->name().first == info.id)
+            {
+                ias->second->reset({"null", 0});
+            }
+            if (oas->second->name().first == info.id)
+            {
+                oas->second->reset({"null", 0});
+            }
+            break;
+        default:
+            break;
+        }
+    });
     AUDIO_DEBUG_PRINT("AudioCenter successfully prepared - transitioning from INIT to CONNECTING");
     return RetCode::OK;
 }

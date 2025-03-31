@@ -730,7 +730,7 @@ AudioDeviceInfo UdevNotificationHandler::GetDeviceInfo(struct udev_device *dev, 
         return info;
     }
 
-    usleep(1000000); // 100ms delay to ensure device is ready
+    usleep(600000); // 60ms delay to ensure device is ready
 
     int card_num = -1;
     if (sscanf(sysname, "card%d", &card_num) == 1)

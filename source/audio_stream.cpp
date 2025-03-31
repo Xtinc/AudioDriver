@@ -398,6 +398,11 @@ unsigned int OAStream::get_volume() const
     return volume.load();
 }
 
+AudioDeviceName OAStream::name() const
+{
+    return usr_name;
+}
+
 void OAStream::register_listener(const std::shared_ptr<IAStream> &ias)
 {
     ias->reset({odevice->hw_name, 0}, fs, ch);
@@ -419,8 +424,8 @@ void OAStream::report_conns(std::vector<InfoLabel> &result)
     std::lock_guard<std::mutex> grd(session_mtx);
     for (const auto &session_pair : sessions)
     {
-        result.emplace_back(session_pair.first, InfoLabel::make_composite(0, token),
-                            session_pair.second->enabled, false, oas_muted);
+        result.emplace_back(session_pair.first, InfoLabel::make_composite(0, token), session_pair.second->enabled,
+                            false, oas_muted);
     }
 }
 
@@ -822,6 +827,11 @@ unsigned int IAStream::get_volume() const
     return volume.load();
 }
 
+AudioDeviceName IAStream::name() const
+{
+    return usr_name;
+}
+
 void IAStream::register_callback(AudioInputCallBack cb, void *ptr)
 {
     usr_cb = cb;
@@ -1060,7 +1070,7 @@ AudioPlayer::AudioPlayer(unsigned char _token) : token(_token), preemptive(0)
 
 AudioPlayer::~AudioPlayer() = default;
 
-RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared_ptr<OAStream> &sink) 
+RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared_ptr<OAStream> &sink)
 {
     if (preemptive > 5)
     {

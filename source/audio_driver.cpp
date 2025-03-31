@@ -129,8 +129,9 @@ RetCode AlsaDriver::open()
 
     if (dev_ch < min_ch || dev_ch > max_ch)
     {
+        AUDIO_ERROR_PRINT("ALSA device [%s] invalid channel count: %u, reset to minimal channels", hw_name.c_str(),
+                          dev_ch);
         dev_ch = min_ch;
-        AUDIO_ERROR_PRINT("ALSA device [%s] invalid channel count: %u", hw_name.c_str(), dev_ch);
     }
 
     result = snd_pcm_hw_params_set_channels(handle, hw_params, dev_ch);
@@ -141,7 +142,7 @@ RetCode AlsaDriver::open()
     }
 
     int dir = 0;
-    snd_pcm_uframes_t period_size = dev_fs / 1000 * dev_ti;
+    snd_pcm_uframes_t period_size = dev_fs * dev_ti / 1000;
     result = snd_pcm_hw_params_set_period_size_near(handle, hw_params, &period_size, &dir);
     if (result < 0)
     {
@@ -386,6 +387,7 @@ void AlsaDriver::write_loop()
 void AlsaDriver::read_loop()
 {
     bool ok = true;
+    unsigned int print_cnt = 0;
     while (ok && hstate == STREAM_RUNNING)
     {
         auto cptr = dev_ps;
