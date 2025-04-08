@@ -292,6 +292,47 @@ RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBand
     return RetCode::OK;
 }
 
+RetCode AudioCenter::create(IToken itoken, OToken otoken, bool enable_network)
+{
+    if (!itoken)
+    {
+        AUDIO_ERROR_PRINT("Invalid input token: %u", itoken.tok);
+        return RetCode::EPARAM;
+    }
+
+    if (!otoken)
+    {
+        AUDIO_ERROR_PRINT("Invalid output token: %u", otoken.tok);
+        return RetCode::EPARAM;
+    }
+
+    auto oas = oas_map.find(otoken);
+    if (oas == oas_map.end())
+    {
+        AUDIO_ERROR_PRINT("Output token don't exists: %u", otoken.tok);
+        return RetCode::EPARAM;
+    }
+
+    if (ias_map.find(itoken) != ias_map.end())
+    {
+        AUDIO_ERROR_PRINT("Input token already exists: %u", itoken.tok);
+        return RetCode::EPARAM;
+    }
+
+    ias_map[itoken] =
+        std::make_shared<IAStream>(itoken, AudioDeviceName("null", 0), enum2val(AudioPeriodSize::INR_20MS),
+                                   enum2val(AudioBandWidth::CDQuality), 2);
+    if (enable_network)
+    {
+        ias_map[itoken]->initialize_network(net_mgr);
+        AUDIO_DEBUG_PRINT("Network initialized for input stream %u", itoken.tok);
+    }
+
+    oas->second->register_listener(ias_map[itoken]);
+
+    return RetCode::OK;
+}
+
 RetCode AudioCenter::prepare()
 {
     State expected = State::INIT;
@@ -617,7 +658,7 @@ RetCode AudioCenter::mute(AudioToken token, bool enable)
     return {RetCode::FAILED, "Token not found"};
 }
 
-RetCode AudioCenter::mute(OToken otoken, IToken itoken, bool enable, const std::string &ip)
+RetCode AudioCenter::mute(IToken itoken, OToken otoken, bool enable, const std::string &ip)
 {
     const char *action = enable ? "Muting" : "Unmuting";
 
