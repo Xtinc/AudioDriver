@@ -381,7 +381,7 @@ RetCode AudioCenter::prepare()
     return RetCode::OK;
 }
 
-RetCode AudioCenter::connect(IToken itoken, OToken otoken, const std::string &ip)
+RetCode AudioCenter::connect(IToken itoken, OToken otoken, const std::string &ip, uint16_t port)
 {
     State current = center_state.load();
     if (current != State::CONNECTING && current != State::READY)
@@ -412,7 +412,7 @@ RetCode AudioCenter::connect(IToken itoken, OToken otoken, const std::string &ip
         }
 
         AUDIO_INFO_PRINT("Try to connect stream %u -> %u on %s", itoken.tok, otoken.tok, ip.c_str());
-        return net_mgr->add_destination(itoken, otoken, ip);
+        return net_mgr->add_destination(itoken, otoken, ip, port);
     }
 
     auto oas = oas_map.find(otoken);
@@ -426,7 +426,7 @@ RetCode AudioCenter::connect(IToken itoken, OToken otoken, const std::string &ip
     return ias->second->connect(oas->second);
 }
 
-RetCode AudioCenter::disconnect(IToken itoken, OToken otoken, const std::string &ip)
+RetCode AudioCenter::disconnect(IToken itoken, OToken otoken, const std::string &ip, uint16_t port)
 {
     State current = center_state.load();
     if (current != State::CONNECTING && current != State::READY)
@@ -451,7 +451,7 @@ RetCode AudioCenter::disconnect(IToken itoken, OToken otoken, const std::string 
         }
 
         AUDIO_INFO_PRINT("Try to disconnect stream %u -> %u on %s", itoken.tok, otoken.tok, ip.c_str());
-        return net_mgr->del_destination(itoken, otoken, ip);
+        return net_mgr->del_destination(itoken, otoken, ip, port);
     }
 
     auto oas = oas_map.find(otoken);
@@ -665,7 +665,7 @@ RetCode AudioCenter::mute(IToken itoken, OToken otoken, bool enable, const std::
     return enable ? oas->second->mute(itoken, ip) : oas->second->unmute(itoken, ip);
 }
 
-RetCode AudioCenter::play(const std::string &name, int cycles, OToken otoken, const std::string &ip)
+RetCode AudioCenter::play(const std::string &name, int cycles, OToken otoken, const std::string &ip, uint16_t port)
 {
     if (center_state.load() != State::READY)
     {
@@ -682,7 +682,7 @@ RetCode AudioCenter::play(const std::string &name, int cycles, OToken otoken, co
     if (!ip.empty())
     {
         AUDIO_INFO_PRINT("Try to play file %s -> %u from %s", name.c_str(), otoken.tok, ip.c_str());
-        return player->play(name, cycles, net_mgr, otoken, ip);
+        return player->play(name, cycles, net_mgr, otoken, ip, port);
     }
 
     auto oas = oas_map.find(otoken);

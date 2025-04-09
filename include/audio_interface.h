@@ -231,8 +231,9 @@ class AudioCenter
     RetCode create(IToken itoken, OToken otoken, bool enable_network = false);
 
     RetCode prepare();
-    RetCode connect(IToken itoken, OToken otoken, const std::string &ip = "");
-    RetCode disconnect(IToken itoken, OToken otoken, const std::string &ip = "");
+    RetCode connect(IToken itoken, OToken otoken, const std::string &ip = "", uint16_t port = NETWORK_AUDIO_TRANS_PORT);
+    RetCode disconnect(IToken itoken, OToken otoken, const std::string &ip = "",
+                       uint16_t port = NETWORK_AUDIO_TRANS_PORT);
     RetCode register_callback(IToken token, AudioInputCallBack cb, void *ptr);
 
     RetCode start();
@@ -241,7 +242,8 @@ class AudioCenter
     RetCode set_volume(AudioToken token, unsigned int vol);
     RetCode mute(AudioToken token, bool enable);
     RetCode mute(IToken itoken, OToken token, bool enable, const std::string &ip = "");
-    RetCode play(const std::string &name, int cycles, OToken otoken, const std::string &ip = "");
+    RetCode play(const std::string &name, int cycles, OToken otoken, const std::string &ip = "",
+                 uint16_t port = NETWORK_AUDIO_TRANS_PORT);
     RetCode stop(const std::string &path);
 
   private:

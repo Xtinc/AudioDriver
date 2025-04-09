@@ -1150,7 +1150,7 @@ RetCode AudioPlayer::stop(const std::string &name)
 }
 
 RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared_ptr<NetWorker> &networker,
-                          uint8_t remote_token, const std::string &remote_ip)
+                          uint8_t remote_token, const std::string &remote_ip, uint16_t port)
 {
     if (!networker)
     {
@@ -1190,7 +1190,7 @@ RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared
         return init_result;
     }
 
-    auto add_result = networker->add_destination(audio_sender->token, remote_token, remote_ip);
+    auto add_result = networker->add_destination(audio_sender->token, remote_token, remote_ip, port);
     if (!add_result)
     {
         AUDIO_ERROR_PRINT("Failed to add destination %s for token %u: %s", remote_ip.c_str(), remote_token,
@@ -1204,7 +1204,7 @@ RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared
         if (sounds.find(name) != sounds.cend())
         {
             --preemptive;
-            networker->del_destination(audio_sender->token, remote_token, remote_ip);
+            networker->del_destination(audio_sender->token, remote_token, remote_ip, port);
             return {RetCode::FAILED, "Stream already exists"};
         }
         sounds.emplace(name, audio_sender);
@@ -1216,7 +1216,7 @@ RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared
         std::lock_guard<std::mutex> grd(mtx);
         sounds.erase(name);
         --preemptive;
-        networker->del_destination(audio_sender->token, remote_token, remote_ip);
+        networker->del_destination(audio_sender->token, remote_token, remote_ip, port);
         AUDIO_ERROR_PRINT("Failed to start streaming: %s", start_result.what());
         return start_result;
     }

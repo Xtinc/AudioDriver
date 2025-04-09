@@ -494,10 +494,8 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     RetCode register_sender(uint8_t sender_id, unsigned int channels, unsigned int sample_rate);
     RetCode unregister_sender(uint8_t sender_id);
     RetCode send_audio(uint8_t sender_id, const int16_t *data, unsigned int frames);
-    RetCode add_destination(uint8_t sender_id, uint8_t receiver_token, const std::string &ip,
-                            uint16_t port = NETWORK_AUDIO_TRANS_PORT);
-    RetCode del_destination(uint8_t sender_id, uint8_t receiver_token, const std::string &ip,
-                            uint16_t port = NETWORK_AUDIO_TRANS_PORT);
+    RetCode add_destination(uint8_t sender_id, uint8_t receiver_token, const std::string &ip, uint16_t port);
+    RetCode del_destination(uint8_t sender_id, uint8_t receiver_token, const std::string &ip, uint16_t port);
 
     RetCode register_receiver(uint8_t token, ReceiveCallback callback);
     RetCode unregister_receiver(uint8_t token);

@@ -207,7 +207,7 @@ class AudioPlayer : public std::enable_shared_from_this<AudioPlayer>
 
     RetCode play(const std::string &name, int cycles, const std::shared_ptr<OAStream> &sink);
     RetCode play(const std::string &name, int cycles, const std::shared_ptr<NetWorker> &networker, uint8_t remote_token,
-                 const std::string &remote_ip);
+                 const std::string &remote_ip, uint16_t port);
     RetCode stop(const std::string &name);
 
   private:
