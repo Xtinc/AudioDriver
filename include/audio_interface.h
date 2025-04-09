@@ -221,7 +221,7 @@ class AudioMonitor;
 class AudioCenter
 {
   public:
-    AudioCenter(bool enable_network = false);
+    AudioCenter(bool enable_network = false, uint16_t port = NETWORK_AUDIO_TRANS_PORT);
     ~AudioCenter();
 
     RetCode create(IToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps, unsigned int ch,

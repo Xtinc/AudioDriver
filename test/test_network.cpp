@@ -11,7 +11,6 @@ int main()
     center.prepare();
     center.start();
     center.connect(20_itk, 120_otk);
-    std::this_thread::sleep_for(std::chrono::seconds(2));
     std::this_thread::sleep_for(std::chrono::minutes(300));
     return 0;
 }

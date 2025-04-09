@@ -379,7 +379,7 @@ static RetCode resolve_endpoint(const std::string &ip, uint16_t port, asio::ip::
     }
 }
 
-NetWorker::NetWorker(asio::io_context &io_context)
+NetWorker::NetWorker(asio::io_context &io_context, uint16_t port)
     : retry_count(0), io_context(io_context), running(false), receive_buffer(new char[NETWORK_MAX_BUFFER_SIZE]),
       stats_timer(io_context)
 {
@@ -395,10 +395,10 @@ NetWorker::NetWorker(asio::io_context &io_context)
         socket->set_option(option_recv, ec);
         socket->set_option(asio::socket_base::reuse_address(true), ec);
 
-        socket->bind(udp::endpoint(udp::v4(), NETWORK_AUDIO_TRANS_PORT), ec);
+        socket->bind(udp::endpoint(udp::v4(), port), ec);
         if (ec)
         {
-            AUDIO_ERROR_PRINT("Failed to bind socket: %s", ec.message().c_str());
+            AUDIO_ERROR_PRINT("Failed to bind socket on port %d: %s", port, ec.message().c_str());
         }
 
         AUDIO_INFO_PRINT("NetWorker initialized on port %d", socket->local_endpoint().port());

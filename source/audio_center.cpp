@@ -4,25 +4,6 @@
 #include "audio_stream.h"
 #include <iomanip>
 
-static void print_device_change_info(AudioDeviceEvent event, const AudioDeviceInfo &info)
-{
-    switch (event)
-    {
-    case AudioDeviceEvent::Added:
-        AUDIO_INFO_PRINT("Device added: %s", info.name.c_str());
-        break;
-    case AudioDeviceEvent::Removed:
-        AUDIO_INFO_PRINT("Device removed: %s", info.name.c_str());
-        break;
-    case AudioDeviceEvent::StateChanged:
-        AUDIO_INFO_PRINT("Device state changed: %s", info.name.c_str());
-        break;
-    case AudioDeviceEvent::DefaultChanged:
-        AUDIO_INFO_PRINT("Default device changed: %s", info.name.c_str());
-        break;
-    }
-}
-
 static void print_merge_label(const std::vector<uint64_t> &vheader, const std::vector<uint64_t> &hheader,
                               const std::vector<InfoLabel> &matrix, size_t rows, size_t cols)
 {
@@ -203,13 +184,13 @@ static void merge_label(std::vector<InfoLabel> &ias_label, std::vector<InfoLabel
 }
 
 // AudioCenter
-AudioCenter::AudioCenter(bool enable_network) : center_state(State::INIT)
+AudioCenter::AudioCenter(bool enable_network, uint16_t port) : center_state(State::INIT)
 {
     monitor = std::make_unique<AudioMonitor>(BG_SERVICE);
     player = std::make_shared<AudioPlayer>(USER_MAX_AUDIO_TOKEN);
     if (enable_network)
     {
-        net_mgr = std::make_shared<NetWorker>(BG_SERVICE);
+        net_mgr = std::make_shared<NetWorker>(BG_SERVICE, port);
     }
 }
 

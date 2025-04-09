@@ -485,7 +485,7 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     };
 
   public:
-    explicit NetWorker(asio::io_context &io_context);
+    explicit NetWorker(asio::io_context &io_context, uint16_t port);
     ~NetWorker();
 
     RetCode start();
