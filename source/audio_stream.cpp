@@ -94,10 +94,12 @@ asio::io_context &BackgroundService::context()
 
 // OAStream
 OAStream::OAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs,
-                   unsigned int _ch, bool auto_reset)
-    : token(_token), ti(_ti), enable_reset(auto_reset), fs(_fs), ps(fs * ti / 1000), ch(_ch), usr_name(_name),
-      oas_ready(false), exec_timer(BG_SERVICE), exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE),
-      reset_strand(asio::make_strand(BG_SERVICE)), volume(50), muted(false)
+                   unsigned int _ch, bool auto_reset, AudioChannelMap _omap)
+    : token(_token), ti(_ti), enable_reset(auto_reset),
+      omap(_omap == AudioChannelMap{} ? (_ch == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP) : _omap), fs(_fs),
+      ps(fs * ti / 1000), ch(_ch), usr_name(_name), oas_ready(false), exec_timer(BG_SERVICE),
+      exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE), reset_strand(asio::make_strand(BG_SERVICE)),
+      volume(50), muted(false)
 {
     auto ret = create_device(_name);
     if (ret)
@@ -238,7 +240,6 @@ RetCode OAStream::direct_push(unsigned char itoken, unsigned int chan, unsigned 
     {
         unsigned int std_fr = (std::max)(frames, sample_rate * ti / 1000);
         auto imap = chan == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP;
-        auto omap = ch == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP;
         auto result = sessions.emplace(composite_key,
                                        std::make_unique<SessionContext>(sample_rate, chan, fs, ch, std_fr, imap, omap));
 
@@ -632,9 +633,31 @@ void OAStream::reset_self()
 // IAStream
 IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs,
                    unsigned int _ch, bool auto_reset)
-    : token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(_ch), enable_reset(auto_reset), usr_name(_name),
-      ias_ready(false), exec_timer(BG_SERVICE), exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE),
+    : token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(_ch), spf_ch(_ch),
+      imap(_ch == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP), enable_reset(auto_reset), usr_name(_name), ias_ready(false),
+      exec_timer(BG_SERVICE), exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE),
       reset_strand(asio::make_strand(BG_SERVICE)), volume(50), muted(false), usr_cb(nullptr), usr_ptr(nullptr)
+{
+    auto ret = create_device(_name);
+    if (ret)
+    {
+        ias_ready = true;
+    }
+    else
+    {
+        AUDIO_ERROR_PRINT("Failed to create device: %s", ret.what());
+    }
+
+    compressor = std::make_unique<DRCompressor>(static_cast<float>(fs));
+    dests.reserve(4);
+}
+
+IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs,
+                   unsigned int usr_ch, unsigned int dev_ch, AudioChannelMap _imap)
+    : token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(usr_ch), spf_ch(dev_ch), imap(_imap), enable_reset(false),
+      usr_name(_name), ias_ready(false), exec_timer(BG_SERVICE), exec_strand(asio::make_strand(BG_SERVICE)),
+      reset_timer(BG_SERVICE), reset_strand(asio::make_strand(BG_SERVICE)), volume(50), muted(false), usr_cb(nullptr),
+      usr_ptr(nullptr)
 {
     auto ret = create_device(_name);
     if (ret)
@@ -950,19 +973,19 @@ RetCode IAStream::create_device(const AudioDeviceName &_name)
     std::unique_ptr<AudioDevice> new_device;
     if (_name.first == "echo")
     {
-        new_device = make_audio_driver(ECHO_IAS, _name, fs, ps, ch, false);
+        new_device = make_audio_driver(ECHO_IAS, _name, fs, ps, spf_ch, false);
     }
     else if (_name.first == "null")
     {
-        new_device = make_audio_driver(NULL_IAS, _name, fs, ps, ch, false);
+        new_device = make_audio_driver(NULL_IAS, _name, fs, ps, spf_ch, false);
     }
     else if (check_wave_file_name(_name.first))
     {
-        new_device = make_audio_driver(WAVE_IAS, _name, fs, ps, ch, false);
+        new_device = make_audio_driver(WAVE_IAS, _name, fs, ps, spf_ch, false);
     }
     else
     {
-        new_device = make_audio_driver(PHSY_IAS, _name, fs, ps, ch, enable_reset);
+        new_device = make_audio_driver(PHSY_IAS, _name, fs, ps, spf_ch, enable_reset);
     }
 
     if (!new_device)
@@ -1003,8 +1026,7 @@ RetCode IAStream::swap_device(idevice_ptr &new_device)
     auto new_dev_buf = std::make_unique<char[]>(dev_fr * new_device->ch() * sizeof(PCM_TYPE));
     auto new_usr_buf = std::make_unique<char[]>(ps * ch * sizeof(PCM_TYPE));
 
-    auto new_sampler = std::make_unique<LocSampler>(new_device->fs(), new_device->ch(), fs, ch, dev_fr,
-                                                    new_device->ch() == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP,
+    auto new_sampler = std::make_unique<LocSampler>(new_device->fs(), new_device->ch(), fs, ch, dev_fr, imap,
                                                     ch == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP);
 
     if (!new_sampler->is_valid())
