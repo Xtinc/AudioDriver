@@ -479,14 +479,15 @@ RetCode AudioCenter::register_callback(IToken token, AudioInputCallBack cb, void
         return {RetCode::EPARAM, "Invalid token"};
     }
 
-    auto ias = ias_map.find(token);
-    if (ias == ias_map.end())
+    // Find the stream
+    auto it = ias_map.find(token);
+    if (it == ias_map.end())
     {
         AUDIO_ERROR_PRINT("Invalid input token: %u", token.tok);
         return {RetCode::EPARAM, "Invalid input token"};
     }
 
-    ias->second->register_callback(cb, ptr);
+    it->second->register_callback(cb, ptr);
     AUDIO_DEBUG_PRINT("Callback registered for input stream %u", token.tok);
     return RetCode::OK;
 }
