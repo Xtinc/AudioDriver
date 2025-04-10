@@ -491,6 +491,37 @@ RetCode AudioCenter::register_callback(IToken token, AudioInputCallBack cb, void
     return RetCode::OK;
 }
 
+RetCode AudioCenter::direct_push_pcm(IToken itoken, OToken otoken, unsigned int chan, unsigned int frames,
+                                     unsigned int sample_rate, const int16_t *data)
+{
+    if (center_state.load() != State::READY)
+    {
+        AUDIO_ERROR_PRINT("AudioCenter not in READY state");
+        return {RetCode::ESTATE, "AudioCenter not in READY state"};
+    }
+
+    if (!itoken)
+    {
+        AUDIO_ERROR_PRINT("Invalid input token: %u", itoken.tok);
+        return {RetCode::EPARAM, "Invalid input token"};
+    }
+
+    auto oas = oas_map.find(otoken);
+    if (oas == oas_map.end())
+    {
+        AUDIO_ERROR_PRINT("Invalid output token: %u", otoken.tok);
+        return {RetCode::EPARAM, "Invalid output token"};
+    }
+
+    if (!data)
+    {
+        AUDIO_ERROR_PRINT("Invalid data pointer");
+        return {RetCode::EPARAM, "Invalid data pointer"};
+    }
+
+    return oas->second->direct_push(itoken, chan, frames, sample_rate, data);
+}
+
 RetCode AudioCenter::start()
 {
     State expected = State::CONNECTING;

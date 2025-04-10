@@ -235,6 +235,8 @@ class AudioCenter
     RetCode disconnect(IToken itoken, OToken otoken, const std::string &ip = "",
                        uint16_t port = NETWORK_AUDIO_TRANS_PORT);
     RetCode register_callback(IToken token, AudioInputCallBack cb, void *ptr);
+    RetCode direct_push_pcm(IToken itoken, OToken otoken, unsigned int chan, unsigned int frames,
+                            unsigned int sample_rate, const int16_t *data);
 
     RetCode start();
     RetCode stop();
