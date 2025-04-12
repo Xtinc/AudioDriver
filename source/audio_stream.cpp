@@ -1026,8 +1026,8 @@ RetCode IAStream::swap_device(idevice_ptr &new_device)
     auto new_dev_buf = std::make_unique<char[]>(dev_fr * new_device->ch() * sizeof(PCM_TYPE));
     auto new_usr_buf = std::make_unique<char[]>(ps * ch * sizeof(PCM_TYPE));
 
-    auto new_sampler = std::make_unique<LocSampler>(new_device->fs(), new_device->ch(), fs, ch, dev_fr, imap,
-                                                    ch == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP);
+    auto new_sampler = std::make_unique<LocSampler>(new_device->fs(), new_device->ch(), fs, ch, dev_fr,
+                                                    new_device->ch() == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP, imap);
 
     if (!new_sampler->is_valid())
     {

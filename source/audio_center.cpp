@@ -329,6 +329,12 @@ RetCode AudioCenter::prepare()
     oas_map.emplace(USR_DUMMY_OUT, std::make_shared<OAStream>(USR_DUMMY_OUT, AudioDeviceName("null", 0),
                                                               enum2val(AudioPeriodSize::INR_20MS),
                                                               enum2val(AudioBandWidth::CDQuality), 2));
+    if (net_mgr)
+    {
+        ias_map[USR_DUMMY_IN.tok]->initialize_network(net_mgr);
+        oas_map[USR_DUMMY_OUT.tok]->initialize_network(net_mgr);
+    }
+
     monitor->RegisterCallback([this](AudioDeviceEvent event, const AudioDeviceInfo &info) {
         auto ias = ias_map.find(USR_DUMMY_IN);
         if (ias == ias_map.end())
