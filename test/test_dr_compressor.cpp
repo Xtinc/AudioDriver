@@ -5,12 +5,11 @@
 
 void test_static_characteristics()
 {
-
     float sample_rate = 44100.0f;
-    DRCompressor comp1(sample_rate, -20.0f, 2.0f, 0.01f, 0.01f, 10.0f); // 阈值低, 压缩比适中
-    DRCompressor comp2(sample_rate, -10.0f, 2.0f, 0.01f, 0.01f, 10.0f); // 阈值高, 压缩比相同
-    DRCompressor comp3(sample_rate, -20.0f, 4.0f, 0.01f, 0.01f, 10.0f); // 阈值相同, 高压缩比
-    DRCompressor comp4(sample_rate, -20.0f, 2.0f, 0.01f, 0.01f, 2.0f);  // 窄knee宽度
+    DRCompressor comp1(sample_rate, -20.0f, 2.0f, 0.01f, 0.01f, 10.0f);
+    DRCompressor comp2(sample_rate, -10.0f, 2.0f, 0.01f, 0.01f, 10.0f);
+    DRCompressor comp3(sample_rate, -20.0f, 4.0f, 0.01f, 0.01f, 10.0f);
+    DRCompressor comp4(sample_rate, -20.0f, 2.0f, 0.01f, 0.01f, 2.0f);
     std::ofstream outfile("static_characteristics.csv");
     outfile
         << "input_db,comp1_db,comp2_db,comp3_db,comp4_db,input_level,comp1_level,comp2_level,comp3_level,comp4_level"
@@ -53,7 +52,6 @@ void test_static_characteristics()
     outfile.close();
 }
 
-// 测试DRCompressor的动态特性
 void test_dynamic_response()
 {
     float sample_rate = 44100.0f;
@@ -61,7 +59,7 @@ void test_dynamic_response()
 
     DRCompressor fast_comp(sample_rate, -20.0f, 4.0f, 0.001f, 0.01f, 6.0f);
     DRCompressor med_comp(sample_rate, -20.0f, 4.0f, 0.01f, 0.1f, 6.0f);
-    DRCompressor slow_comp(sample_rate, -20.0f, 4.0f, 0.1f, 0.5f, 6.0f); 
+    DRCompressor slow_comp(sample_rate, -20.0f, 4.0f, 0.1f, 0.5f, 6.0f);
 
     float test_duration = 8.0f;
     unsigned int samples = static_cast<unsigned int>(sample_rate * test_duration);
