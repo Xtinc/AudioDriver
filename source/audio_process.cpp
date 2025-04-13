@@ -349,18 +349,18 @@ float DRCompressor::compute_gain(float inputLevelDB)
 {
     float gainReduction = 0.0f;
 
-    if (inputLevelDB <= knee_threshold_lower)
+    if (inputLevelDB < knee_threshold_lower)
     {
         gainReduction = 0.0f;
     }
-    else if (inputLevelDB >= knee_threshold_upper)
+    else if (inputLevelDB > knee_threshold_upper)
     {
         gainReduction = (threshold - inputLevelDB) * (1.0f - 1.0f / ratio);
     }
     else
     {
         const float overshoot = inputLevelDB - knee_threshold_lower;
-        const float compressionFactor = overshoot / knee_width;
+        const float compressionFactor = overshoot / (2.0f * knee_width);
         gainReduction = overshoot * compressionFactor * (1.0f - 1.0f / ratio);
     }
 
