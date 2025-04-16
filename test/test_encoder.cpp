@@ -5,6 +5,8 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <algorithm>
+#include <numeric>
 
 // Calculate Signal-to-Noise Ratio (SNR) between original and decoded data
 double calculate_snr(const std::vector<int16_t> &original, const std::vector<int16_t> &decoded)
@@ -88,6 +90,12 @@ int main(int argc, char *argv[])
     double total_signal_power = 0.0;
     double total_noise_power = 0.0;
     uint64_t total_processed_frames = 0;
+    
+    // 收集每个块的SNR值进行统计
+    std::vector<double> snr_values;
+    
+    // 用于记录能量水平和对应的SNR
+    std::vector<std::pair<double, double>> energy_snr_pairs;
 
     // Process data in blocks
     for (uint64_t frame_pos = 0; frame_pos < total_frames; frame_pos += buffer_frames)
@@ -141,7 +149,20 @@ int main(int argc, char *argv[])
         std::vector<int16_t> original(input_buffer.begin(), input_buffer.begin() + current_frames * channels);
         std::vector<int16_t> decoded(output_buffer.begin(), output_buffer.begin() + current_frames * channels);
 
+        // 计算当前块的信号能量
+        double block_signal_power = 0.0;
+        for (const auto& sample : original) {
+            block_signal_power += static_cast<double>(sample) * sample;
+        }
+        block_signal_power /= original.size();
+        
         double current_snr = calculate_snr(original, decoded);
+        
+        // 只有当信号能量大于阈值时才记录SNR，避免静音段的影响
+        if (block_signal_power > 100.0) {
+            snr_values.push_back(current_snr);
+            energy_snr_pairs.emplace_back(block_signal_power, current_snr);
+        }
 
         // Accumulate for overall SNR
         for (size_t i = 0; i < current_frames * channels; ++i)
@@ -162,6 +183,90 @@ int main(int argc, char *argv[])
         }
     }
 
+    // 计算SNR统计信息
+    std::cout << "\n\nSNR Distribution Statistics:" << std::endl;
+    
+    if (snr_values.empty()) {
+        std::cout << "No valid SNR values collected." << std::endl;
+    } else {
+        // 排序用于百分位数计算
+        std::sort(snr_values.begin(), snr_values.end());
+        
+        double min_snr = snr_values.front();
+        double max_snr = snr_values.back();
+        double median_snr = snr_values[snr_values.size() / 2];
+        double sum = std::accumulate(snr_values.begin(), snr_values.end(), 0.0);
+        double mean = sum / snr_values.size();
+        
+        // 计算标准差
+        double sq_sum = std::inner_product(snr_values.begin(), snr_values.end(), snr_values.begin(), 0.0);
+        double stdev = std::sqrt(sq_sum / snr_values.size() - mean * mean);
+        
+        // 计算百分位数
+        auto percentile = [&snr_values](double p) -> double {
+            size_t idx = static_cast<size_t>(p * snr_values.size() / 100);
+            return snr_values[idx];
+        };
+        
+        std::cout << "  Total blocks with valid SNR: " << snr_values.size() << std::endl;
+        std::cout << "  Min SNR: " << std::fixed << std::setprecision(2) << min_snr << " dB" << std::endl;
+        std::cout << "  Max SNR: " << max_snr << " dB" << std::endl;
+        std::cout << "  Average SNR: " << mean << " dB" << std::endl;
+        std::cout << "  Median SNR: " << median_snr << " dB" << std::endl;
+        std::cout << "  Standard Deviation: " << stdev << " dB" << std::endl;
+        std::cout << "  10th percentile: " << percentile(10) << " dB" << std::endl;
+        std::cout << "  25th percentile: " << percentile(25) << " dB" << std::endl;
+        std::cout << "  75th percentile: " << percentile(75) << " dB" << std::endl;
+        std::cout << "  90th percentile: " << percentile(90) << " dB" << std::endl;
+        
+        // 打印SNR分布直方图
+        std::cout << "\nSNR Distribution Histogram:" << std::endl;
+        
+        const int num_bins = 10;
+        const double bin_width = (max_snr - min_snr) / num_bins;
+        std::vector<int> histogram(num_bins, 0);
+        
+        for (double snr : snr_values) {
+            int bin = static_cast<int>((snr - min_snr) / bin_width);
+            if (bin >= num_bins) bin = num_bins - 1;
+            histogram[bin]++;
+        }
+        
+        const int max_bar_width = 50;
+        int max_count = *std::max_element(histogram.begin(), histogram.end());
+        
+        for (int i = 0; i < num_bins; i++) {
+            double bin_start = min_snr + i * bin_width;
+            double bin_end = bin_start + bin_width;
+            int bar_width = static_cast<int>(static_cast<double>(histogram[i]) * max_bar_width / max_count);
+            
+            std::cout << std::fixed << std::setprecision(1) << std::setw(5) << bin_start << " - " 
+                      << std::setw(5) << bin_end << " dB: " << std::string(bar_width, '#') 
+                      << " (" << histogram[i] << ")" << std::endl;
+        }
+        
+        // 输出信号能量与SNR的关系
+        std::cout << "\nSignal Energy vs SNR (sample of points):" << std::endl;
+        
+        // 对能量-SNR对按能量排序
+        std::sort(energy_snr_pairs.begin(), energy_snr_pairs.end());
+        
+        // 仅显示有代表性的点（最多20个点）
+        const size_t max_points = 20;
+        size_t step = energy_snr_pairs.size() / std::min(max_points, energy_snr_pairs.size());
+        if (step < 1) step = 1;
+        
+        std::cout << "  Energy Level (dB)  |  SNR (dB)" << std::endl;
+        std::cout << " ----------------------------" << std::endl;
+        
+        for (size_t i = 0; i < energy_snr_pairs.size(); i += step) {
+            double energy_db = 10.0 * log10(energy_snr_pairs[i].first + 1e-10);
+            std::cout << "  " << std::fixed << std::setprecision(2) << std::setw(10) 
+                      << energy_db << "        |  " << std::setw(6) 
+                      << energy_snr_pairs[i].second << std::endl;
+        }
+    }
+
     // Calculate overall SNR
     auto overall_snr = (total_noise_power < 1e-10 || total_signal_power < 1e-10)
                            ? 0.0f
@@ -170,12 +275,8 @@ int main(int argc, char *argv[])
     std::cout << "\nProcessing complete!" << std::endl;
     std::cout << "Overall SNR: " << std::fixed << std::setprecision(2) << overall_snr << " dB" << std::endl;
     std::cout << "Original size: " << (total_frames * channels * 2) << " bytes" << std::endl;
-
-    // Calculate theoretical ADPCM size (4 bytes header per channel + 4 bits per sample)
-    size_t adpcm_size = channels * 4 + (total_frames * channels + 1) / 2;
-    std::cout << "ADPCM encoded size: " << adpcm_size << " bytes" << std::endl;
-    std::cout << "Compression ratio: " << std::fixed << std::setprecision(2)
-              << (static_cast<float>(total_frames * channels * 2) / adpcm_size) << ":1" << std::endl;
-
+    std::cout << "Encoded size: " << (total_frames * channels) << " bytes (8-bit ADPCM)" << std::endl;
+    std::cout << "Compression ratio: 2:1" << std::endl;
+    
     return 0;
 }

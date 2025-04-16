@@ -93,7 +93,39 @@ bool KFifo::load_aside(size_t read_length)
 }
 
 // Standard IMA ADPCM index table and step table
-static constexpr int ADPCM_INDEX_TABLE[16] = {-1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8};
+static constexpr int ADPCM_INDEX_TABLE_8BIT[256] = {
+    // 0-15
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    // 16-31
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    // 32-47
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    // 48-63
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    // 64-79
+    2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3,
+    // 80-95
+    4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5,
+    // 96-111
+    6, 6, 6, 6, 6, 7, 7, 7, 8, 8, 8, 9, 9, 9, 10, 10,
+    // 112-127
+    10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+    // 128-143
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    // 144-159
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    // 160-175
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    // 176-191
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    // 192-207
+    2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3,
+    // 208-223
+    4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5,
+    // 224-239F
+    6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7,
+    // 240-255
+    10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25};
 static constexpr int ADPCM_STEP_TABLE[89] = {
     7,    8,     9,     10,    11,    12,    13,    14,    16,    17,    19,    21,    23,    25,   28,
     31,   34,    37,    41,    45,    50,    55,    60,    66,    73,    80,    88,    97,    107,  118,
@@ -123,7 +155,7 @@ void NetEncoder::reset() noexcept
 
 size_t NetEncoder::calculate_encoded_size(unsigned int frames) const noexcept
 {
-    return channels * ADPCM_HEADER_SIZE_PER_CHANNEL + (frames * channels + 1) / 2;
+    return channels * ADPCM_HEADER_SIZE_PER_CHANNEL + (frames * channels);
 }
 
 uint8_t NetEncoder::encode_sample(int16_t sample, NetEncoder::State &state)
@@ -133,40 +165,36 @@ uint8_t NetEncoder::encode_sample(int16_t sample, NetEncoder::State &state)
 
     if (diff < 0)
     {
-        code = 8;
+        code = 0x80;
         diff = -diff;
     }
 
     int step = ADPCM_STEP_TABLE[state.step_index];
 
-    int temp = step;
-    if (diff >= temp)
+    for (int i = 6; i >= 0; i--)
     {
-        code |= 4;
-        diff -= temp;
+        int temp = step >> (6 - i);
+        if (diff >= temp)
+        {
+            code |= (1 << i);
+            diff -= temp;
+        }
     }
-    temp = step >> 1;
-    if (diff >= temp)
-    {
-        code |= 2;
-        diff -= temp;
-    }
-    temp = step >> 2;
-    if (diff >= temp)
-    {
-        code |= 1;
-    }
+
+    int recon_diff = diff;
 
     diff = 0;
-    if (code & 4)
-        diff += step;
-    if (code & 2)
-        diff += step >> 1;
-    if (code & 1)
-        diff += step >> 2;
-    diff += step >> 3;
+    for (int i = 6; i >= 0; i--)
+    {
+        if (code & (1 << i))
+        {
+            diff += step >> (6 - i);
+        }
+    }
+    diff += step >> 7;
+    // std::cout<<"code:\t"<<(int)code<<"\t\tdiff:\t"<<recon_diff<<std::endl;
 
-    if (code & 8)
+    if (code & 0x80)
         state.predictor -= diff;
     else
         state.predictor += diff;
@@ -176,14 +204,14 @@ uint8_t NetEncoder::encode_sample(int16_t sample, NetEncoder::State &state)
     else if (state.predictor < -32768)
         state.predictor = -32768;
 
-    state.step_index += ADPCM_INDEX_TABLE[code & 15];
+    state.step_index += ADPCM_INDEX_TABLE_8BIT[code];
 
     if (state.step_index < 0)
         state.step_index = 0;
     else if (state.step_index > 88)
         state.step_index = 88;
 
-    return code & 15;
+    return code;
 }
 
 const uint8_t *NetEncoder::encode(const int16_t *pcm_data, unsigned int frames, size_t &out_size)
@@ -210,17 +238,10 @@ const uint8_t *NetEncoder::encode(const int16_t *pcm_data, unsigned int frames, 
     }
 
     unsigned int samples_to_encode = frames * channels;
-    for (unsigned int i = 0; i < samples_to_encode; i += 2)
+    for (unsigned int i = 0; i < samples_to_encode; i++)
     {
         unsigned int ch = i % channels;
-        uint8_t nibble1 = encode_sample(pcm_data[i], encode_states[ch]);
-        uint8_t nibble2 = 0;
-        if (i + 1 < samples_to_encode)
-        {
-            ch = (i + 1) % channels;
-            nibble2 = encode_sample(pcm_data[i + 1], encode_states[ch]);
-        }
-        *out++ = nibble1 | (nibble2 << 4);
+        *out++ = encode_sample(pcm_data[i], encode_states[ch]);
     }
 
     return encode_buffer.get();
@@ -247,15 +268,17 @@ int16_t NetDecoder::decode_sample(uint8_t code, NetDecoder::State &state)
 {
     int step = ADPCM_STEP_TABLE[state.step_index];
 
-    int diff = step >> 3;
-    if (code & 1)
-        diff += step >> 2;
-    if (code & 2)
-        diff += step >> 1;
-    if (code & 4)
-        diff += step;
+    int diff = step >> 7;
 
-    if (code & 8)
+    for (int i = 0; i < 7; i++)
+    {
+        if (code & (1 << i))
+        {
+            diff += step >> (6 - i);
+        }
+    }
+
+    if (code & 0x80)
         state.predictor -= diff;
     else
         state.predictor += diff;
@@ -265,7 +288,7 @@ int16_t NetDecoder::decode_sample(uint8_t code, NetDecoder::State &state)
     else if (state.predictor < -32768)
         state.predictor = -32768;
 
-    state.step_index += ADPCM_INDEX_TABLE[code & 15];
+    state.step_index += ADPCM_INDEX_TABLE_8BIT[code];
 
     if (state.step_index < 0)
         state.step_index = 0;
@@ -285,9 +308,7 @@ const int16_t *NetDecoder::decode(const uint8_t *adpcm_data, size_t adpcm_size, 
 
     size_t header_size = channels * ADPCM_HEADER_SIZE_PER_CHANNEL;
     size_t adpcm_data_size = adpcm_size - header_size;
-    size_t adpcm_samples = adpcm_data_size * 2; // Each byte contains two 4-bit samples
-
-    out_frames = static_cast<unsigned int>(adpcm_samples / channels);
+    out_frames = static_cast<unsigned int>(adpcm_data_size / channels);
     out_frames = std::min(out_frames, max_frames);
 
     std::memset(decode_buffer.get(), 0, out_frames * channels * sizeof(int16_t));
@@ -309,12 +330,7 @@ const int16_t *NetDecoder::decode(const uint8_t *adpcm_data, size_t adpcm_size, 
         uint8_t byte = adpcm_data[header_size + i];
 
         unsigned int ch = sample_index % channels;
-        decode_buffer[sample_index++] = decode_sample(byte & 0x0F, decode_states[ch]);
-        if (sample_index < out_frames * channels)
-        {
-            ch = sample_index % channels;
-            decode_buffer[sample_index++] = decode_sample((byte >> 4) & 0x0F, decode_states[ch]);
-        }
+        decode_buffer[sample_index++] = decode_sample(byte, decode_states[ch]);
     }
 
     return decode_buffer.get();
@@ -519,7 +535,7 @@ RetCode NetWorker::unregister_receiver(uint8_t token)
     return {RetCode::OK, "Receiver unregistered"};
 }
 
-void NetWorker::report_conns(std::vector<InfoLabel>& result)
+void NetWorker::report_conns(std::vector<InfoLabel> &result)
 {
     std::lock_guard<std::mutex> lock(senders_mutex);
     for (const auto &pair : senders)
@@ -527,8 +543,8 @@ void NetWorker::report_conns(std::vector<InfoLabel>& result)
         const auto &context = pair.second;
         for (const auto &dest : context.destinations)
         {
-            result.emplace_back(0, pair.first, dest.endpoint.address().to_v4().to_uint(), dest.receiver_token,
-                                true, false, false);
+            result.emplace_back(0, pair.first, dest.endpoint.address().to_v4().to_uint(), dest.receiver_token, true,
+                                false, false);
         }
     }
 }
