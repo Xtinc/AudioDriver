@@ -4,11 +4,13 @@
 #if WINDOWS_OS_ENVIRONMENT
 // must be included after mmdeviceapi.h
 #include <functiondiscoverykeys_devpkey.h>
+
+#include <utility>
 std::string AudioMonitor::WideToUtf8(const std::wstring &wstr)
 {
     if (wstr.empty())
     {
-        return std::string();
+        return {};
     }
 
     int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, nullptr, 0, nullptr, nullptr);
@@ -28,7 +30,7 @@ std::wstring AudioMonitor::Utf8ToWide(const std::string &str)
 {
     if (str.empty())
     {
-        return std::wstring();
+        return {};
     }
 
     int size_needed = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, nullptr, 0);
@@ -47,7 +49,7 @@ std::wstring AudioMonitor::Utf8ToWide(const std::string &str)
 // DeviceNotificationClient implementation
 DeviceNotificationClient::DeviceNotificationClient(
     std::function<void(AudioDeviceEvent, const AudioDeviceInfo &)> callback)
-    : callback_(callback), ref_count_(1), enumerator_(nullptr)
+    : callback_(std::move(callback)), ref_count_(1), enumerator_(nullptr)
 {
     HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator),
                                   reinterpret_cast<void **>(&enumerator_));
@@ -98,7 +100,6 @@ HRESULT STDMETHODCALLTYPE DeviceNotificationClient::QueryInterface(REFIID riid, 
 
 HRESULT STDMETHODCALLTYPE DeviceNotificationClient::OnDeviceStateChanged(LPCWSTR pwstrDeviceId, DWORD dwNewState)
 {
-    AudioDeviceInfo device_info;
     bool is_active = false;
 
     switch (dwNewState)
@@ -114,7 +115,7 @@ HRESULT STDMETHODCALLTYPE DeviceNotificationClient::OnDeviceStateChanged(LPCWSTR
     }
 
     // Get device information
-    device_info = GetDeviceInfo(pwstrDeviceId);
+    AudioDeviceInfo device_info = GetDeviceInfo(pwstrDeviceId);
     device_info.is_active = is_active;
 
     if (callback_)
@@ -194,13 +195,14 @@ HRESULT STDMETHODCALLTYPE DeviceNotificationClient::OnDefaultDeviceChanged(EData
     return S_OK;
 }
 
-HRESULT STDMETHODCALLTYPE DeviceNotificationClient::OnPropertyValueChanged(LPCWSTR pwstrDeviceId, const PROPERTYKEY key)
+HRESULT STDMETHODCALLTYPE DeviceNotificationClient::OnPropertyValueChanged(LPCWSTR /*pwstrDeviceId*/,
+                                                                           const PROPERTYKEY /*key*/)
 {
     // We do not handle property changes
     return S_OK;
 }
 
-AudioDeviceInfo DeviceNotificationClient::GetDeviceInfo(LPCWSTR pwstrDeviceId, AudioDeviceType type)
+AudioDeviceInfo DeviceNotificationClient::GetDeviceInfo(LPCWSTR pwstrDeviceId, AudioDeviceType type) const
 {
     AudioDeviceInfo info;
     IMMDevice *device = nullptr;
@@ -224,7 +226,7 @@ AudioDeviceInfo DeviceNotificationClient::GetDeviceInfo(LPCWSTR pwstrDeviceId, A
 
     // Determine device type
     IMMEndpoint *endpoint = nullptr;
-    hr = device->QueryInterface(__uuidof(IMMEndpoint), (void **)&endpoint);
+    hr = device->QueryInterface(__uuidof(IMMEndpoint), reinterpret_cast<void **>(&endpoint));
     if (SUCCEEDED(hr) && endpoint)
     {
         EDataFlow flow;
@@ -300,7 +302,7 @@ AudioDeviceInfo AudioMonitor::GetDefaultDevice(AudioDeviceType type)
 {
     if (!enumerator_)
     {
-        return AudioDeviceInfo();
+        return {};
     }
 
     // If all types are requested, default to returning playback device
@@ -316,10 +318,10 @@ AudioDeviceInfo AudioMonitor::GetDefaultDevice(AudioDeviceType type)
         return info;
     }
 
-    return AudioDeviceInfo();
+    return {};
 }
 
-bool AudioMonitor::DeviceExists(const std::string &device_id)
+bool AudioMonitor::DeviceExists(const std::string &device_id) const
 {
     if (!enumerator_ || device_id.empty())
     {
@@ -945,7 +947,7 @@ std::vector<AudioDeviceInfo> AudioMonitor::EnumerateDevices(AudioDeviceType type
     return devices;
 }
 
-AudioDeviceInfo AudioMonitor::GetDeviceInfo(IMMDevice *device, AudioDeviceType type)
+AudioDeviceInfo AudioMonitor::GetDeviceInfo(IMMDevice *device, AudioDeviceType type) const
 {
     AudioDeviceInfo info;
     IPropertyStore *props = nullptr;
@@ -962,7 +964,7 @@ AudioDeviceInfo AudioMonitor::GetDeviceInfo(IMMDevice *device, AudioDeviceType t
 
     // Determine device type
     IMMEndpoint *endpoint = nullptr;
-    hr = device->QueryInterface(__uuidof(IMMEndpoint), (void **)&endpoint);
+    hr = device->QueryInterface(__uuidof(IMMEndpoint), reinterpret_cast<void **>(&endpoint));
     if (SUCCEEDED(hr) && endpoint)
     {
         EDataFlow flow;

@@ -181,8 +181,6 @@ uint8_t NetEncoder::encode_sample(int16_t sample, NetEncoder::State &state)
         }
     }
 
-    int recon_diff = diff;
-
     diff = 0;
     for (int i = 6; i >= 0; i--)
     {
@@ -684,7 +682,7 @@ RetCode NetWorker::send_audio(uint8_t sender_id, const int16_t *data, unsigned i
     header.sender_id = sender_id;
     header.channels = static_cast<uint8_t>(context.channels);
     header.magic_num = NET_MAGIC_NUM;
-    header.sample_rate = context.sample_rate / 1000;
+    header.sample_rate = static_cast<uint8_t>((context.sample_rate) / 1000);
     header.sequence = context.isequence++;
     header.timestamp =
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())

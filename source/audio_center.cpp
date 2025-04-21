@@ -8,7 +8,7 @@ static void print_merge_label(const std::vector<uint64_t> &vheader, const std::v
                               const std::vector<InfoLabel> &matrix, size_t rows, size_t cols)
 {
     std::ostringstream oss;
-    const int width = 16;
+    constexpr int width = 16;
 
     oss << "+" << std::string(width, '-') << "+";
     for (size_t i = 0; i < cols; i++)
@@ -749,7 +749,7 @@ RetCode AudioCenter::stop(const std::string &path)
 void AudioCenter::schedule_report_timer() const
 {
     auto timer = std::make_shared<asio::steady_timer>(BG_SERVICE, std::chrono::seconds(87));
-    timer->async_wait([this, timer](const asio::error_code &error) {
+    timer->async_wait([this](const asio::error_code &error) {
         if (!error && center_state.load() == State::READY)
         {
             report_connections();

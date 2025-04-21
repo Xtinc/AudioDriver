@@ -14,7 +14,7 @@ constexpr AudioChannelMap DEFAULT_MONO_MAP = {0, 0};
 
 inline float volume2gain(unsigned int vol)
 {
-    return vol < 50 ? 0.68f * vol - 34.0f : 0.12f * vol - 4.0f;
+    return vol < 50 ? 0.68f * static_cast<float>(vol) - 34.0f : 0.12f * static_cast<float>(vol) - 4.0f;
 }
 
 static bool check_wave_file_name(const std::string &dev_name)
@@ -296,9 +296,9 @@ RetCode OAStream::mute(unsigned char itoken, const std::string &ip)
         }
     }
 
-    uint32_t ip_address = 0;
     try
     {
+        uint32_t ip_address = 0;
         asio::ip::address_v4 addr = asio::ip::make_address_v4(ip);
         ip_address = addr.to_uint();
 
@@ -353,9 +353,9 @@ RetCode OAStream::unmute(unsigned char itoken, const std::string &ip)
         }
     }
 
-    uint32_t ip_address = 0;
     try
     {
+        uint32_t ip_address = 0;
         asio::ip::address_v4 addr = asio::ip::make_address_v4(ip);
         ip_address = addr.to_uint();
 
@@ -539,7 +539,7 @@ void OAStream::process_data()
 
     if (np)
     {
-        np->direct_push(databuf.get(), ps * ch * sizeof(PCM_TYPE));
+        (void)np->direct_push(databuf.get(), ps * ch * sizeof(PCM_TYPE));
     }
 }
 
@@ -633,10 +633,10 @@ void OAStream::reset_self()
 // IAStream
 IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs,
                    unsigned int _ch, bool auto_reset)
-    : token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(_ch), spf_ch(_ch),
-      imap(_ch == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP), enable_reset(auto_reset), usr_name(_name), ias_ready(false),
-      exec_timer(BG_SERVICE), exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE),
-      reset_strand(asio::make_strand(BG_SERVICE)), volume(50), muted(false), usr_cb(nullptr), usr_ptr(nullptr)
+    : token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(_ch), enable_reset(auto_reset), spf_ch(_ch),
+      imap(_ch == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP), usr_name(_name), ias_ready(false), exec_timer(BG_SERVICE),
+      exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE), reset_strand(asio::make_strand(BG_SERVICE)),
+      volume(50), muted(false), usr_cb(nullptr), usr_ptr(nullptr)
 {
     auto ret = create_device(_name);
     if (ret)
@@ -654,7 +654,7 @@ IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
 
 IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs,
                    unsigned int usr_ch, unsigned int dev_ch, AudioChannelMap _imap)
-    : token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(usr_ch), spf_ch(dev_ch), imap(_imap), enable_reset(false),
+    : token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(usr_ch), enable_reset(false), spf_ch(dev_ch), imap(_imap),
       usr_name(_name), ias_ready(false), exec_timer(BG_SERVICE), exec_strand(asio::make_strand(BG_SERVICE)),
       reset_timer(BG_SERVICE), reset_strand(asio::make_strand(BG_SERVICE)), volume(50), muted(false), usr_cb(nullptr),
       usr_ptr(nullptr)
@@ -865,7 +865,7 @@ void IAStream::report_conns(std::vector<InfoLabel> &result)
 {
     auto ias_muted = muted.load();
     std::lock_guard<std::mutex> grd(dest_mtx);
-    for (auto iter : dests)
+    for (auto &iter : dests)
     {
         if (auto np = iter.lock())
         {
@@ -1099,7 +1099,7 @@ RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared
         return {RetCode::FAILED, "Too many player streams"};
     }
 
-    auto *raw_sender = new IAStream(token + preemptive, AudioDeviceName(name, cycles),
+    auto *raw_sender = new IAStream(static_cast<unsigned char>(token + preemptive), AudioDeviceName(name, cycles),
                                     enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2);
 
     auto audio_sender = std::shared_ptr<IAStream>(raw_sender, [self = shared_from_this(), name](const IAStream *ptr) {
@@ -1167,7 +1167,7 @@ RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared
         return {RetCode::FAILED, "Too many player streams"};
     }
 
-    auto *raw_sender = new IAStream(token + preemptive, AudioDeviceName(name, cycles),
+    auto *raw_sender = new IAStream(static_cast<unsigned char>(token + preemptive), AudioDeviceName(name, cycles),
                                     enum2val(AudioPeriodSize::INR_40MS), enum2val(AudioBandWidth::Full), 2);
 
     auto audio_sender = std::shared_ptr<IAStream>(raw_sender, [this, name](const IAStream *ptr) {

@@ -34,8 +34,8 @@
 #define LINUX_OS_ENVIRONMENT 0
 #endif
 
-#define USER_MAX_AUDIO_TOKEN 201
-#define NETWORK_AUDIO_TRANS_PORT 52282
+constexpr unsigned char USER_MAX_AUDIO_TOKEN = 201;
+constexpr uint16_t NETWORK_AUDIO_TRANS_PORT = 52282;
 
 typedef int16_t PCM_TYPE;
 typedef std::pair<std::string, unsigned int> AudioDeviceName;

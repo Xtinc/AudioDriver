@@ -1,8 +1,6 @@
 #include "audio_driver.h"
 #include "audio_wavfile.h"
-#include <chrono>
 #include <codecvt>
-#include <mutex>
 
 #if LINUX_OS_ENVIRONMENT
 #include <alsa/asoundlib.h>
@@ -467,7 +465,7 @@ static std::wstring utf8_to_utf16(const std::string &str)
         return {};
     }
 
-    int size_needed = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), static_cast<int>(str.size()), NULL, 0);
+    int size_needed = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), static_cast<int>(str.size()), nullptr, 0);
     std::wstring wstr(size_needed, 0);
     MultiByteToWideChar(CP_UTF8, 0, str.c_str(), static_cast<int>(str.size()), &wstr[0], size_needed);
     return wstr;
@@ -480,23 +478,25 @@ static std::string utf16_to_utf8(const std::wstring &wstr)
         return {};
     }
 
-    int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), static_cast<int>(wstr.size()), NULL, 0, NULL, NULL);
+    int size_needed =
+        WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), static_cast<int>(wstr.size()), nullptr, 0, nullptr, nullptr);
     std::string str(size_needed, 0);
-    WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), static_cast<int>(wstr.size()), &str[0], size_needed, NULL, NULL);
+    WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), static_cast<int>(wstr.size()), &str[0], size_needed, nullptr,
+                        nullptr);
     return str;
 }
 
 static std::pair<std::wstring, std::wstring> normailzed_device_name(const std::string &name, bool capture)
 {
     HRESULT hr = S_OK;
-    IMMDeviceEnumerator *enumerator = NULL;
-    IMMDeviceCollection *collection = NULL;
-    IMMDevice *device = NULL;
-    IPropertyStore *store = NULL;
-    LPWSTR pwszID = NULL;
+    IMMDeviceEnumerator *enumerator = nullptr;
+    IMMDeviceCollection *collection = nullptr;
+    IMMDevice *device = nullptr;
+    IPropertyStore *store = nullptr;
+    LPWSTR pwszID = nullptr;
     std::pair<std::wstring, std::wstring> ret{L"default", L"default"};
 
-    hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), NULL, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator),
+    hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator),
                           reinterpret_cast<LPVOID *>(&enumerator));
     if (FAILED(hr))
     {
@@ -598,8 +598,8 @@ class WasapiDriver final : public AudioDevice
 
 WasapiDriver::WasapiDriver(const std::string &friendly_name, const std::wstring &device_name, bool capture,
                            unsigned int fs, unsigned int ps, unsigned int ch, bool enable_strict_recover)
-    : AudioDevice(friendly_name, capture, fs, ps, ch, enable_strict_recover), uuid_name(device_name), h_event(NULL),
-      audio_client(NULL), render(NULL), capture(NULL)
+    : AudioDevice(friendly_name, capture, fs, ps, ch, enable_strict_recover), uuid_name(device_name), h_event(nullptr),
+      audio_client(nullptr), render(nullptr), capture(nullptr)
 {
 }
 
@@ -607,10 +607,10 @@ WasapiDriver::~WasapiDriver()
 {
     (void)stop();
 
-    if (h_event != NULL)
+    if (h_event != nullptr)
     {
         CloseHandle(h_event);
-        h_event = NULL;
+        h_event = nullptr;
     }
 
     SafeRelease(&audio_client);
@@ -621,11 +621,11 @@ WasapiDriver::~WasapiDriver()
 RetCode WasapiDriver::open()
 {
     RetCode ret = {RetCode::OK, "Success"};
-    IMMDeviceEnumerator *enumerator = NULL;
-    IMMDevice *device = NULL;
+    IMMDeviceEnumerator *enumerator = nullptr;
+    IMMDevice *device = nullptr;
     WAVEFORMATEX wfx = {};
 
-    auto hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), NULL, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator),
+    auto hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, __uuidof(IMMDeviceEnumerator),
                                reinterpret_cast<LPVOID *>(&enumerator));
     if (FAILED(hr))
     {
@@ -648,7 +648,7 @@ RetCode WasapiDriver::open()
         goto SAFE_EXIT;
     }
 
-    hr = device->Activate(__uuidof(IAudioClient2), CLSCTX_ALL, NULL, reinterpret_cast<LPVOID *>(&audio_client));
+    hr = device->Activate(__uuidof(IAudioClient2), CLSCTX_ALL, nullptr, reinterpret_cast<LPVOID *>(&audio_client));
     if (FAILED(hr))
     {
         ret = {RetCode::FAILED, "IMMDevice::Activate failed"};
@@ -656,7 +656,8 @@ RetCode WasapiDriver::open()
     }
 
     wfx.wFormatTag = WAVE_FORMAT_PCM;
-    max_ch = min_ch = wfx.nChannels = dev_ch;
+    wfx.nChannels = static_cast<WORD>(dev_ch);
+    max_ch = min_ch = dev_ch;
     wfx.nSamplesPerSec = dev_fs;
     wfx.wBitsPerSample = sizeof(PCM_TYPE) * 8;
     wfx.nBlockAlign = wfx.nChannels * wfx.wBitsPerSample / 8;
@@ -664,7 +665,7 @@ RetCode WasapiDriver::open()
 
     DWORD flags = (AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_RATEADJUST |
                    AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY);
-    hr = audio_client->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 0, 0, &wfx, NULL);
+    hr = audio_client->Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 0, 0, &wfx, nullptr);
     if (FAILED(hr))
     {
         return {RetCode::FAILED, "IAudioClient::Initialize failed"};
@@ -685,8 +686,8 @@ RetCode WasapiDriver::open()
         goto SAFE_EXIT;
     }
 
-    h_event = CreateEvent(NULL, FALSE, FALSE, NULL);
-    if (h_event == NULL)
+    h_event = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+    if (h_event == nullptr)
     {
         ret = {RetCode::FAILED, "Create Event failed"};
         goto SAFE_EXIT;
@@ -747,10 +748,10 @@ RetCode WasapiDriver::stop()
         worker_td->join();
     }
 
-    if (h_event != NULL)
+    if (h_event != nullptr)
     {
         CloseHandle(h_event);
-        h_event = NULL;
+        h_event = nullptr;
     }
 
     return FAILED(hr) ? RetCode{RetCode::FAILED, "IAudioClient::Stop failed"} : RetCode{RetCode::OK, "Success"};
@@ -904,7 +905,7 @@ void WasapiDriver::read_loop()
             DWORD flags;
             UINT32 frames;
 
-            hr = capture->GetBuffer(&data, &frames, &flags, NULL, NULL);
+            hr = capture->GetBuffer(&data, &frames, &flags, nullptr, nullptr);
             if (FAILED(hr))
             {
                 AUDIO_ERROR_PRINT("WASAPI device [%s] GetBuffer failed: 0x%08x", hw_name.c_str(), hr);
@@ -998,7 +999,7 @@ RetCode WaveDevice::open()
 
     if (open_mode == WavFile::out)
     {
-        wav_file->set_channel_number(dev_ch);
+        wav_file->set_channel_number(static_cast<uint16_t>(dev_ch));
         wav_file->set_sample_rate(dev_fs);
         wav_file->set_bits_per_sample(sizeof(PCM_TYPE) * 8);
     }
@@ -1201,7 +1202,7 @@ class NullDevice final : public AudioDevice
         return {RetCode::OK, "Success"};
     }
 
-    RetCode write(const char *data, size_t len) override
+    RetCode write(const char * /*data*/, size_t /*len*/) override
     {
         if (hstate != STREAM_RUNNING)
         {
@@ -1211,7 +1212,7 @@ class NullDevice final : public AudioDevice
         return {RetCode::OK, "Success"};
     }
 
-    RetCode read(char *data, size_t len) override
+    RetCode read(char * /*data*/, size_t /*len*/) override
     {
         if (hstate != STREAM_RUNNING)
         {

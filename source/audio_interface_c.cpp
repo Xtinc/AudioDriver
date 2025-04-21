@@ -126,7 +126,7 @@ extern "C"
 
     audio_center_t audio_center_create(bool enable_network, uint16_t port)
     {
-        audio_center_handle *handle = new audio_center_handle();
+        auto *handle = new audio_center_handle();
         handle->center = new AudioCenter(enable_network, port);
         return handle;
     }
@@ -343,7 +343,7 @@ extern "C"
 
     const char *audio_get_error_message(audio_ret_code_t code)
     {
-        RetCode::Code cpp_code = static_cast<RetCode::Code>(code);
+        auto cpp_code = static_cast<RetCode::Code>(code);
         RetCode rc(cpp_code);
         return rc.what();
     }

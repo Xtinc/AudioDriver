@@ -3,7 +3,7 @@
 
 class Chunk
 {
-public:
+  public:
     RetCode init(std::ifstream *stream, uint64_t position)
     {
         pos = position;
@@ -45,7 +45,7 @@ public:
         return pos;
     }
 
-private:
+  private:
     std::string id;
     uint32_t size{};
     uint64_t pos{};
@@ -53,10 +53,10 @@ private:
 
 class ChunkList
 {
-public:
+  public:
     class iterator
     {
-    public:
+      public:
         iterator(std::ifstream *stream, uint64_t position) : stream_(stream), position_(position)
         {
         }
@@ -88,7 +88,7 @@ public:
             return !operator==(rhs);
         }
 
-    private:
+      private:
         std::ifstream *stream_;
         uint64_t position_;
     };
@@ -131,7 +131,7 @@ public:
         return header("data");
     }
 
-private:
+  private:
     Chunk header(const std::string &header_id)
     {
         for (auto header : *this)
@@ -144,12 +144,11 @@ private:
         return *begin();
     }
 
-private:
+  private:
     std::ifstream ifs;
 };
 
-template <typename T>
-void cast_header(std::ifstream &ifs, const Chunk &generic_header, T *output)
+template <typename T> void cast_header(std::ifstream &ifs, const Chunk &generic_header, T *output)
 {
     ifs.seekg(static_cast<std::streamsize>(generic_header.position()), std::ios::beg);
     ifs.read(reinterpret_cast<char *>(output), sizeof(T));
@@ -157,10 +156,10 @@ void cast_header(std::ifstream &ifs, const Chunk &generic_header, T *output)
 
 WavFile::WavFile()
 {
-    strncpy(header.riff.chunk_id, "RIFF", 4);
-    strncpy(header.riff.format, "WAVE", 4);
+    memcpy(header.riff.chunk_id, "RIFF", 4);
+    memcpy(header.riff.format, "WAVE", 4);
 
-    strncpy(header.fmt.sub_chunk_1_id, "fmt ", 4);
+    memcpy(header.fmt.sub_chunk_1_id, "fmt ", 4);
     header.fmt.sub_chunk_1_size = 16;
     // default values
     header.fmt.audio_format = 1; // PCM
@@ -170,7 +169,7 @@ WavFile::WavFile()
     header.fmt.byte_per_block = (header.fmt.bits_per_sample * header.fmt.num_channel) / 8;
     header.fmt.byte_rate = header.fmt.byte_per_block * header.fmt.sample_rate;
 
-    strncpy(header.data.sub_chunk_2_id, "data", 4);
+    memcpy(header.data.sub_chunk_2_id, "data", 4);
 }
 
 WavFile::~WavFile()
@@ -299,7 +298,7 @@ RetCode WavFile::read(int16_t *output, uint64_t frame_number)
     {
         return RetCode::INVFMT;
     }
-    
+
     return RetCode::OK;
 }
 
@@ -334,10 +333,11 @@ RetCode WavFile::write(const int16_t *input, uint64_t frame_number)
         }
         break;
     case 16:
-        ostream.write(reinterpret_cast<const char *>(input), (std::streamsize)(requested_samples * sizeof(*input)));
+        ostream.write(reinterpret_cast<const char *>(input),
+                      static_cast<std::streamsize>(requested_samples * sizeof(*input)));
         break;
     case 24:
-        for (auto i = 0; i < requested_samples; ++i)
+        for (uint64_t i = 0; i < requested_samples; ++i)
         {
             int v = (*input++) / 256;
             int8_t value[3];
@@ -456,7 +456,7 @@ RetCode WavFile::write_header(uint64_t data_size)
     }
     header.riff.chunk_size = static_cast<uint32_t>(total_riff_size);
     // fmt header
-    header.fmt.byte_per_block = bytes_per_sample * channel_number;
+    header.fmt.byte_per_block = static_cast<uint16_t>(bytes_per_sample * channel_number);
     header.fmt.byte_rate = sample_rate * header.fmt.byte_per_block;
     // data header
     uint64_t total_size = data_size * bytes_per_sample;
@@ -492,7 +492,7 @@ RetCode WavFile::read_header(ChunkList *headers)
     istream.seekg(0, std::ios::end);
     auto file_size = istream.tellg();
     // If not enough data
-    if (file_size < sizeof(Header))
+    if (file_size < static_cast<std::streampos>(sizeof(Header)))
     {
         return RetCode::INVFMT;
     }
@@ -526,7 +526,7 @@ RetCode WavFile::read_header(ChunkList *headers)
     }
 
     // only support 16 bit per sample
-    auto bps = header.fmt.bits_per_sample;
+    // auto bps = header.fmt.bits_per_sample;
     // if (bps != 16)
     // {
     //     return RetCode::INVFMT;

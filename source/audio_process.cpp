@@ -76,7 +76,7 @@ SincInterpolator::~SincInterpolator()
     delete[] kern;
 }
 
-int SincInterpolator::process(const double *input, int n_input, double *output, int track)
+int SincInterpolator::process(const double *input, int n_input, double *output, int track) const
 {
     if (n_input < order * 2 || track > chan)
     {
@@ -107,10 +107,10 @@ double SincInterpolator::kernel_func(double x, double cutoff) const
     return 0.0;
 }
 
-double SincInterpolator::interpolator(double x, const double *input, const double *prev_pos)
+double SincInterpolator::interpolator(double x, const double *input, const double *prev_pos) const
 {
     double fraction = std::abs(x - std::floor(x));
-    int c_idx = (int)(fraction * quan + 0.5);
+    int c_idx = static_cast<int>(fraction * quan + 0.5);
     double c_frac = fraction * quan - c_idx;
     const double *coffs1 = &kern[c_idx * (order * 2)];
     const double *coffs2 = &kern[(c_idx + 1) * (order * 2)];
@@ -207,7 +207,7 @@ LocSampler::LocSampler(unsigned int src_fs, unsigned int src_ch, unsigned int ds
 }
 
 RetCode LocSampler::process(const PCM_TYPE *input, unsigned int input_frames, PCM_TYPE *output,
-                            unsigned int &output_frames)
+                            unsigned int &output_frames) const
 {
     if (!valid || !input || !output || input_frames == 0 || input_frames > max_frames)
     {
@@ -236,7 +236,8 @@ RetCode LocSampler::process(const PCM_TYPE *input, unsigned int input_frames, PC
             float_input[i] = static_cast<double>(input[i * src_ch + ichan_map[c]]) / 32768.0;
         }
 
-        output_frames = static_cast<unsigned int>(resampler->process(float_input, input_frames, float_output, c));
+        output_frames =
+            static_cast<unsigned int>(resampler->process(float_input, static_cast<int>(input_frames), float_output, c));
     }
 
     for (unsigned int i = 0; i < output_frames; i++)
@@ -331,9 +332,9 @@ RetCode DRCompressor::process(PCM_TYPE *buffer, unsigned int frames, unsigned in
 
         for (unsigned int ch = 0; ch < channels; ++ch)
         {
-            auto result = (float)buffer[i * channels + ch] * db2sample(current_gain);
+            auto result = static_cast<float>(buffer[i * channels + ch]) * db2sample(current_gain);
             result = std::max(-32768.0f, std::min(32767.0f, result));
-            buffer[i * channels + ch] = (int16_t)result;
+            buffer[i * channels + ch] = static_cast<int16_t>(result);
         }
     }
 
@@ -345,7 +346,7 @@ void DRCompressor::reset()
     current_gain = 0.0f;
 }
 
-float DRCompressor::compute_gain(float inputLevelDB)
+float DRCompressor::compute_gain(float inputLevelDB) const
 {
     float gainReduction = 0.0f;
 

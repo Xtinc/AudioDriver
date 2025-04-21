@@ -13,12 +13,12 @@ class SincInterpolator
     SincInterpolator(int order, int precision, int chan, double ratio);
     ~SincInterpolator();
 
-    int process(const double *input, int input_size, double *output, int track);
+    int process(const double *input, int input_size, double *output, int track) const;
 
   private:
     double kernel_func(double x, double cutoff) const;
 
-    double interpolator(double x, const double *input, const double *prev_pos);
+    double interpolator(double x, const double *input, const double *prev_pos) const;
 
   private:
     const int order;
@@ -39,7 +39,8 @@ class LocSampler
     LocSampler(unsigned int src_fs, unsigned int src_ch, unsigned int dst_fs, unsigned int dst_ch,
                unsigned int max_frames, const AudioChannelMap &imap, const AudioChannelMap &omap);
 
-    RetCode process(const PCM_TYPE *input, unsigned int input_frames, PCM_TYPE *output, unsigned int &output_frames);
+    RetCode process(const PCM_TYPE *input, unsigned int input_frames, PCM_TYPE *output,
+                    unsigned int &output_frames) const;
 
     bool is_valid() const
     {
@@ -69,15 +70,15 @@ class LocSampler
 class DRCompressor
 {
   public:
-    DRCompressor(float sample_rate, float threshold = -20.0f, float ratio = 2.0f, float attack = 0.006f,
-                 float release = 0.1f, float knee_width = 6.0f);
+    explicit DRCompressor(float sample_rate, float threshold = -20.0f, float ratio = 2.0f, float attack = 0.006f,
+                          float release = 0.1f, float knee_width = 6.0f);
 
     RetCode process(PCM_TYPE *buffer, unsigned int frames, unsigned int channels, float gain = 0.0);
 
     void reset();
 
   private:
-    float compute_gain(float inputLevel);
+    float compute_gain(float inputLevel) const;
     float sample2db(PCM_TYPE sample) const;
     float db2sample(float db) const;
 

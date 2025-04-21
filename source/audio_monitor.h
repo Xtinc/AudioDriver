@@ -57,7 +57,7 @@ class DeviceNotificationClient : public IMMNotificationClient
     HRESULT STDMETHODCALLTYPE OnPropertyValueChanged(LPCWSTR pwstrDeviceId, const PROPERTYKEY key) override;
 
   private:
-    AudioDeviceInfo GetDeviceInfo(LPCWSTR pwstrDeviceId, AudioDeviceType type = AudioDeviceType::All);
+    AudioDeviceInfo GetDeviceInfo(LPCWSTR pwstrDeviceId, AudioDeviceType type = AudioDeviceType::All) const;
 
     std::function<void(AudioDeviceEvent, const AudioDeviceInfo &)> callback_;
     LONG ref_count_;
@@ -108,7 +108,7 @@ class AudioMonitor
     AudioDeviceInfo GetDefaultDevice(AudioDeviceType type);
 
     // Check if device exists
-    bool DeviceExists(const std::string &device_id);
+    bool DeviceExists(const std::string &device_id) const;
 
     // Register device change callback
     bool RegisterCallback(DeviceChangeCallback callback);
@@ -127,7 +127,7 @@ class AudioMonitor
     void HandleDeviceChange(AudioDeviceEvent event, const AudioDeviceInfo &device_info);
 
 #if WINDOWS_OS_ENVIRONMENT
-    AudioDeviceInfo GetDeviceInfo(IMMDevice *device, AudioDeviceType type = AudioDeviceType::All);
+    AudioDeviceInfo GetDeviceInfo(IMMDevice *device, AudioDeviceType type = AudioDeviceType::All) const;
 #endif
 
   private:
