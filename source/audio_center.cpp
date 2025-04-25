@@ -334,7 +334,12 @@ RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBand
 
     if (enable_network)
     {
-        oas_map[token]->initialize_network(net_mgr);
+        auto ret = oas_map[token]->initialize_network(net_mgr);
+        if (!ret)
+        {
+            AUDIO_ERROR_PRINT("Failed to initialize network for output stream %u: %s", token.tok, ret.what());
+            return ret;
+        }
         AUDIO_DEBUG_PRINT("Network initialized for output stream %u", token.tok);
     }
 
@@ -486,7 +491,13 @@ RetCode AudioCenter::connect(IToken itoken, OToken otoken, const std::string &ip
         }
 
         AUDIO_INFO_PRINT("Try to connect stream %u -> %u on %s", itoken.tok, otoken.tok, ip.c_str());
-        return net_mgr->add_destination(itoken, otoken, ip, port);
+        auto ret = net_mgr->add_destination(itoken, otoken, ip, port);
+        if (!ret)
+        {
+            AUDIO_ERROR_PRINT("Failed to add network destination %s for tokens %u->%u: %s", ip.c_str(), itoken.tok,
+                              otoken.tok, ret.what());
+        }
+        return ret;
     }
 
     auto oas = oas_map.find(otoken);
@@ -497,10 +508,15 @@ RetCode AudioCenter::connect(IToken itoken, OToken otoken, const std::string &ip
     }
 
     AUDIO_INFO_PRINT("Try to connect stream %u -> %u", itoken.tok, otoken.tok);
-    return ias->second->connect(oas->second);
+    auto ret = ias->second->connect(oas->second);
+    if (!ret)
+    {
+        AUDIO_ERROR_PRINT("Failed to connect stream %u -> %u: %s", itoken.tok, otoken.tok, ret.what());
+    }
+    return ret;
 }
 
-RetCode AudioCenter::disconnect(IToken itoken, OToken otoken, const std::string& ip, unsigned short port)
+RetCode AudioCenter::disconnect(IToken itoken, OToken otoken, const std::string &ip, unsigned short port)
 {
     State current = center_state.load();
     if (current != State::CONNECTING && current != State::READY)
@@ -525,7 +541,13 @@ RetCode AudioCenter::disconnect(IToken itoken, OToken otoken, const std::string&
         }
 
         AUDIO_INFO_PRINT("Try to disconnect stream %u -> %u on %s", itoken.tok, otoken.tok, ip.c_str());
-        return net_mgr->del_destination(itoken, otoken, ip, port);
+        auto ret = net_mgr->del_destination(itoken, otoken, ip, port);
+        if (!ret)
+        {
+            AUDIO_ERROR_PRINT("Failed to remove network destination %s for tokens %u->%u: %s", ip.c_str(), itoken.tok,
+                              otoken.tok, ret.what());
+        }
+        return ret;
     }
 
     auto oas = oas_map.find(otoken);
@@ -536,7 +558,12 @@ RetCode AudioCenter::disconnect(IToken itoken, OToken otoken, const std::string&
     }
 
     AUDIO_INFO_PRINT("Try to disconnect stream %u -> %u", itoken.tok, otoken.tok);
-    return ias->second->disconnect(oas->second);
+    auto ret = ias->second->disconnect(oas->second);
+    if (!ret)
+    {
+        AUDIO_ERROR_PRINT("Failed to disconnect stream %u -> %u: %s", itoken.tok, otoken.tok, ret.what());
+    }
+    return ret;
 }
 
 RetCode AudioCenter::register_callback(IToken token, AudioInputCallBack cb, void *ptr)
@@ -771,7 +798,8 @@ RetCode AudioCenter::mute(IToken itoken, OToken otoken, bool enable, const std::
     return enable ? oas->second->mute(itoken, ip) : oas->second->unmute(itoken, ip);
 }
 
-RetCode AudioCenter::play(const std::string& name, int cycles, OToken otoken, const std::string& ip, unsigned short port)
+RetCode AudioCenter::play(const std::string &name, int cycles, OToken otoken, const std::string &ip,
+                          unsigned short port)
 {
     if (center_state.load() != State::READY)
     {
@@ -787,8 +815,20 @@ RetCode AudioCenter::play(const std::string& name, int cycles, OToken otoken, co
 
     if (!ip.empty())
     {
+        if (!net_mgr)
+        {
+            AUDIO_ERROR_PRINT("Network manager not initialized");
+            return {RetCode::FAILED, "Network manager not initialized"};
+        }
+
         AUDIO_INFO_PRINT("Try to play file %s -> %u from %s", name.c_str(), otoken.tok, ip.c_str());
-        return player->play(name, cycles, net_mgr, otoken, ip, port);
+        auto ret = player->play(name, cycles, net_mgr, otoken, ip, port);
+        if (!ret)
+        {
+            AUDIO_ERROR_PRINT("Failed to play file %s to %s for token %u: %s", name.c_str(), ip.c_str(), otoken.tok,
+                              ret.what());
+        }
+        return ret;
     }
 
     auto oas = oas_map.find(otoken);
@@ -799,7 +839,12 @@ RetCode AudioCenter::play(const std::string& name, int cycles, OToken otoken, co
     }
 
     AUDIO_INFO_PRINT("Try to play file %s -> %u", name.c_str(), otoken.tok);
-    return player->play(name, cycles, oas->second);
+    auto ret = player->play(name, cycles, oas->second);
+    if (!ret)
+    {
+        AUDIO_ERROR_PRINT("Failed to play file %s to output token %u: %s", name.c_str(), otoken.tok, ret.what());
+    }
+    return ret;
 }
 
 RetCode AudioCenter::stop(const std::string &path)
@@ -811,7 +856,12 @@ RetCode AudioCenter::stop(const std::string &path)
     }
 
     AUDIO_INFO_PRINT("Stopping file %s", path.c_str());
-    return player->stop(path);
+    auto ret = player->stop(path);
+    if (!ret)
+    {
+        AUDIO_ERROR_PRINT("Failed to stop file %s: %s", path.c_str(), ret.what());
+    }
+    return ret;
 }
 
 void AudioCenter::schedule_report_timer() const
