@@ -184,7 +184,7 @@ static void merge_label(std::vector<InfoLabel> &ias_label, std::vector<InfoLabel
 }
 
 // AudioCenter
-AudioCenter::AudioCenter(bool enable_network, uint16_t port) : center_state(State::INIT)
+AudioCenter::AudioCenter(bool enable_network, unsigned short port) : center_state(State::INIT)
 {
     monitor = std::make_unique<AudioMonitor>(BG_SERVICE);
     player = std::make_shared<AudioPlayer>(USER_MAX_AUDIO_TOKEN);
@@ -239,6 +239,40 @@ RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBand
     return RetCode::OK;
 }
 
+RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps,
+                            unsigned int usr_ch, unsigned int dev_ch, const AudioChannelMap &imap, bool enable_network)
+{
+    AUDIO_INFO_PRINT("Creating %s input stream with token %u", name.first.c_str(), token.tok);
+
+    if (center_state.load() != State::INIT)
+    {
+        AUDIO_ERROR_PRINT("Cannot create stream, AudioCenter not in INIT state");
+        return RetCode::ESTATE;
+    }
+
+    if (!token)
+    {
+        AUDIO_ERROR_PRINT("Invalid token: %u", token.tok);
+        return RetCode::EPARAM;
+    }
+
+    if (ias_map.find(token) != ias_map.end())
+    {
+        AUDIO_ERROR_PRINT("Token already exists: %u", token.tok);
+        return RetCode::NOACTION;
+    }
+
+    ias_map[token] = std::make_shared<IAStream>(token, name, enum2val(ps), enum2val(bw), usr_ch, dev_ch, imap);
+
+    if (enable_network)
+    {
+        ias_map[token]->initialize_network(net_mgr);
+        AUDIO_DEBUG_PRINT("Network initialized for input stream %u", token.tok);
+    }
+
+    return RetCode::OK;
+}
+
 RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps,
                             unsigned int ch, bool enable_network, bool enable_reset)
 {
@@ -263,6 +297,40 @@ RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBand
     }
 
     oas_map[token] = std::make_shared<OAStream>(token, name, enum2val(ps), enum2val(bw), ch, enable_reset);
+
+    if (enable_network)
+    {
+        oas_map[token]->initialize_network(net_mgr);
+        AUDIO_DEBUG_PRINT("Network initialized for output stream %u", token.tok);
+    }
+
+    return RetCode::OK;
+}
+
+RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps,
+                            unsigned int usr_ch, unsigned int dev_ch, const AudioChannelMap &omap, bool enable_network)
+{
+    AUDIO_INFO_PRINT("Creating %s output stream with token %u", name.first.c_str(), token.tok);
+
+    if (center_state.load() != State::INIT)
+    {
+        AUDIO_ERROR_PRINT("Cannot create stream, AudioCenter not in INIT state");
+        return RetCode::ESTATE;
+    }
+
+    if (!token)
+    {
+        AUDIO_ERROR_PRINT("Invalid token: %u", token.tok);
+        return RetCode::EPARAM;
+    }
+
+    if (oas_map.find(token) != oas_map.end())
+    {
+        AUDIO_ERROR_PRINT("Token already exists: %u", token.tok);
+        return RetCode::NOACTION;
+    }
+
+    // oas_map[token] = std::make_shared<OAStream>(token, name, enum2val(ps), enum2val(bw), ch, enable_reset);
 
     if (enable_network)
     {
@@ -387,7 +455,7 @@ RetCode AudioCenter::prepare()
     return RetCode::OK;
 }
 
-RetCode AudioCenter::connect(IToken itoken, OToken otoken, const std::string &ip, uint16_t port)
+RetCode AudioCenter::connect(IToken itoken, OToken otoken, const std::string &ip, unsigned short port)
 {
     State current = center_state.load();
     if (current != State::CONNECTING && current != State::READY)
@@ -432,7 +500,7 @@ RetCode AudioCenter::connect(IToken itoken, OToken otoken, const std::string &ip
     return ias->second->connect(oas->second);
 }
 
-RetCode AudioCenter::disconnect(IToken itoken, OToken otoken, const std::string &ip, uint16_t port)
+RetCode AudioCenter::disconnect(IToken itoken, OToken otoken, const std::string& ip, unsigned short port)
 {
     State current = center_state.load();
     if (current != State::CONNECTING && current != State::READY)
@@ -703,7 +771,7 @@ RetCode AudioCenter::mute(IToken itoken, OToken otoken, bool enable, const std::
     return enable ? oas->second->mute(itoken, ip) : oas->second->unmute(itoken, ip);
 }
 
-RetCode AudioCenter::play(const std::string &name, int cycles, OToken otoken, const std::string &ip, uint16_t port)
+RetCode AudioCenter::play(const std::string& name, int cycles, OToken otoken, const std::string& ip, unsigned short port)
 {
     if (center_state.load() != State::READY)
     {

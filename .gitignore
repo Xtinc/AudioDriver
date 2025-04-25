@@ -3,3 +3,5 @@
 # /asio-1.30.2
 /main.cpp
 /cmake*
+.vs
+*.json

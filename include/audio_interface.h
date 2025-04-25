@@ -35,7 +35,7 @@
 #endif
 
 constexpr unsigned char USER_MAX_AUDIO_TOKEN = 201;
-constexpr uint16_t NETWORK_AUDIO_TRANS_PORT = 52282;
+constexpr unsigned short NETWORK_AUDIO_TRANS_PORT = 52282;
 
 typedef int16_t PCM_TYPE;
 typedef std::pair<std::string, unsigned int> AudioDeviceName;
@@ -234,7 +234,7 @@ struct AudioToken
     /**
      * @brief Token value representing an invalid token
      */
-    static constexpr unsigned char INVALID_TOKEN = 0xFF;
+    static constexpr unsigned char INVALID_TOKEN = 0x0;
 
     unsigned char tok; /**< Token value */
 
@@ -385,7 +385,7 @@ class AudioCenter
      * @param enable_network Whether to enable network functionality
      * @param port Network port to use (ignored if enable_network is false)
      */
-    AudioCenter(bool enable_network = false, uint16_t port = NETWORK_AUDIO_TRANS_PORT);
+    AudioCenter(bool enable_network = false, unsigned short port = NETWORK_AUDIO_TRANS_PORT);
 
     /**
      * @brief Destructor for AudioCenter
@@ -407,6 +407,22 @@ class AudioCenter
                    bool enable_network = false, bool enable_reset = false);
 
     /**
+     * @brief Creates an input stream with custom channel mapping
+     * @param token Input token to associate with the stream
+     * @param name Audio device name and index
+     * @param bw Audio bandwidth (sample rate)
+     * @param ps Audio period size
+     * @param usr_ch Number of channels for user
+     * @param dev_ch Number of channels to open device
+     * @param imap Channel mapping between user channel and device channel
+     * @param enable_network Whether to enable network functionality for this stream
+     * @param enable_reset Whether to enable auto reset for this stream
+     * @return RetCode indicating success or failure
+     */
+    RetCode create(IToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps,
+                   unsigned int usr_ch, unsigned int dev_ch, const AudioChannelMap &imap, bool enable_network = false);
+
+    /**
      * @brief Creates an output stream
      * @param token Output token to associate with the stream
      * @param name Audio device name and index
@@ -419,6 +435,22 @@ class AudioCenter
      */
     RetCode create(OToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps, unsigned int ch,
                    bool enable_network = false, bool enable_reset = false);
+
+    /**
+     * @brief Creates an output stream with custom channel mapping
+     * @param token Output token to associate with the stream
+     * @param name Audio device name and index
+     * @param bw Audio bandwidth (sample rate)
+     * @param ps Audio period size
+     * @param usr_ch Number of channels for user
+     * @param dev_ch Number of channels to open device
+     * @param omap Channel mapping between user channel and device channel
+     * @param enable_network Whether to enable network functionality for this stream
+     * @param enable_reset Whether to enable auto reset for this stream
+     * @return RetCode indicating success or failure
+     */
+    RetCode create(OToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps,
+                   unsigned int usr_ch, unsigned int dev_ch, const AudioChannelMap &omap, bool enable_network = false);
 
     /**
      * @brief Creates a link between input and output streams
@@ -448,7 +480,7 @@ class AudioCenter
      * @param port Network port to use
      * @return RetCode indicating success or failure
      */
-    RetCode connect(IToken itoken, OToken otoken, const std::string &ip = "", uint16_t port = NETWORK_AUDIO_TRANS_PORT);
+    RetCode connect(IToken itoken, OToken otoken, const std::string& ip = "", unsigned  short port = NETWORK_AUDIO_TRANS_PORT);
 
     /**
      * @brief Disconnects an input stream from an output stream
@@ -459,8 +491,7 @@ class AudioCenter
      * @param port Network port to use
      * @return RetCode indicating success or failure
      */
-    RetCode disconnect(IToken itoken, OToken otoken, const std::string &ip = "",
-                       uint16_t port = NETWORK_AUDIO_TRANS_PORT);
+    RetCode disconnect(IToken itoken, OToken otoken, const std::string& ip = "", unsigned short port = NETWORK_AUDIO_TRANS_PORT);
 
     /**
      * @brief Registers a callback function for an input stream
@@ -545,8 +576,7 @@ class AudioCenter
      * @param port Network port to use
      * @return RetCode indicating success or failure
      */
-    RetCode play(const std::string &name, int cycles, OToken otoken, const std::string &ip = "",
-                 uint16_t port = NETWORK_AUDIO_TRANS_PORT);
+    RetCode play(const std::string& name, int cycles, OToken otoken, const std::string& ip = "", unsigned short port = NETWORK_AUDIO_TRANS_PORT);
 
     /**
      * @brief Stops playing an audio file
