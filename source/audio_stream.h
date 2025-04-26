@@ -199,7 +199,7 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     void *usr_ptr;
 };
 
-class AudioPlayer : public std::enable_shared_from_this<AudioPlayer>
+class AudioPlayer : public std::enable_shared_from_this<AudioPlayer> 
 {
   public:
     explicit AudioPlayer(unsigned char _token);

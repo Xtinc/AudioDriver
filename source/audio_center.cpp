@@ -308,7 +308,7 @@ RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBand
 }
 
 RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps,
-                            unsigned int usr_ch, unsigned int dev_ch, const AudioChannelMap &omap, bool enable_network)
+                            unsigned int dev_ch, const AudioChannelMap &omap, bool enable_network)
 {
     AUDIO_INFO_PRINT("Creating %s output stream with token %u", name.first.c_str(), token.tok);
 
@@ -330,7 +330,7 @@ RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBand
         return RetCode::NOACTION;
     }
 
-    // oas_map[token] = std::make_shared<OAStream>(token, name, enum2val(ps), enum2val(bw), ch, enable_reset);
+    oas_map[token] = std::make_shared<OAStream>(token, name, enum2val(ps), enum2val(bw), dev_ch, false, omap);
 
     if (enable_network)
     {
