@@ -792,6 +792,11 @@ RetCode IAStream::connect(const std::shared_ptr<OAStream> &oas)
     }
 
     std::lock_guard<std::mutex> grd(dest_mtx);
+    if (std::any_of(dests.begin(), dests.end(), [&oas](const std::weak_ptr<OAStream> &wp) { return wp.lock() == oas; }))
+    {
+        return {RetCode::FAILED, "Already connected to this output stream"};
+    }
+
     dests.emplace_back(oas);
     return {RetCode::OK, "Connection established"};
 }
@@ -1094,9 +1099,20 @@ AudioPlayer::~AudioPlayer() = default;
 
 RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared_ptr<OAStream> &sink)
 {
-    if (preemptive > 5)
+    if (preemptive.fetch_add(1, std::memory_order_seq_cst) > 5)
     {
         return {RetCode::FAILED, "Too many player streams"};
+    }
+
+    bool stream_found = true;
+    {
+        std::lock_guard<std::mutex> grd(mtx);
+        stream_found = sounds.find(name) != sounds.cend();
+    }
+
+    if (stream_found)
+    {
+        return {RetCode::FAILED, "Stream already exists"};
     }
 
     auto *raw_sender = new IAStream(static_cast<unsigned char>(token + preemptive), AudioDeviceName(name, cycles),
@@ -1114,17 +1130,12 @@ RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared
         delete ptr;
     });
 
-    ++preemptive;
+    sounds.emplace(name, audio_sender);
+    auto ret = audio_sender->connect(sink);
+    if (!ret)
     {
-        std::lock_guard<std::mutex> grd(mtx);
-        if (sounds.find(name) != sounds.cend())
-        {
-            return {RetCode::FAILED, "Stream already exists"};
-        }
-        sounds.emplace(name, audio_sender);
+        AUDIO_ERROR_PRINT("Failed to connect to sink: %s", ret.what());
     }
-
-    audio_sender->connect(sink);
     return audio_sender->start();
 }
 

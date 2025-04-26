@@ -480,7 +480,8 @@ class AudioCenter
      * @param port Network port to use
      * @return RetCode indicating success or failure
      */
-    RetCode connect(IToken itoken, OToken otoken, const std::string& ip = "", unsigned  short port = NETWORK_AUDIO_TRANS_PORT);
+    RetCode connect(IToken itoken, OToken otoken, const std::string &ip = "",
+                    unsigned short port = NETWORK_AUDIO_TRANS_PORT);
 
     /**
      * @brief Disconnects an input stream from an output stream
@@ -491,7 +492,8 @@ class AudioCenter
      * @param port Network port to use
      * @return RetCode indicating success or failure
      */
-    RetCode disconnect(IToken itoken, OToken otoken, const std::string& ip = "", unsigned short port = NETWORK_AUDIO_TRANS_PORT);
+    RetCode disconnect(IToken itoken, OToken otoken, const std::string &ip = "",
+                       unsigned short port = NETWORK_AUDIO_TRANS_PORT);
 
     /**
      * @brief Registers a callback function for an input stream
@@ -576,7 +578,8 @@ class AudioCenter
      * @param port Network port to use
      * @return RetCode indicating success or failure
      */
-    RetCode play(const std::string& name, int cycles, OToken otoken, const std::string& ip = "", unsigned short port = NETWORK_AUDIO_TRANS_PORT);
+    RetCode play(const std::string &name, int cycles, OToken otoken, const std::string &ip = "",
+                 unsigned short port = NETWORK_AUDIO_TRANS_PORT);
 
     /**
      * @brief Stops playing an audio file
