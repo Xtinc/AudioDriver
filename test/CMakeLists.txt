@@ -14,3 +14,6 @@ target_link_libraries(test_audio_process bettyaudio)
 
 add_executable(test_dr_compressor test_dr_compressor.cpp)
 target_link_libraries(test_dr_compressor bettyaudio)
+
+add_executable(test_ns test_noise_suppression.cpp)
+target_link_libraries(test_ns bettyaudio)
