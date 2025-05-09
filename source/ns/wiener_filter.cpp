@@ -1,5 +1,5 @@
 #include "wiener_filter.h"
-#include "utils/approx_operations.h"
+#include "utils/approx_opers.h"
 
 WienerFilter::WienerFilter(const SuppressionParams &suppression_params) : suppression_params_(suppression_params)
 {

@@ -1,4 +1,4 @@
-#include "approx_operations.h"
+#include "approx_opers.h"
 #include <cmath>
 
 static float FastLog2f(float in)
@@ -12,7 +12,7 @@ static float FastLog2f(float in)
         float dummy;
         uint32_t a;
     } x = {in};
-    float out = static_cast<float>(x.a);
+    auto out = static_cast<float>(x.a);
     out *= 1.1920929e-7f; // 1/2^23
     out -= 126.942695f;   // Remove bias.
     return out;
@@ -20,13 +20,13 @@ static float FastLog2f(float in)
 
 float SqrtFastApproximation(float f)
 {
-    // TODO(peah): Add fast approximate implementation.
+    // TODO: Add fast approximate implementation.
     return sqrtf(f);
 }
 
 float Pow2Approximation(float p)
 {
-    // TODO(peah): Add fast approximate implementation.
+    // TODO: Add fast approximate implementation.
     return powf(2.f, p);
 }
 
