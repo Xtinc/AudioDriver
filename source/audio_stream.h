@@ -69,7 +69,7 @@ class OAStream : public std::enable_shared_from_this<OAStream>
     RetCode start();
     RetCode stop();
     RetCode initialize_network(const std::shared_ptr<NetWorker> &nw);
-    RetCode reset(const AudioDeviceName &_name);
+    RetCode restart(const AudioDeviceName &_name);
     RetCode direct_push(unsigned char token, unsigned int chan, unsigned int frames, unsigned int sample_rate,
                         const int16_t *data, uint32_t source_ip = 0);
 
@@ -141,8 +141,8 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     RetCode start();
     RetCode stop();
     RetCode initialize_network(const std::shared_ptr<NetWorker> &nw);
-    RetCode reset(const AudioDeviceName &_name);
-    RetCode reset(const AudioDeviceName &_name, unsigned int _fs, unsigned int _ch);
+    RetCode restart(const AudioDeviceName &_name);
+    RetCode reset2echo(const AudioDeviceName &_name, unsigned int _fs, unsigned int _ch);
     RetCode connect(const std::shared_ptr<OAStream> &oas);
     RetCode disconnect(const std::shared_ptr<OAStream> &oas);
     RetCode direct_push(const char *data, size_t len) const;

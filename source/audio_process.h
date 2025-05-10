@@ -70,7 +70,7 @@ class LocSampler
 class DRCompressor
 {
   public:
-    explicit DRCompressor(float sample_rate, float threshold = -20.0f, float ratio = 2.0f, float attack = 0.006f,
+    explicit DRCompressor(float sample_rate, float threshold = -10.0f, float ratio = 2.0f, float attack = 0.006f,
                           float release = 0.1f, float knee_width = 6.0f);
 
     RetCode process(PCM_TYPE *buffer, unsigned int frames, unsigned int channels, float gain = 0.0);

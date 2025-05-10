@@ -9,13 +9,13 @@
  * including AudioCenter which serves as the main entry point to the library functionality.
  */
 
+#include "audio_message.h"
 #include <array>
 #include <atomic>
 #include <cinttypes>
 #include <map>
 #include <memory>
 #include <string>
-#include "audio_message.h"
 
 #if defined(_WIN32) || defined(_WIN64)
 #include <sdkddkver.h>
@@ -234,7 +234,7 @@ struct AudioToken
     /**
      * @brief Token value representing an invalid token
      */
-    static constexpr unsigned char INVALID_TOKEN = 0x0;
+    static constexpr unsigned char INVALID_TOKEN = 0xFF;
 
     unsigned char tok; /**< Token value */
 
@@ -257,9 +257,9 @@ struct AudioToken
      * @brief Convert to unsigned char
      * @return Token value as unsigned char
      */
-    constexpr operator unsigned char() const noexcept
+    constexpr explicit operator bool() const noexcept
     {
-        return tok;
+        return tok != INVALID_TOKEN;
     }
 
     /**

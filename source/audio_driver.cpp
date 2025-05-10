@@ -1131,6 +1131,7 @@ RetCode EchoDevice::start()
         return {RetCode::FAILED, "stream not opened or stopped"};
     }
 
+    AUDIO_INFO_PRINT("Echo device [%s] started", hw_name.c_str());
     return {RetCode::OK, "Success"};
 }
 
@@ -1142,6 +1143,7 @@ RetCode EchoDevice::stop()
         return {RetCode::OK, "Not running"};
     }
 
+    AUDIO_INFO_PRINT("Echo device [%s] stopped", hw_name.c_str());
     return {RetCode::OK, "Success"};
 }
 

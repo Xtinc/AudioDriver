@@ -222,17 +222,17 @@ RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBand
         return RetCode::EPARAM;
     }
 
-    if (ias_map.find(token) != ias_map.end())
+    if (ias_map.find(token.tok) != ias_map.end())
     {
         AUDIO_ERROR_PRINT("Token already exists: %u", token.tok);
         return RetCode::NOACTION;
     }
 
-    ias_map[token] = std::make_shared<IAStream>(token, name, enum2val(ps), enum2val(bw), ch, enable_reset);
+    ias_map[token.tok] = std::make_shared<IAStream>(token.tok, name, enum2val(ps), enum2val(bw), ch, enable_reset);
 
     if (enable_network)
     {
-        ias_map[token]->initialize_network(net_mgr);
+        ias_map[token.tok]->initialize_network(net_mgr);
         AUDIO_DEBUG_PRINT("Network initialized for input stream %u", token.tok);
     }
 
@@ -256,17 +256,17 @@ RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBand
         return RetCode::EPARAM;
     }
 
-    if (ias_map.find(token) != ias_map.end())
+    if (ias_map.find(token.tok) != ias_map.end())
     {
         AUDIO_ERROR_PRINT("Token already exists: %u", token.tok);
         return RetCode::NOACTION;
     }
 
-    ias_map[token] = std::make_shared<IAStream>(token, name, enum2val(ps), enum2val(bw), usr_ch, dev_ch, imap);
+    ias_map[token.tok] = std::make_shared<IAStream>(token.tok, name, enum2val(ps), enum2val(bw), usr_ch, dev_ch, imap);
 
     if (enable_network)
     {
-        ias_map[token]->initialize_network(net_mgr);
+        ias_map[token.tok]->initialize_network(net_mgr);
         AUDIO_DEBUG_PRINT("Network initialized for input stream %u", token.tok);
     }
 
@@ -290,17 +290,17 @@ RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBand
         return RetCode::EPARAM;
     }
 
-    if (oas_map.find(token) != oas_map.end())
+    if (oas_map.find(token.tok) != oas_map.end())
     {
         AUDIO_ERROR_PRINT("Token already exists: %u", token.tok);
         return RetCode::NOACTION;
     }
 
-    oas_map[token] = std::make_shared<OAStream>(token, name, enum2val(ps), enum2val(bw), ch, enable_reset);
+    oas_map[token.tok] = std::make_shared<OAStream>(token.tok, name, enum2val(ps), enum2val(bw), ch, enable_reset);
 
     if (enable_network)
     {
-        oas_map[token]->initialize_network(net_mgr);
+        oas_map[token.tok]->initialize_network(net_mgr);
         AUDIO_DEBUG_PRINT("Network initialized for output stream %u", token.tok);
     }
 
@@ -324,17 +324,17 @@ RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBand
         return RetCode::EPARAM;
     }
 
-    if (oas_map.find(token) != oas_map.end())
+    if (oas_map.find(token.tok) != oas_map.end())
     {
         AUDIO_ERROR_PRINT("Token already exists: %u", token.tok);
         return RetCode::NOACTION;
     }
 
-    oas_map[token] = std::make_shared<OAStream>(token, name, enum2val(ps), enum2val(bw), dev_ch, false, omap);
+    oas_map[token.tok] = std::make_shared<OAStream>(token.tok, name, enum2val(ps), enum2val(bw), dev_ch, false, omap);
 
     if (enable_network)
     {
-        auto ret = oas_map[token]->initialize_network(net_mgr);
+        auto ret = oas_map[token.tok]->initialize_network(net_mgr);
         if (!ret)
         {
             AUDIO_ERROR_PRINT("Failed to initialize network for output stream %u: %s", token.tok, ret.what());
@@ -360,29 +360,29 @@ RetCode AudioCenter::create(IToken itoken, OToken otoken, bool enable_network)
         return RetCode::EPARAM;
     }
 
-    auto oas = oas_map.find(otoken);
+    auto oas = oas_map.find(otoken.tok);
     if (oas == oas_map.end())
     {
         AUDIO_ERROR_PRINT("Output token don't exists: %u", otoken.tok);
         return RetCode::EPARAM;
     }
 
-    if (ias_map.find(itoken) != ias_map.end())
+    if (ias_map.find(itoken.tok) != ias_map.end())
     {
         AUDIO_ERROR_PRINT("Input token already exists: %u", itoken.tok);
         return RetCode::EPARAM;
     }
 
-    ias_map[itoken] =
-        std::make_shared<IAStream>(itoken, AudioDeviceName("null", 0), enum2val(AudioPeriodSize::INR_20MS),
+    ias_map[itoken.tok] =
+        std::make_shared<IAStream>(itoken.tok, AudioDeviceName("virt", 0), enum2val(AudioPeriodSize::INR_20MS),
                                    enum2val(AudioBandWidth::CDQuality), 2);
     if (enable_network)
     {
-        ias_map[itoken]->initialize_network(net_mgr);
+        ias_map[itoken.tok]->initialize_network(net_mgr);
         AUDIO_DEBUG_PRINT("Network initialized for input stream %u", itoken.tok);
     }
 
-    oas->second->register_listener(ias_map[itoken]);
+    oas->second->register_listener(ias_map[itoken.tok]);
 
     return RetCode::OK;
 }
@@ -396,12 +396,12 @@ RetCode AudioCenter::prepare()
         return {RetCode::ESTATE, "AudioCenter not in INIT state"};
     }
 
-    ias_map.emplace(USR_DUMMY_IN, std::make_shared<IAStream>(USR_DUMMY_IN, AudioDeviceName("null", 0),
-                                                             enum2val(AudioPeriodSize::INR_20MS),
-                                                             enum2val(AudioBandWidth::CDQuality), 2));
-    oas_map.emplace(USR_DUMMY_OUT, std::make_shared<OAStream>(USR_DUMMY_OUT, AudioDeviceName("null", 0),
-                                                              enum2val(AudioPeriodSize::INR_20MS),
-                                                              enum2val(AudioBandWidth::CDQuality), 2));
+    ias_map.emplace(USR_DUMMY_IN.tok, std::make_shared<IAStream>(USR_DUMMY_IN.tok, AudioDeviceName("virt", 0),
+                                                                 enum2val(AudioPeriodSize::INR_20MS),
+                                                                 enum2val(AudioBandWidth::CDQuality), 2));
+    oas_map.emplace(USR_DUMMY_OUT.tok, std::make_shared<OAStream>(USR_DUMMY_OUT.tok, AudioDeviceName("virt", 0),
+                                                                  enum2val(AudioPeriodSize::INR_20MS),
+                                                                  enum2val(AudioBandWidth::CDQuality), 2));
     if (net_mgr)
     {
         ias_map[USR_DUMMY_IN.tok]->initialize_network(net_mgr);
@@ -409,14 +409,14 @@ RetCode AudioCenter::prepare()
     }
 
     monitor->RegisterCallback([this](AudioDeviceEvent event, const AudioDeviceInfo &info) {
-        auto ias = ias_map.find(USR_DUMMY_IN);
+        auto ias = ias_map.find(USR_DUMMY_IN.tok);
         if (ias == ias_map.end())
         {
             AUDIO_ERROR_PRINT("Dummy input stream not found");
             return;
         }
 
-        auto oas = oas_map.find(USR_DUMMY_OUT);
+        auto oas = oas_map.find(USR_DUMMY_OUT.tok);
         if (oas == oas_map.end())
         {
             AUDIO_ERROR_PRINT("Dummy output stream not found");
@@ -429,27 +429,27 @@ RetCode AudioCenter::prepare()
             AUDIO_INFO_PRINT("New device: %s", info.name.c_str());
             if (info.type == AudioDeviceType::Capture)
             {
-                ias->second->reset({info.id, 0});
+                ias->second->restart({info.id, 0});
             }
             else if (info.type == AudioDeviceType::Playback)
             {
-                oas->second->reset({info.id, 0});
+                oas->second->restart({info.id, 0});
             }
             else
             {
-                ias->second->reset({info.id, 0});
-                oas->second->reset({info.id, 0});
+                ias->second->restart({info.id, 0});
+                oas->second->restart({info.id, 0});
             }
             break;
         case AudioDeviceEvent::Removed:
             AUDIO_INFO_PRINT("Del device: %s", info.name.c_str());
             if (ias->second->name().first == info.id)
             {
-                ias->second->reset({"null", 0});
+                ias->second->restart({"virt", 0});
             }
             if (oas->second->name().first == info.id)
             {
-                oas->second->reset({"null", 0});
+                oas->second->restart({"virt", 0});
             }
             break;
         default:
@@ -475,7 +475,7 @@ RetCode AudioCenter::connect(IToken itoken, OToken otoken, const std::string &ip
         return {RetCode::EPARAM, "Invalid token"};
     }
 
-    auto ias = ias_map.find(itoken);
+    auto ias = ias_map.find(itoken.tok);
     if (ias == ias_map.end())
     {
         AUDIO_ERROR_PRINT("Invalid input token: %u", itoken.tok);
@@ -491,7 +491,7 @@ RetCode AudioCenter::connect(IToken itoken, OToken otoken, const std::string &ip
         }
 
         AUDIO_INFO_PRINT("Try to connect stream %u -> %u on %s", itoken.tok, otoken.tok, ip.c_str());
-        auto ret = net_mgr->add_destination(itoken, otoken, ip, port);
+        auto ret = net_mgr->add_destination(itoken.tok, otoken.tok, ip, port);
         if (!ret)
         {
             AUDIO_ERROR_PRINT("Failed to add network destination %s for tokens %u->%u: %s", ip.c_str(), itoken.tok,
@@ -500,7 +500,7 @@ RetCode AudioCenter::connect(IToken itoken, OToken otoken, const std::string &ip
         return ret;
     }
 
-    auto oas = oas_map.find(otoken);
+    auto oas = oas_map.find(otoken.tok);
     if (oas == oas_map.end())
     {
         AUDIO_ERROR_PRINT("Invalid output token: %u", otoken.tok);
@@ -525,7 +525,7 @@ RetCode AudioCenter::disconnect(IToken itoken, OToken otoken, const std::string 
         return {RetCode::ESTATE, "AudioCenter not in CONNECTING state"};
     }
 
-    auto ias = ias_map.find(itoken);
+    auto ias = ias_map.find(itoken.tok);
     if (ias == ias_map.end())
     {
         AUDIO_ERROR_PRINT("Invalid input token: %u", itoken.tok);
@@ -541,7 +541,7 @@ RetCode AudioCenter::disconnect(IToken itoken, OToken otoken, const std::string 
         }
 
         AUDIO_INFO_PRINT("Try to disconnect stream %u -> %u on %s", itoken.tok, otoken.tok, ip.c_str());
-        auto ret = net_mgr->del_destination(itoken, otoken, ip, port);
+        auto ret = net_mgr->del_destination(itoken.tok, otoken.tok, ip, port);
         if (!ret)
         {
             AUDIO_ERROR_PRINT("Failed to remove network destination %s for tokens %u->%u: %s", ip.c_str(), itoken.tok,
@@ -550,7 +550,7 @@ RetCode AudioCenter::disconnect(IToken itoken, OToken otoken, const std::string 
         return ret;
     }
 
-    auto oas = oas_map.find(otoken);
+    auto oas = oas_map.find(otoken.tok);
     if (oas == oas_map.end())
     {
         AUDIO_ERROR_PRINT("Invalid output token: %u", otoken.tok);
@@ -581,7 +581,7 @@ RetCode AudioCenter::register_callback(IToken token, AudioInputCallBack cb, void
     }
 
     // Find the stream
-    auto it = ias_map.find(token);
+    auto it = ias_map.find(token.tok);
     if (it == ias_map.end())
     {
         AUDIO_ERROR_PRINT("Invalid input token: %u", token.tok);
@@ -608,7 +608,7 @@ RetCode AudioCenter::direct_push_pcm(IToken itoken, OToken otoken, unsigned int 
         return {RetCode::EPARAM, "Invalid input token"};
     }
 
-    auto oas = oas_map.find(otoken);
+    auto oas = oas_map.find(otoken.tok);
     if (oas == oas_map.end())
     {
         AUDIO_ERROR_PRINT("Invalid output token: %u", otoken.tok);
@@ -621,7 +621,7 @@ RetCode AudioCenter::direct_push_pcm(IToken itoken, OToken otoken, unsigned int 
         return {RetCode::EPARAM, "Invalid data pointer"};
     }
 
-    return oas->second->direct_push(itoken, chan, frames, sample_rate, data);
+    return oas->second->direct_push(itoken.tok, chan, frames, sample_rate, data);
 }
 
 RetCode AudioCenter::start()
@@ -638,7 +638,7 @@ RetCode AudioCenter::start()
         auto ret = pair.second->start();
         if (!ret)
         {
-            AUDIO_ERROR_PRINT("Failed to start OAStream: %u", pair.first);
+            AUDIO_ERROR_PRINT("Failed to start OAStream: %u, %s", pair.first, ret.what());
         }
     }
 
@@ -647,7 +647,7 @@ RetCode AudioCenter::start()
         auto ret = pair.second->start();
         if (!ret)
         {
-            AUDIO_ERROR_PRINT("Failed to start IAStream: %u", pair.first);
+            AUDIO_ERROR_PRINT("Failed to start IAStream: %u, %s", pair.first, ret.what());
         }
     }
 
@@ -689,7 +689,7 @@ RetCode AudioCenter::stop()
         auto ret = pair.second->stop();
         if (!ret)
         {
-            AUDIO_ERROR_PRINT("Failed to stop OAStream: %u", pair.first);
+            AUDIO_ERROR_PRINT("Failed to stop OAStream: %u, %s", pair.first, ret.what());
         }
     }
 
@@ -698,7 +698,7 @@ RetCode AudioCenter::stop()
         auto ret = pair.second->stop();
         if (!ret)
         {
-            AUDIO_ERROR_PRINT("Failed to stop IAStream: %u", pair.first);
+            AUDIO_ERROR_PRINT("Failed to stop IAStream: %u, %s", pair.first, ret.what());
         }
     }
 
@@ -720,14 +720,14 @@ RetCode AudioCenter::set_volume(AudioToken token, unsigned int vol)
         return {RetCode::EPARAM, "Invalid token"};
     }
 
-    auto ias = ias_map.find(token);
+    auto ias = ias_map.find(token.tok);
     if (ias != ias_map.end())
     {
         ias->second->set_volume(vol);
         return RetCode::OK;
     }
 
-    auto oas = oas_map.find(token);
+    auto oas = oas_map.find(token.tok);
     if (oas != oas_map.end())
     {
         oas->second->set_volume(vol);
@@ -754,14 +754,14 @@ RetCode AudioCenter::mute(AudioToken token, bool enable)
         return {RetCode::EPARAM, "Invalid token"};
     }
 
-    auto ias = ias_map.find(token);
+    auto ias = ias_map.find(token.tok);
     if (ias != ias_map.end())
     {
         enable ? ias->second->mute() : ias->second->unmute();
         return RetCode::OK;
     }
 
-    auto oas = oas_map.find(token);
+    auto oas = oas_map.find(token.tok);
     if (oas != oas_map.end())
     {
         enable ? oas->second->mute() : oas->second->unmute();
@@ -788,14 +788,14 @@ RetCode AudioCenter::mute(IToken itoken, OToken otoken, bool enable, const std::
         return {RetCode::EPARAM, "Invalid token"};
     }
 
-    auto oas = oas_map.find(otoken);
+    auto oas = oas_map.find(otoken.tok);
     if (oas == oas_map.end())
     {
         AUDIO_ERROR_PRINT("Invalid output token: %u", otoken.tok);
         return {RetCode::EPARAM, "Invalid output token"};
     }
 
-    return enable ? oas->second->mute(itoken, ip) : oas->second->unmute(itoken, ip);
+    return enable ? oas->second->mute(itoken.tok, ip) : oas->second->unmute(itoken.tok, ip);
 }
 
 RetCode AudioCenter::play(const std::string &name, int cycles, OToken otoken, const std::string &ip,
@@ -822,7 +822,7 @@ RetCode AudioCenter::play(const std::string &name, int cycles, OToken otoken, co
         }
 
         AUDIO_INFO_PRINT("Try to play file %s -> %u from %s", name.c_str(), otoken.tok, ip.c_str());
-        auto ret = player->play(name, cycles, net_mgr, otoken, ip, port);
+        auto ret = player->play(name, cycles, net_mgr, otoken.tok, ip, port);
         if (!ret)
         {
             AUDIO_ERROR_PRINT("Failed to play file %s to %s for token %u: %s", name.c_str(), ip.c_str(), otoken.tok,
@@ -831,7 +831,7 @@ RetCode AudioCenter::play(const std::string &name, int cycles, OToken otoken, co
         return ret;
     }
 
-    auto oas = oas_map.find(otoken);
+    auto oas = oas_map.find(otoken.tok);
     if (oas == oas_map.end())
     {
         AUDIO_ERROR_PRINT("Invalid output token: %u", otoken.tok);

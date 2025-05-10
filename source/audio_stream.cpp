@@ -194,7 +194,7 @@ RetCode OAStream::stop()
     return odevice->stop();
 }
 
-RetCode OAStream::reset(const AudioDeviceName &_name)
+RetCode OAStream::restart(const AudioDeviceName &_name)
 {
     stop();
 
@@ -212,9 +212,8 @@ RetCode OAStream::reset(const AudioDeviceName &_name)
 
     if (np)
     {
-        np->reset(_name, fs, ch);
+        np->reset2echo(_name, fs, ch);
     }
-
     compressor = std::make_unique<DRCompressor>(static_cast<float>(fs));
     oas_ready = true;
     return start();
@@ -406,11 +405,16 @@ AudioDeviceName OAStream::name() const
 
 void OAStream::register_listener(const std::shared_ptr<IAStream> &ias)
 {
-    ias->reset({odevice->hw_name, 0}, fs, ch);
+    auto ret = ias->reset2echo({odevice->hw_name, 0}, fs, ch);
+    if (!ret)
     {
-        std::lock_guard<std::mutex> grd(listener_mtx);
-        listener = ias;
+        AUDIO_ERROR_PRINT("Failed to reset echo: %s", ret.what());
+        return;
     }
+
+    std::lock_guard<std::mutex> grd(listener_mtx);
+    listener = ias;
+    AUDIO_DEBUG_PRINT("Listener registered for token %u", token);
 }
 
 void OAStream::unregister_listener()
@@ -546,7 +550,7 @@ void OAStream::process_data()
 RetCode OAStream::create_device(const AudioDeviceName &_name)
 {
     std::unique_ptr<AudioDevice> new_device;
-    if (_name.first == "null")
+    if (_name.first == "null" || _name.first == "virt")
     {
         new_device = make_audio_driver(NULL_OAS, _name, fs, ps, ch, false);
     }
@@ -684,7 +688,7 @@ IAStream::~IAStream()
     }
 }
 
-RetCode IAStream::reset(const AudioDeviceName &_name)
+RetCode IAStream::restart(const AudioDeviceName &_name)
 {
     if (enable_reset)
     {
@@ -709,7 +713,7 @@ RetCode IAStream::reset(const AudioDeviceName &_name)
     return start();
 }
 
-RetCode IAStream::reset(const AudioDeviceName &_name, unsigned int _fs, unsigned int _ch)
+RetCode IAStream::reset2echo(const AudioDeviceName &_name, unsigned int _fs, unsigned int _ch)
 {
     if (enable_reset)
     {
@@ -726,7 +730,7 @@ RetCode IAStream::reset(const AudioDeviceName &_name, unsigned int _fs, unsigned
 
     compressor = std::make_unique<DRCompressor>(static_cast<float>(fs));
     ias_ready = true;
-    return start();
+    return ret;
 }
 
 RetCode IAStream::start()
@@ -980,7 +984,7 @@ RetCode IAStream::create_device(const AudioDeviceName &_name)
     {
         new_device = make_audio_driver(ECHO_IAS, _name, fs, ps, spf_ch, false);
     }
-    else if (_name.first == "null")
+    else if (_name.first == "null" || _name.first == "virt")
     {
         new_device = make_audio_driver(NULL_IAS, _name, fs, ps, spf_ch, false);
     }
