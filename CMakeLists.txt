@@ -27,6 +27,7 @@ target_link_libraries(bettyaudio asio)
 target_link_libraries(bettyaudio $<$<PLATFORM_ID:Windows>:${WINDWOS_LIB}>)
 target_link_libraries(bettyaudio $<$<PLATFORM_ID:Linux>:${LINUX_LIB}>)
 target_compile_definitions(bettyaudio PUBLIC $<$<PLATFORM_ID:Windows>:_CRT_SECURE_NO_WARNINGS>)
+target_compile_definitions(bettyaudio PRIVATE ENABLE_DBG_ASSERT)
 target_include_directories(bettyaudio PUBLIC "${CMAKE_SOURCE_DIR}/include")
 
 add_subdirectory(test)

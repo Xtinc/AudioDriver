@@ -12,10 +12,10 @@
 #include <array>
 #include <atomic>
 #include <cinttypes>
-#include <cstdio>
 #include <map>
 #include <memory>
 #include <string>
+#include "audio_message.h"
 
 #if defined(_WIN32) || defined(_WIN64)
 #include <sdkddkver.h>
@@ -622,9 +622,5 @@ class AudioCenter
     std::unique_ptr<AudioMonitor> monitor; /**< Audio device monitor */
     std::shared_ptr<AudioPlayer> player;   /**< Audio player */
 };
-
-#define AUDIO_INFO_PRINT(fmt, ...) printf("[INF] %s(%d): " fmt "\n", __FUNCTION__, __LINE__, ##__VA_ARGS__)
-#define AUDIO_ERROR_PRINT(fmt, ...) printf("[ERR] %s(%d): " fmt "\n", __FUNCTION__, __LINE__, ##__VA_ARGS__)
-#define AUDIO_DEBUG_PRINT(fmt, ...) printf("[DEB] %s(%d): " fmt "\n", __FUNCTION__, __LINE__, ##__VA_ARGS__)
 
 #endif
