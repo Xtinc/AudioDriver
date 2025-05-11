@@ -11,6 +11,11 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
+if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
+  add_compile_options(/fsanitize=address)
+  message(STATUS "Address sanitizer enabled (MSVC)")
+endif()
+
 # asio
 add_library(asio INTERFACE)
 target_include_directories(asio INTERFACE "${CMAKE_SOURCE_DIR}/asio-1.30.2/include")

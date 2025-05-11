@@ -594,10 +594,9 @@ template <typename T> class InterleavedView
      */
     template <typename U>
     InterleavedView(U *data, size_t samples_per_channel, size_t num_channels)
-        : num_channels_(num_channels), samples_per_channel_(samples_per_channel),
-          data_(data, num_channels * samples_per_channel)
+        : num_chs(num_channels), samples_per_ch(samples_per_channel), datas(data, num_channels * samples_per_channel)
     {
-        DBG_ASSERT_COND(num_channels_ == 0u || samples_per_channel_ != 0u);
+        DBG_ASSERT_COND(num_chs == 0u || samples_per_ch != 0u);
     }
 
     /**
@@ -624,33 +623,33 @@ template <typename T> class InterleavedView
      */
     template <typename U>
     InterleavedView(const InterleavedView<U> &other)
-        : num_channels_(other.num_channels()), samples_per_channel_(other.samples_per_channel()), data_(other.data())
+        : num_chs(other.num_channels()), samples_per_ch(other.samples_per_channel()), datas(other.data())
     {
     }
 
     size_t num_channels() const
     {
-        return num_channels_;
+        return num_chs;
     }
 
     size_t samples_per_channel() const
     {
-        return samples_per_channel_;
+        return samples_per_ch;
     }
 
     ArrayView<T> data() const
     {
-        return data_;
+        return datas;
     }
 
     bool empty() const
     {
-        return data_.empty();
+        return datas.empty();
     }
 
     size_t size() const
     {
-        return data_.size();
+        return datas.size();
     }
 
     /**
@@ -660,8 +659,8 @@ template <typename T> class InterleavedView
     MonoView<T> AsMono() const
     {
         DBG_ASSERT_EQ(num_channels(), 1u);
-        DBG_ASSERT_EQ(data_.size(), samples_per_channel_);
-        return data_;
+        DBG_ASSERT_EQ(datas.size(), samples_per_ch);
+        return datas;
     }
 
     /**
@@ -677,63 +676,60 @@ template <typename T> class InterleavedView
         static_assert(sizeof(T) == sizeof(U), "");
         DBG_ASSERT_EQ(num_channels(), source.num_channels());
         DBG_ASSERT_EQ(samples_per_channel(), source.samples_per_channel());
-        DBG_ASSERT_GE(data_.size(), source.data().size());
+        DBG_ASSERT_GE(datas.size(), source.data().size());
         const auto data = source.data();
-        memcpy(&data_[0], &data[0], data.size() * sizeof(U));
+        memcpy(&datas[0], &data[0], data.size() * sizeof(U));
     }
 
     T &operator[](size_t idx) const
     {
-        return data_[idx];
+        return datas[idx];
     }
 
     T *begin() const
     {
-        return data_.begin();
+        return datas.begin();
     }
 
     T *end() const
     {
-        return data_.end();
+        return datas.end();
     }
 
     const T *cbegin() const
     {
-        return data_.cbegin();
+        return datas.cbegin();
     }
 
     const T *cend() const
     {
-        return data_.cend();
+        return datas.cend();
     }
 
     std::reverse_iterator<T *> rbegin() const
     {
-        return data_.rbegin();
+        return datas.rbegin();
     }
 
     std::reverse_iterator<T *> rend() const
     {
-        return data_.rend();
+        return datas.rend();
     }
 
     std::reverse_iterator<const T *> crbegin() const
     {
-        return data_.crbegin();
+        return datas.crbegin();
     }
 
     std::reverse_iterator<const T *> crend() const
     {
-        return data_.crend();
+        return datas.crend();
     }
 
   private:
-    // TODO(tommi): Consider having these both be stored as uint16_t to
-    // save a few bytes per view. Use `dchecked_cast` to support size_t during
-    // construction.
-    size_t num_channels_ = 0u;
-    size_t samples_per_channel_ = 0u;
-    ArrayView<T> data_;
+    size_t num_chs = 0u;
+    size_t samples_per_ch = 0u;
+    ArrayView<T> datas;
 };
 
 /**
@@ -762,8 +758,7 @@ template <typename T> class DeinterleavedView
      */
     template <typename U>
     DeinterleavedView(U *data, size_t samples_per_channel, size_t num_channels)
-        : num_channels_(num_channels), samples_per_channel_(samples_per_channel),
-          data_(data, num_channels * samples_per_channel_)
+        : num_chs(num_channels), samples_per_ch(samples_per_channel), datas(data, num_channels * samples_per_ch)
     {
     }
 
@@ -775,7 +770,7 @@ template <typename T> class DeinterleavedView
      */
     template <typename U>
     DeinterleavedView(const DeinterleavedView<U> &other)
-        : num_channels_(other.num_channels()), samples_per_channel_(other.samples_per_channel()), data_(other.data())
+        : num_chs(other.num_channels()), samples_per_ch(other.samples_per_channel()), datas(other.data())
     {
     }
 
@@ -790,33 +785,33 @@ template <typename T> class DeinterleavedView
      */
     MonoView<T> operator[](size_t idx) const
     {
-        DBG_ASSERT_LT(idx, num_channels_);
-        return MonoView<T>(&data_[idx * samples_per_channel_], samples_per_channel_);
+        DBG_ASSERT_LT(idx, num_chs);
+        return MonoView<T>(&datas[idx * samples_per_ch], samples_per_ch);
     }
 
     size_t num_channels() const
     {
-        return num_channels_;
+        return num_chs;
     }
 
     size_t samples_per_channel() const
     {
-        return samples_per_channel_;
+        return samples_per_ch;
     }
 
     ArrayView<T> data() const
     {
-        return data_;
+        return datas;
     }
 
     bool empty() const
     {
-        return data_.empty();
+        return datas.empty();
     }
 
     size_t size() const
     {
-        return data_.size();
+        return datas.size();
     }
 
     /**
@@ -830,11 +825,9 @@ template <typename T> class DeinterleavedView
     }
 
   private:
-    // TODO(tommi): Consider having these be stored as uint16_t to save a few
-    // bytes per view. Use `dchecked_cast` to support size_t during construction.
-    size_t num_channels_ = 0u;
-    size_t samples_per_channel_ = 0u;
-    ArrayView<T> data_;
+    size_t num_chs = 0u;
+    size_t samples_per_ch = 0u;
+    ArrayView<T> datas;
 };
 
 template <typename T> constexpr size_t NumChannels(const MonoView<T> & /* view */)
@@ -896,50 +889,253 @@ template <typename T> size_t SamplesPerChannel(const DeinterleavedView<T> &view)
 {
     return view.samples_per_channel();
 }
+
 /**
- * @brief Copy samples from one audio view to another
+ * @brief Buffer for managing audio channel data, split into frequency bands
  *
- * A simple wrapper around memcpy that includes checks for properties.
- * The parameter order is the same as for memcpy(), first destination then
- * source.
+ * Encapsulates a contiguous data buffer, full or split into frequency bands,
+ * with access to pointer arrays of the deinterleaved channels and bands.
+ * The buffer is zero initialized at creation.
  *
- * @tparam D Destination view type
- * @tparam S Source view type
- * @param destination Destination audio view
- * @param source Source audio view
+ * The buffer structure for a 2 channel and 2 bands case:
+ *
+ * `data_`:
+ * { [ --- b1ch1 --- ] [ --- b2ch1 --- ] [ --- b1ch2 --- ] [ --- b2ch2 --- ] }
+ *
+ * The pointer arrays for the same example:
+ *
+ * `channels_`:
+ * { [ b1ch1* ] [ b1ch2* ] [ b2ch1* ] [ b2ch2* ] }
+ *
+ * `bands_`:
+ * { [ b1ch1* ] [ b2ch1* ] [ b1ch2* ] [ b2ch2* ] }
+ *
+ * @tparam T Data type of the buffer elements
  */
-template <typename D, typename S> void CopySamples(D &destination, const S &source)
+template <typename T> class ChannelBuffer
 {
-    static_assert(sizeof(typename D::value_type) == sizeof(typename S::value_type), "");
-    // Here we'd really like to do
-    // static_assert(IsInterleavedView(destination) == IsInterleavedView(source),
-    //               "");
-    // but the compiler doesn't like it inside this template function for
-    // some reason. The following check is an approximation but unfortunately
-    // means that copying between a MonoView and single channel interleaved or
-    // deinterleaved views wouldn't work.
-    // static_assert(sizeof(destination) == sizeof(source),
-    //               "Incompatible view types");
-    DBG_ASSERT_EQ(NumChannels(destination), NumChannels(source));
-    DBG_ASSERT_EQ(SamplesPerChannel(destination), SamplesPerChannel(source));
-    DBG_ASSERT_GE(destination.size(), source.size());
-    memcpy(&destination[0], &source[0], source.size() * sizeof(typename S::value_type));
-}
+  public:
+    /**
+     * @brief Constructs a new Channel Buffer
+     *
+     * @param num_frames Number of frames in the buffer
+     * @param num_channels Number of channels
+     * @param num_bands Number of frequency bands (default: 1)
+     */
+    ChannelBuffer(size_t num_frames, size_t num_channels, size_t num_bands = 1)
+        : datas(new T[num_frames * num_channels]()), chs(new T *[num_channels * num_bands]),
+          bds(new T *[num_channels * num_bands]), num_frs(num_frames), num_frs_per_bd(num_frames / num_bands),
+          num_alloc_chs(num_channels), num_chs(num_channels), num_bds(num_bands),
+          bd_view(num_alloc_chs, std::vector<ArrayView<T>>(num_bds)),
+          ch_view(num_bds, std::vector<ArrayView<T>>(num_alloc_chs))
+    {
+        // Temporarily cast away const_ness to allow populating the array views.
+        auto *bands_view = const_cast<std::vector<std::vector<ArrayView<T>>> *>(&bd_view);
+        auto *channels_view = const_cast<std::vector<std::vector<ArrayView<T>>> *>(&ch_view);
 
-// Sets all the samples in a view to 0. This template function is a simple
-// wrapper around `memset()` but adds the benefit of automatically calculating
-// the byte size from the number of samples and sample type.
-template <typename T> void ClearSamples(T &view)
-{
-    memset(&view[0], 0, view.size() * sizeof(typename T::value_type));
-}
+        for (size_t ch = 0; ch < num_alloc_chs; ++ch)
+        {
+            for (size_t band = 0; band < num_bds; ++band)
+            {
+                (*channels_view)[band][ch] = ArrayView<T>(&datas[ch * num_frs + band * num_frs_per_bd], num_frs_per_bd);
+                (*bands_view)[ch][band] = ch_view[band][ch];
+                chs[band * num_alloc_chs + ch] = ch_view[band][ch].data();
+                bds[ch * num_bds + band] = chs[band * num_alloc_chs + ch];
+            }
+        }
+    }
 
-// Same as `ClearSamples()` above but allows for clearing only the first
-// `sample_count` number of samples.
-template <typename T> void ClearSamples(T &view, size_t sample_count)
-{
-    DBG_ASSERT_LE(sample_count, view.size());
-    memset(&view[0], 0, sample_count * sizeof(typename T::value_type));
-}
+    /**
+     * @brief Returns a pointer array to the channels
+     *
+     * @param band Band index (default: 0)
+     * @return const T*const* Array of channel pointers
+     *
+     * @note If band is explicitly specified, the channels for a specific band are
+     * returned and the usage becomes: channels(band)[channel][sample].
+     * Where:
+     * - 0 <= band < `num_bands_`
+     * - 0 <= channel < `num_allocated_channels_`
+     * - 0 <= sample < `num_frames_per_band_`
+     *
+     * @note If band is not explicitly specified, the full-band channels (or lower band
+     * channels) are returned and the usage becomes: channels()[channel][sample].
+     * Where:
+     * - 0 <= channel < `num_allocated_channels_`
+     * - 0 <= sample < `num_frames_`
+     */
+    const T *const *channels(size_t band = 0) const
+    {
+        DBG_ASSERT_LT(band, num_bds);
+        return &chs[band * num_alloc_chs];
+    }
+
+    /**
+     * @brief Returns a mutable pointer array to the channels
+     *
+     * @param band Band index (default: 0)
+     * @return T*const* Array of mutable channel pointers
+     * @see channels() const
+     */
+    T *const *channels(size_t band = 0)
+    {
+        const ChannelBuffer<T> *t = this;
+        return const_cast<T *const *>(t->channels(band));
+    }
+
+    /**
+     * @brief Returns an array view of the channels for a specific band
+     *
+     * @param band Band index (default: 0)
+     * @return ArrayView<const ArrayView<T>> Array view of the channels
+     */
+    ArrayView<const ArrayView<T>> channels_view(size_t band = 0)
+    {
+        return ch_view[band];
+    }
+
+    /**
+     * @brief Returns a const array view of the channels for a specific band
+     *
+     * @param band Band index (default: 0)
+     * @return ArrayView<const ArrayView<T>> Const array view of the channels
+     */
+    ArrayView<const ArrayView<T>> channels_view(size_t band = 0) const
+    {
+        return ch_view[band];
+    }
+
+    /**
+     * @brief Returns a pointer array to the bands for a specific channel
+     *
+     * @param channel Channel index
+     * @return const T*const* Array of band pointers for the specified channel
+     *
+     * @note Usage: bands(channel)[band][sample]
+     * Where:
+     * - 0 <= channel < `num_channels_`
+     * - 0 <= band < `num_bands_`
+     * - 0 <= sample < `num_frames_per_band_`
+     */
+    const T *const *bands(size_t channel) const
+    {
+        DBG_ASSERT_LT(channel, num_chs);
+        DBG_ASSERT_GE(channel, 0);
+        return &bds[channel * num_bds];
+    }
+
+    /**
+     * @brief Returns a mutable pointer array to the bands for a specific channel
+     *
+     * @param channel Channel index
+     * @return T*const* Array of mutable band pointers for the specified channel
+     * @see bands() const
+     */
+    T *const *bands(size_t channel)
+    {
+        const ChannelBuffer<T> *t = this;
+        return const_cast<T *const *>(t->bands(channel));
+    }
+
+    /**
+     * @brief Returns an array view of the bands for a specific channel
+     *
+     * @param channel Channel index
+     * @return ArrayView<const ArrayView<T>> Array view of the bands
+     */
+    ArrayView<const ArrayView<T>> bands_view(size_t channel)
+    {
+        return bd_view[channel];
+    }
+
+    /**
+     * @brief Returns a const array view of the bands for a specific channel
+     *
+     * @param channel Channel index
+     * @return ArrayView<const ArrayView<T>> Const array view of the bands
+     */
+    ArrayView<const ArrayView<T>> bands_view(size_t channel) const
+    {
+        return bd_view[channel];
+    }
+
+    /**
+     * @brief Sets the `slice` pointers to the `start_frame` position for each channel
+     *
+     * @param slice Array of pointers to be updated
+     * @param start_frame Starting frame index
+     * @return const T*const* Returns `slice` for convenience
+     */
+    const T *const *Slice(T **slice, size_t start_frame) const
+    {
+        DBG_ASSERT_LT(start_frame, num_frs);
+        for (size_t i = 0; i < num_chs; ++i)
+            slice[i] = &chs[i][start_frame];
+        return slice;
+    }
+
+    /**
+     * @brief Sets the `slice` pointers to the `start_frame` position for each channel
+     *
+     * @param slice Array of pointers to be updated
+     * @param start_frame Starting frame index
+     * @return T** Returns `slice` for convenience
+     */
+    T **Slice(T **slice, size_t start_frame)
+    {
+        const ChannelBuffer<T> *t = this;
+        return const_cast<T **>(t->Slice(slice, start_frame));
+    }
+
+    size_t num_frames() const
+    {
+        return num_frs;
+    }
+
+    size_t num_frames_per_band() const
+    {
+        return num_frs_per_bd;
+    }
+
+    size_t num_channels() const
+    {
+        return num_chs;
+    }
+
+    size_t num_bands() const
+    {
+        return num_bds;
+    }
+
+    size_t size() const
+    {
+        return num_frs * num_alloc_chs;
+    }
+
+    /**
+     * @brief Sets the number of active channels
+     *
+     * @param num_channels New number of channels (must be <= num_alloc_chs)
+     */
+    void set_num_channels(size_t num_channels)
+    {
+        DBG_ASSERT_LE(num_channels, num_alloc_chs);
+        num_chs = num_channels;
+    }
+
+  private:
+    std::unique_ptr<T[]> datas;
+    std::unique_ptr<T *[]> chs;
+    std::unique_ptr<T *[]> bds;
+    const size_t num_frs;
+    const size_t num_frs_per_bd;
+    // Number of channels the internal buffer holds.
+    const size_t num_alloc_chs;
+    // Number of channels the user sees.
+    size_t num_chs;
+    const size_t num_bds;
+    const std::vector<std::vector<ArrayView<T>>> bd_view;
+    const std::vector<std::vector<ArrayView<T>>> ch_view;
+};
 
 #endif

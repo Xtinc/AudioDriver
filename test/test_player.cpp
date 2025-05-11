@@ -3,12 +3,13 @@
 int main(int argc, char **argv)
 {
     AudioCenter center(false);
-    center.create(110_otk, AudioDeviceName("default", 0), AudioBandWidth::Full, AudioPeriodSize::INR_20MS, 2, false,
-                  false);
+    center.create(110_otk, AudioDeviceName("default", 0), AudioBandWidth::CDQuality, AudioPeriodSize::INR_20MS, 2,
+                  false, false);
+    // center.create(20_itk, 110_otk);
     center.prepare();
-    center.connect(USR_DUMMY_IN, USR_DUMMY_OUT);
+    // center.connect(USR_DUMMY_IN, USR_DUMMY_OUT);
     center.start();
-    center.play("dukou.wav", 0, 110_otk);
+    center.play("DUKOU.wav", 0, 110_otk);
 
     std::this_thread::sleep_for(std::chrono::seconds(5));
     center.set_volume(110_otk, 0);

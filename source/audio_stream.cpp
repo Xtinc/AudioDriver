@@ -496,28 +496,21 @@ void OAStream::process_data()
                 continue;
             }
 
-            unsigned int output_frames = ps;
-            auto ret =
-                context->sampler.process(reinterpret_cast<const PCM_TYPE *>(context->session.data()), session_frames,
-                                         reinterpret_cast<PCM_TYPE *>(mix_buf.get()), output_frames);
+            InterleavedView<const PCM_TYPE> iview(reinterpret_cast<PCM_TYPE *>(context->session.data()), session_frames,
+                                                  context->session.chan);
+            InterleavedView<PCM_TYPE> oview(reinterpret_cast<PCM_TYPE *>(mix_buf.get()), ps, ch);
 
-            if (ret != RetCode::OK && ret != RetCode::NOACTION)
+            auto ret = context->sampler.process(iview, oview);
+
+            if (ret != RetCode::OK)
             {
                 AUDIO_DEBUG_PRINT("Failed to process data: %s", ret.what());
                 ++it;
                 continue;
             }
 
-            auto src = (ret == RetCode::NOACTION) ? reinterpret_cast<const PCM_TYPE *>(context->session.data())
-                                                  : reinterpret_cast<const PCM_TYPE *>(mix_buf.get());
-
-            if (output_frames != ps)
-            {
-                AUDIO_DEBUG_PRINT("Frames mismatch: %u -> %u", output_frames, ps);
-                output_frames = std::min(output_frames, ps);
-            }
-
-            mix_channels(src, ch, output_frames, reinterpret_cast<PCM_TYPE *>(databuf.get()));
+            auto src = oview.data().data();
+            mix_channels(src, ch, ps, reinterpret_cast<PCM_TYPE *>(databuf.get()));
             ++it;
         }
     }
@@ -938,40 +931,41 @@ RetCode IAStream::process_data()
         return RetCode::OK;
     }
 
-    ret = sampler->process(reinterpret_cast<PCM_TYPE *>(dev_buf.get()), dev_fr,
-                           reinterpret_cast<PCM_TYPE *>(usr_buf.get()), dev_fr);
+    InterleavedView<PCM_TYPE> iview(reinterpret_cast<PCM_TYPE *>(dev_buf.get()), dev_fr, idevice->ch());
+    InterleavedView<PCM_TYPE> oview(reinterpret_cast<PCM_TYPE *>(usr_buf.get()), ps, ch);
 
-    if (ret != RetCode::OK && ret != RetCode::NOACTION)
+    ret = sampler->process(iview, oview);
+
+    if (ret != RetCode::OK)
     {
         AUDIO_DEBUG_PRINT("Failed to resample data: %s", ret.what());
         return ret;
     }
 
-    PCM_TYPE *src = (ret == RetCode::NOACTION) ? reinterpret_cast<PCM_TYPE *>(dev_buf.get())
-                                               : reinterpret_cast<PCM_TYPE *>(usr_buf.get());
+    PCM_TYPE *src = oview.data().data();
 
     auto gain = volume.load();
     if (gain != 50)
     {
-        compressor->process(src, dev_fr, ch, volume2gain(gain));
+        compressor->process(src, ps, ch, volume2gain(gain));
     }
 
     for (const auto &dest : dests)
     {
         if (auto np = dest.lock())
         {
-            np->direct_push(token, ch, dev_fr, fs, src);
+            np->direct_push(token, ch, ps, fs, src);
         }
     }
 
     if (auto np = networker.lock())
     {
-        np->send_audio(token, src, dev_fr);
+        np->send_audio(token, src, ps);
     }
 
     if (usr_cb)
     {
-        usr_cb(src, ch, dev_fr, usr_ptr);
+        usr_cb(src, ch, ps, usr_ptr);
     }
 
     return RetCode::OK;
@@ -1038,11 +1032,11 @@ RetCode IAStream::swap_device(idevice_ptr &new_device)
     auto new_sampler = std::make_unique<LocSampler>(new_device->fs(), new_device->ch(), fs, ch, dev_fr,
                                                     new_device->ch() == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP, imap);
 
-    if (!new_sampler->is_valid())
-    {
-        AUDIO_ERROR_PRINT("Failed to create sampler for device [%s]", new_device->hw_name.c_str());
-        return {RetCode::FAILED, "Failed to create sampler"};
-    }
+    // if (!new_sampler->is_valid())
+    // {
+    //     AUDIO_ERROR_PRINT("Failed to create sampler for device [%s]", new_device->hw_name.c_str());
+    //     return {RetCode::FAILED, "Failed to create sampler"};
+    // }
 
     idevice = std::move(new_device);
     dev_buf = std::move(new_dev_buf);
@@ -1120,7 +1114,7 @@ RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared
     }
 
     auto *raw_sender = new IAStream(static_cast<unsigned char>(token + preemptive), AudioDeviceName(name, cycles),
-                                    enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2);
+                                    enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::SemiSuperWide), 2);
 
     auto audio_sender = std::shared_ptr<IAStream>(raw_sender, [self = shared_from_this(), name](const IAStream *ptr) {
         --(self->preemptive);

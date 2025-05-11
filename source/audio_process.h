@@ -1,70 +1,38 @@
 #ifndef AUDIO_PROCESS_HEADER
 #define AUDIO_PROCESS_HEADER
 
+#include "audio_dataview.h"
 #include "audio_interface.h"
 #include <array>
 #include <memory>
+#include <vector>
 
 void mix_channels(const int16_t *ssrc, unsigned int chan, unsigned int frames_num, int16_t *output);
 
 class SincInterpolator
 {
   public:
-    SincInterpolator(int order, int precision, int chan, double ratio);
+    SincInterpolator(int order, int precision, unsigned int chan, double ratio);
+
     ~SincInterpolator();
 
-    int process(const double *input, int input_size, double *output, int track) const;
+    void process(ArrayView<const float> in, ArrayView<float> out, unsigned int ch);
 
   private:
-    double kernel_func(double x, double cutoff) const;
+    float kernel_func(double x, double cutoff) const;
 
-    double interpolator(double x, const double *input, const double *prev_pos) const;
+    float interpolator(double x, const float *input, const float *prev_pos) const;
 
   private:
     const int order;
     const int quan;
-    const int chan;
+    const unsigned int chan;
     const double step;
 
-    double *left;
-    bool *ready;
-
-    double *prev;
-    double *kern;
-};
-
-class LocSampler
-{
-  public:
-    LocSampler(unsigned int src_fs, unsigned int src_ch, unsigned int dst_fs, unsigned int dst_ch,
-               unsigned int max_frames, const AudioChannelMap &imap, const AudioChannelMap &omap);
-
-    RetCode process(const PCM_TYPE *input, unsigned int input_frames, PCM_TYPE *output,
-                    unsigned int &output_frames) const;
-
-    bool is_valid() const
-    {
-        return valid;
-    }
-
-  public:
-    const unsigned int src_fs;
-    const unsigned int src_ch;
-    const unsigned int dst_fs;
-    const unsigned int dst_ch;
-    const double ratio;
-    const unsigned int max_frames;
-    const AudioChannelMap ichan_map;
-    const AudioChannelMap ochan_map;
-    const unsigned int real_channel;
-
-  private:
-    bool valid;
-    std::unique_ptr<double[]> ibuffer;
-    std::unique_ptr<double[]> obuffer;
-    std::unique_ptr<SincInterpolator> resampler;
-
-    void convertChannels(const PCM_TYPE *input, unsigned int frames, PCM_TYPE *output) const;
+    std::vector<double> left;
+    std::vector<bool> ready;
+    std::unique_ptr<float[]> prev;
+    std::unique_ptr<float[]> kern;
 };
 
 class DRCompressor
@@ -95,6 +63,42 @@ class DRCompressor
 
     float knee_threshold_lower;
     float knee_threshold_upper;
+};
+
+class LocSampler
+{
+  public:
+    LocSampler(unsigned int src_fs, unsigned int src_ch, unsigned int dst_fs, unsigned int dst_ch,
+               unsigned int max_frames, const AudioChannelMap &imap, const AudioChannelMap &omap);
+
+    RetCode process(const InterleavedView<const PCM_TYPE> &input, const InterleavedView<PCM_TYPE> &output) const;
+
+  public:
+    const unsigned int src_fs;
+    const unsigned int src_ch;
+    const unsigned int dst_fs;
+    const unsigned int dst_ch;
+    const double ratio;
+    const unsigned int ti;
+    const AudioChannelMap ichan_map;
+    const AudioChannelMap ochan_map;
+    const unsigned int real_ichan;
+    const unsigned int real_ochan;
+
+  private:
+    std::unique_ptr<float[]> ibuffer;
+    std::unique_ptr<float[]> obuffer;
+    std::unique_ptr<SincInterpolator> resampler;
+
+    void deinterleave_s16_f16(const InterleavedView<const PCM_TYPE> &interleaved,
+                              const DeinterleavedView<float> &deinterleaved) const;
+
+    void interleave_f16_s16(const DeinterleavedView<const float> &deinterleaved,
+                            const InterleavedView<PCM_TYPE> &interleaved) const;
+
+    void convert_channels(const DeinterleavedView<float> &input, const DeinterleavedView<float> &output) const;
+
+    void convert_sample_rate(const DeinterleavedView<float> &input, DeinterleavedView<float> &output) const;
 };
 
 #endif
