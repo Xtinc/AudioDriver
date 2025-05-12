@@ -618,7 +618,6 @@ void OAStream::reset_self()
         self->odevice.reset();
         self->odevice = make_audio_driver(PHSY_OAS, self->usr_name, self->fs, self->ps, self->ch, self->enable_reset);
 
-        self->compressor->reset();
         self->oas_ready = true;
         auto ret = self->start();
         if (!ret)
@@ -703,7 +702,6 @@ RetCode IAStream::restart(const AudioDeviceName &_name)
         usr_name = _name;
     }
 
-    compressor->reset();
     ias_ready = true;
 
     return start();
@@ -1070,7 +1068,6 @@ void IAStream::reset_self()
         {
             AUDIO_ERROR_PRINT("Failed to open capture device [%s]: %s", self->usr_name.first.c_str(), ret.what());
         }
-        self->compressor->reset();
         self->ias_ready = true;
         ret = self->start();
         if (!ret)

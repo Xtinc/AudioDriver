@@ -22,7 +22,7 @@
  * @param val1 First value to compare
  * @param val2 Second value to compare
  */
-#define DBG_ASSERT_OP(name, op, val1, val2)                                                                             \
+#define DBG_ASSERT_OP(name, op, val1, val2)                                                                            \
     do                                                                                                                 \
     {                                                                                                                  \
         if (!((val1)op(val2)))                                                                                         \
@@ -33,7 +33,7 @@
         }                                                                                                              \
     } while (0)
 
-#define DBG_ASSERT_COND(condition)                                                                                           \
+#define DBG_ASSERT_COND(condition)                                                                                     \
     do                                                                                                                 \
     {                                                                                                                  \
         if (!(condition))                                                                                              \

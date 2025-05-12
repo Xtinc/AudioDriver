@@ -113,10 +113,15 @@ static void merge_label(std::vector<InfoLabel> &ias_label, std::vector<InfoLabel
         merged_labels.push_back(oas_label[j++]);
     }
 
+    if (merged_labels.empty())
+    {
+        return;
+    }
+
     std::vector<uint64_t> ias_tokens;
     std::vector<uint64_t> oas_tokens;
-    ias_label.reserve(merged_labels.size());
-    oas_label.reserve(merged_labels.size());
+    ias_tokens.reserve(merged_labels.size());
+    oas_tokens.reserve(merged_labels.size());
 
     uint64_t last_label = 0;
     std::sort(merged_labels.begin(), merged_labels.end(),
@@ -230,9 +235,14 @@ RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBand
 
     ias_map[token.tok] = std::make_shared<IAStream>(token.tok, name, enum2val(ps), enum2val(bw), ch, enable_reset);
 
-    if (enable_network)
+    if (enable_network && net_mgr)
     {
-        ias_map[token.tok]->initialize_network(net_mgr);
+        auto ret = ias_map[token.tok]->initialize_network(net_mgr);
+        if (!ret)
+        {
+            AUDIO_ERROR_PRINT("Failed to initialize network for input stream %u: %s", token.tok, ret.what());
+            return ret;
+        }
         AUDIO_DEBUG_PRINT("Network initialized for input stream %u", token.tok);
     }
 
@@ -277,9 +287,14 @@ RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBand
 
     ias_map[token.tok] = std::make_shared<IAStream>(token.tok, name, enum2val(ps), enum2val(bw), dev_ch, imap);
 
-    if (enable_network)
+    if (enable_network && net_mgr)
     {
-        ias_map[token.tok]->initialize_network(net_mgr);
+        auto ret = ias_map[token.tok]->initialize_network(net_mgr);
+        if (!ret)
+        {
+            AUDIO_ERROR_PRINT("Failed to initialize network for input stream %u: %s", token.tok, ret.what());
+            return ret;
+        }
         AUDIO_DEBUG_PRINT("Network initialized for input stream %u", token.tok);
     }
 
@@ -311,9 +326,14 @@ RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBand
 
     oas_map[token.tok] = std::make_shared<OAStream>(token.tok, name, enum2val(ps), enum2val(bw), ch, enable_reset);
 
-    if (enable_network)
+    if (enable_network && net_mgr)
     {
-        oas_map[token.tok]->initialize_network(net_mgr);
+        auto ret = oas_map[token.tok]->initialize_network(net_mgr);
+        if (!ret)
+        {
+            AUDIO_ERROR_PRINT("Failed to initialize network for output stream %u: %s", token.tok, ret.what());
+            return ret;
+        }
         AUDIO_DEBUG_PRINT("Network initialized for output stream %u", token.tok);
     }
 
@@ -323,6 +343,8 @@ RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBand
 RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps,
                             unsigned int dev_ch, const AudioChannelMap &omap, bool enable_network)
 {
+    AUDIO_INFO_PRINT("Creating %s output stream with token %u", name.first.c_str(), token.tok);
+
     if (center_state.load() != State::INIT)
     {
         AUDIO_ERROR_PRINT("Cannot create stream, AudioCenter not in INIT state");
@@ -356,7 +378,7 @@ RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBand
 
     oas_map[token.tok] = std::make_shared<OAStream>(token.tok, name, enum2val(ps), enum2val(bw), dev_ch, false, omap);
 
-    if (enable_network)
+    if (enable_network && net_mgr)
     {
         auto ret = oas_map[token.tok]->initialize_network(net_mgr);
         if (!ret)
@@ -372,6 +394,8 @@ RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBand
 
 RetCode AudioCenter::create(IToken itoken, OToken otoken, bool enable_network)
 {
+    AUDIO_INFO_PRINT("Creating linked streams with tokens %u -> %u", itoken.tok, otoken.tok);
+
     if (center_state.load() != State::INIT)
     {
         AUDIO_ERROR_PRINT("Cannot create stream, AudioCenter not in INIT state");
@@ -416,9 +440,14 @@ RetCode AudioCenter::create(IToken itoken, OToken otoken, bool enable_network)
                                        enum2val(AudioBandWidth::Full), 2);
     }
 
-    if (enable_network)
+    if (enable_network && net_mgr)
     {
-        ias_map[itoken.tok]->initialize_network(net_mgr);
+        auto ret = ias_map[itoken.tok]->initialize_network(net_mgr);
+        if (!ret)
+        {
+            AUDIO_ERROR_PRINT("Failed to initialize network for input stream %u: %s", itoken.tok, ret.what());
+            return ret;
+        }
         AUDIO_DEBUG_PRINT("Network initialized for input stream %u", itoken.tok);
     }
 
@@ -435,7 +464,6 @@ RetCode AudioCenter::prepare()
         AUDIO_ERROR_PRINT("AudioCenter not in INIT state");
         return {RetCode::ESTATE, "AudioCenter not in INIT state"};
     }
-
     ias_map.emplace(USR_DUMMY_IN.tok,
                     std::make_shared<IAStream>(USR_DUMMY_IN.tok, AudioDeviceName("virt", 0),
                                                enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2));

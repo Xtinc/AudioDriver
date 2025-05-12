@@ -18,7 +18,6 @@ using TimePointer = std::chrono::steady_clock::time_point;
 using sampler_ptr = std::unique_ptr<LocSampler>;
 using session_ptr = std::unique_ptr<SessionData>;
 using network_ptr = std::weak_ptr<NetWorker>;
-using drcompr_ptr = std::unique_ptr<DRCompressor>;
 using asio_strand = asio::strand<asio::io_context::executor_type>;
 
 class BackgroundService
@@ -117,7 +116,6 @@ class OAStream : public std::enable_shared_from_this<OAStream>
     obuffer_ptr mix_buf;
     obuffer_ptr databuf;
     odevice_ptr odevice;
-    drcompr_ptr compressor;
     std::atomic_uint volume;
 
     std::mutex session_mtx;
@@ -190,7 +188,6 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     ibuffer_ptr dev_buf;
     idevice_ptr idevice;
     sampler_ptr sampler;
-    drcompr_ptr compressor;
     std::atomic_uint volume;
 
     std::mutex dest_mtx;
