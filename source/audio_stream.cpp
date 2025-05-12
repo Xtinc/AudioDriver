@@ -14,7 +14,7 @@ constexpr AudioChannelMap DEFAULT_MONO_MAP = {0, 0};
 
 inline float volume2gain(unsigned int vol)
 {
-    return vol < 50 ? 0.68f * static_cast<float>(vol) - 34.0f : 0.12f * static_cast<float>(vol) - 4.0f;
+    return vol < 50 ? 0.68f * static_cast<float>(vol) - 34.0f : 0.12f * static_cast<float>(vol) - 6.0f;
 }
 
 static bool check_wave_file_name(const std::string &dev_name)
@@ -110,7 +110,6 @@ OAStream::OAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
     {
         AUDIO_ERROR_PRINT("Failed to create device: %s", ret.what());
     }
-    compressor = std::make_unique<DRCompressor>(static_cast<float>(fs));
 }
 
 RetCode OAStream::initialize_network(const std::shared_ptr<NetWorker> &nw)
@@ -214,7 +213,6 @@ RetCode OAStream::restart(const AudioDeviceName &_name)
     {
         np->reset2echo(_name, fs, ch);
     }
-    compressor = std::make_unique<DRCompressor>(static_cast<float>(fs));
     oas_ready = true;
     return start();
 }
@@ -466,6 +464,8 @@ void OAStream::process_data()
         return;
     }
 
+    auto gain = volume2gain(volume.load());
+
     std::memset(databuf.get(), 0, ch * ps * sizeof(PCM_TYPE));
     {
         std::lock_guard<std::mutex> grd(session_mtx);
@@ -474,7 +474,8 @@ void OAStream::process_data()
         {
             auto &context = it->second;
             unsigned int session_frames = context->sampler.src_fs * ti / 1000;
-            bool has_data = context->session.load_aside(session_frames * context->session.chan * sizeof(PCM_TYPE));
+            unsigned int session_channels = context->sampler.src_ch;
+            bool has_data = context->session.load_aside(session_frames * session_channels * sizeof(PCM_TYPE));
 
             if (!has_data)
             {
@@ -488,6 +489,7 @@ void OAStream::process_data()
                 ++it;
                 continue;
             }
+
             context->session.idle_count = 0;
 
             if (muted || (!context->enabled))
@@ -496,12 +498,11 @@ void OAStream::process_data()
                 continue;
             }
 
-            InterleavedView<const PCM_TYPE> iview(reinterpret_cast<PCM_TYPE *>(context->session.data()), session_frames,
-                                                  context->session.chan);
+            auto *session_source = reinterpret_cast<PCM_TYPE *>(context->session.data());
+            InterleavedView<const PCM_TYPE> iview(session_source, session_frames, session_channels);
             InterleavedView<PCM_TYPE> oview(reinterpret_cast<PCM_TYPE *>(mix_buf.get()), ps, ch);
 
-            auto ret = context->sampler.process(iview, oview);
-
+            auto ret = context->sampler.process(iview, oview, gain);
             if (ret != RetCode::OK)
             {
                 AUDIO_DEBUG_PRINT("Failed to process data: %s", ret.what());
@@ -509,16 +510,9 @@ void OAStream::process_data()
                 continue;
             }
 
-            auto src = oview.data().data();
-            mix_channels(src, ch, ps, reinterpret_cast<PCM_TYPE *>(databuf.get()));
+            mix_channels(&oview.data()[0], ch, ps, reinterpret_cast<PCM_TYPE *>(databuf.get()));
             ++it;
         }
-    }
-
-    auto gain = volume.load();
-    if (gain != 50)
-    {
-        compressor->process(reinterpret_cast<PCM_TYPE *>(databuf.get()), ps, ch, volume2gain(gain));
     }
 
     auto ret = odevice->write(databuf.get(), ps * ch * sizeof(PCM_TYPE));
@@ -645,7 +639,6 @@ IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
         AUDIO_ERROR_PRINT("Failed to create device: %s", ret.what());
     }
 
-    compressor = std::make_unique<DRCompressor>(static_cast<float>(fs));
     dests.reserve(4);
 }
 
@@ -666,7 +659,6 @@ IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
         AUDIO_ERROR_PRINT("Failed to create device: %s", ret.what());
     }
 
-    compressor = std::make_unique<DRCompressor>(static_cast<float>(fs));
     dests.reserve(4);
 }
 
@@ -721,7 +713,6 @@ RetCode IAStream::reset2echo(const AudioDeviceName &_name, unsigned int _fs, uns
         AUDIO_ERROR_PRINT("Failed to create device: %s", ret.what());
     }
 
-    compressor = std::make_unique<DRCompressor>(static_cast<float>(fs));
     ias_ready = true;
     return ret;
 }
@@ -931,10 +922,12 @@ RetCode IAStream::process_data()
         return RetCode::OK;
     }
 
+    auto gain = volume2gain(volume.load());
+
     InterleavedView<PCM_TYPE> iview(reinterpret_cast<PCM_TYPE *>(dev_buf.get()), dev_fr, idevice->ch());
     InterleavedView<PCM_TYPE> oview(reinterpret_cast<PCM_TYPE *>(usr_buf.get()), ps, ch);
 
-    ret = sampler->process(iview, oview);
+    ret = sampler->process(iview, oview, gain);
 
     if (ret != RetCode::OK)
     {
@@ -942,13 +935,7 @@ RetCode IAStream::process_data()
         return ret;
     }
 
-    PCM_TYPE *src = oview.data().data();
-
-    auto gain = volume.load();
-    if (gain != 50)
-    {
-        compressor->process(src, ps, ch, volume2gain(gain));
-    }
+    PCM_TYPE *src = &oview.data()[0];
 
     for (const auto &dest : dests)
     {

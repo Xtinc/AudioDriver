@@ -5,18 +5,17 @@
 
 void test_static_characteristics()
 {
+    const unsigned int channels = 2;
+    const int steps = 1000;
     float sample_rate = 44100.0f;
-    DRCompressor comp1(sample_rate, -20.0f, 2.0f, 0.006f, 0.01f, 10.0f);
-    DRCompressor comp2(sample_rate, -10.0f, 2.0f, 0.006f, 0.01f, 10.0f);
-    DRCompressor comp3(sample_rate, -20.0f, 4.0f, 0.006f, 0.01f, 10.0f);
-    DRCompressor comp4(sample_rate, -20.0f, 2.0f, 0.006f, 0.01f, 2.0f);
+    DRCompressor comp1(sample_rate, channels, -20.0f, 2.0f, 0.006f, 0.01f, 10.0f);
+    DRCompressor comp2(sample_rate, channels, -10.0f, 2.0f, 0.006f, 0.01f, 10.0f);
+    DRCompressor comp3(sample_rate, channels, -20.0f, 4.0f, 0.006f, 0.01f, 10.0f);
+    DRCompressor comp4(sample_rate, channels, -20.0f, 2.0f, 0.006f, 0.01f, 2.0f);
     std::ofstream outfile("static_characteristics.csv");
     outfile
         << "input_db,comp1_db,comp2_db,comp3_db,comp4_db,input_level,comp1_level,comp2_level,comp3_level,comp4_level"
         << std::endl;
-
-    const unsigned int channels = 2;
-    const int steps = 1000;
 
     for (int i = 0; i <= steps; i++)
     {

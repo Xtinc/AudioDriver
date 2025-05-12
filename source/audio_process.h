@@ -38,17 +38,15 @@ class SincInterpolator
 class DRCompressor
 {
   public:
-    explicit DRCompressor(float sample_rate, float threshold = -10.0f, float ratio = 2.0f, float attack = 0.006f,
-                          float release = 0.1f, float knee_width = 6.0f);
+    explicit DRCompressor(float sample_rate, unsigned int chs, float threshold = -10.0f, float ratio = 2.0f,
+                          float attack = 0.006f, float release = 0.1f, float knee_width = 6.0f);
 
-    RetCode process(PCM_TYPE *buffer, unsigned int frames, unsigned int channels, float gain = 0.0);
+    void process(const DeinterleavedView<float> &input, float gain);
 
     void reset();
 
   private:
     float compute_gain(float inputLevel) const;
-    float sample2db(PCM_TYPE sample) const;
-    float db2sample(float db) const;
 
   private:
     const float threshold;
@@ -56,8 +54,9 @@ class DRCompressor
     const float attack;
     const float release;
     const float knee_width;
+    const unsigned int channels;
 
-    float current_gain;
+    std::vector<float> current_gain;
     float attack_coeff;
     float release_coeff;
 
@@ -71,7 +70,8 @@ class LocSampler
     LocSampler(unsigned int src_fs, unsigned int src_ch, unsigned int dst_fs, unsigned int dst_ch,
                unsigned int max_frames, const AudioChannelMap &imap, const AudioChannelMap &omap);
 
-    RetCode process(const InterleavedView<const PCM_TYPE> &input, const InterleavedView<PCM_TYPE> &output) const;
+    RetCode process(const InterleavedView<const PCM_TYPE> &input, const InterleavedView<PCM_TYPE> &output,
+                    float gain) const;
 
   public:
     const unsigned int src_fs;
@@ -89,6 +89,7 @@ class LocSampler
     std::unique_ptr<float[]> ibuffer;
     std::unique_ptr<float[]> obuffer;
     std::unique_ptr<SincInterpolator> resampler;
+    std::unique_ptr<DRCompressor> compressor;
 
     void deinterleave_s16_f16(const InterleavedView<const PCM_TYPE> &interleaved,
                               const DeinterleavedView<float> &deinterleaved) const;

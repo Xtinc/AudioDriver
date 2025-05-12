@@ -21,6 +21,21 @@ void mix_channels(const int16_t *ssrc, unsigned int chan, unsigned int frames_nu
     }
 }
 
+static float float2db(float sample)
+{
+    if (sample < 0)
+    {
+        sample = -sample;
+    }
+
+    return sample < 1e-6f ? -120.0f : 20.0f * std::log10(sample);
+}
+
+static float db2float(float db)
+{
+    return std::pow(10.0f, db / 20.0f);
+}
+
 static double sinc(double x)
 {
     return x == 0 ? 1 : std::sin(A_PI * x) / (A_PI * x);
@@ -185,6 +200,7 @@ LocSampler::LocSampler(unsigned int src_fs, unsigned int src_ch, unsigned int ds
     auto max_chan = std::max(src_ch, dst_ch);
     ibuffer = std::make_unique<float[]>(max_frames * max_chan);
     obuffer = std::make_unique<float[]>(max_frames * max_chan);
+    compressor = std::make_unique<DRCompressor>(static_cast<float>(dst_fs), real_ochan);
 
     // Create resampler if needed
     if (src_fs != dst_fs)
@@ -202,7 +218,8 @@ LocSampler::LocSampler(unsigned int src_fs, unsigned int src_ch, unsigned int ds
     }
 }
 
-RetCode LocSampler::process(const InterleavedView<const PCM_TYPE> &input, const InterleavedView<PCM_TYPE> &output) const
+RetCode LocSampler::process(const InterleavedView<const PCM_TYPE> &input, const InterleavedView<PCM_TYPE> &output,
+                            float gain) const
 {
     // Calculate input and output frame counts
     const auto src_fr = ti * src_fs / 1000;
@@ -228,6 +245,9 @@ RetCode LocSampler::process(const InterleavedView<const PCM_TYPE> &input, const 
     // Step 3: Perform sample rate conversion if needed
     DeinterleavedView<float> data_ptr3(ibuffer.get(), dst_fr, real_ochan);
     convert_sample_rate(data_ptr2, data_ptr3);
+
+    // Step 3.5: Apply dynamic range compression
+    compressor->process(data_ptr3, gain);
 
     // Step 4: Interleave float data back to PCM format
     interleave_f16_s16(data_ptr3, output);
@@ -290,7 +310,7 @@ void LocSampler::convert_channels(const DeinterleavedView<float> &input, const D
     // Case 1: Same number of channels - direct copy
     if (real_ichan == real_ochan)
     {
-        memcpy(output.AsMono().begin(), input.AsMono().begin(), input.size() * sizeof(float));
+        output.CopyFrom(input);
     }
     // Case 2: Mono to stereo conversion - duplicate mono signal to both channels
     else if (real_ichan == 1 && real_ochan == 2)
@@ -333,10 +353,10 @@ void LocSampler::convert_sample_rate(const DeinterleavedView<float> &input, Dein
     }
 }
 
-DRCompressor::DRCompressor(float sample_rate, float _threshold, float _ratio, float _attack, float _release,
-                           float _knee_width)
-    : threshold(_threshold), ratio(_ratio), attack(_attack), release(_release), knee_width(_knee_width),
-      current_gain(0.0f)
+DRCompressor::DRCompressor(float sample_rate, unsigned int chs, float _threshold, float _ratio, float _attack,
+                           float _release, float _knee_width)
+    : threshold(_threshold), ratio(_ratio), attack(_attack), release(_release), knee_width(_knee_width), channels(chs),
+      current_gain(chs, 0.0f)
 {
     attack_coeff = std::exp(-1.0f / (attack * sample_rate));
     release_coeff = std::exp(-1.0f / (release * sample_rate));
@@ -345,52 +365,41 @@ DRCompressor::DRCompressor(float sample_rate, float _threshold, float _ratio, fl
     knee_threshold_upper = threshold + knee_width / 2.0f;
 }
 
-RetCode DRCompressor::process(PCM_TYPE *buffer, unsigned int frames, unsigned int channels, float gain)
+void DRCompressor::process(const DeinterleavedView<float> &input, float gain)
 {
-    if (!buffer || frames == 0 || channels == 0)
-    {
-        return {RetCode::FAILED, "Invalid parameters"};
-    }
+    const auto frames = input.samples_per_channel();
+    DBG_ASSERT_EQ(channels, input.num_channels());
 
-    for (unsigned int i = 0; i < frames; i++)
+    for (unsigned int c = 0; c < channels; c++)
     {
-        PCM_TYPE maxSample = 0;
-        for (unsigned int ch = 0; ch < channels; ++ch)
+        MonoView<float> channel = input[c];
+        for (unsigned int i = 0; i < frames; i++)
         {
-            auto sample = buffer[i * channels + ch];
-            if (sample < 0)
+            float inputLevelDB = float2db(channel[i]);
+            float targetGain = compute_gain(inputLevelDB) + gain;
+
+            if (targetGain < current_gain[c])
             {
-                sample = -sample;
+                current_gain[c] = attack_coeff * current_gain[c] + (1.0f - attack_coeff) * targetGain;
             }
-            maxSample = (std::max)(maxSample, sample);
-        }
+            else
+            {
+                current_gain[c] = release_coeff * current_gain[c] + (1.0f - release_coeff) * targetGain;
+            }
 
-        float inputLevelDB = sample2db(maxSample);
-        float targetGain = compute_gain(inputLevelDB) + gain;
-
-        if (targetGain < current_gain)
-        {
-            current_gain = attack_coeff * current_gain + (1.0f - attack_coeff) * targetGain;
-        }
-        else
-        {
-            current_gain = release_coeff * current_gain + (1.0f - release_coeff) * targetGain;
-        }
-
-        for (unsigned int ch = 0; ch < channels; ++ch)
-        {
-            auto result = static_cast<float>(buffer[i * channels + ch]) * db2sample(current_gain);
+            auto result = channel[i] * db2float(current_gain[c]);
             result = std::max(-32768.0f, std::min(32767.0f, result));
-            buffer[i * channels + ch] = static_cast<int16_t>(result);
+            channel[i] = result;
         }
     }
-
-    return RetCode::OK;
 }
 
 void DRCompressor::reset()
 {
-    current_gain = 0.0f;
+    for (unsigned int ch = 0; ch < channels; ++ch)
+    {
+        current_gain[ch] = 0.0f;
+    }
 }
 
 float DRCompressor::compute_gain(float inputLevelDB) const
@@ -413,19 +422,4 @@ float DRCompressor::compute_gain(float inputLevelDB) const
     }
 
     return gainReduction;
-}
-
-float DRCompressor::sample2db(PCM_TYPE sample) const
-{
-    const float normalizedSample = std::abs(static_cast<float>(sample)) / 32768.0f;
-    if (normalizedSample < 1e-6f)
-    {
-        return -120.0f;
-    }
-    return 20.0f * std::log10(normalizedSample);
-}
-
-float DRCompressor::db2sample(float db) const
-{
-    return std::pow(10.0f, db / 20.0f);
 }

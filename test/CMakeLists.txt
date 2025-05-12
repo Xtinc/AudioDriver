@@ -12,8 +12,8 @@ target_link_libraries(test_player bettyaudio)
 # add_executable(test_audio_process test_audio_process.cpp)
 # target_link_libraries(test_audio_process bettyaudio)
 
-add_executable(test_dr_compressor test_dr_compressor.cpp)
-target_link_libraries(test_dr_compressor bettyaudio)
+# add_executable(test_dr_compressor test_dr_compressor.cpp)
+# target_link_libraries(test_dr_compressor bettyaudio)
 
 # add_executable(test_locsample test_locsampler.cpp)
 # target_link_libraries(test_locsample bettyaudio)

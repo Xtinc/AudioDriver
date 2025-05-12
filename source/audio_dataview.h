@@ -671,7 +671,7 @@ template <typename T> class InterleavedView
      * @tparam U Type of the source view elements
      * @param source Source InterleavedView to copy from
      */
-    template <typename U> void CopyFrom(const InterleavedView<U> &source)
+    template <typename U> void CopyFrom(const InterleavedView<U> &source) const
     {
         static_assert(sizeof(T) == sizeof(U), "");
         DBG_ASSERT_EQ(num_channels(), source.num_channels());
@@ -822,6 +822,24 @@ template <typename T> class DeinterleavedView
     {
         DBG_ASSERT_GE(num_channels(), 1u);
         return (*this)[0];
+    }
+
+    /**
+     * @brief Copy data from another DeinterleavedView into this view
+     *
+     * A simple wrapper around memcpy that includes checks for properties.
+     *
+     * @tparam U Type of the source view elements
+     * @param source Source DeinterleavedView to copy from
+     */
+    template <typename U> void CopyFrom(const DeinterleavedView<U> &source) const
+    {
+        static_assert(sizeof(T) == sizeof(U), "");
+        DBG_ASSERT_EQ(num_channels(), source.num_channels());
+        DBG_ASSERT_EQ(samples_per_channel(), source.samples_per_channel());
+        DBG_ASSERT_GE(datas.size(), source.data().size());
+        const auto data = source.data();
+        memcpy(&datas[0], &data[0], data.size() * sizeof(U));
     }
 
   private:
