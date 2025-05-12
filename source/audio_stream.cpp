@@ -9,8 +9,6 @@ static std::once_flag coinit_flag;
 constexpr unsigned int AUDIO_MAX_RESET_INTERVAL = 30;
 constexpr unsigned int AUDIO_MAX_COCURRECY_WORKER = 2;
 constexpr unsigned int SESSION_IDLE_TIMEOUT = 1000;
-constexpr AudioChannelMap DEFAULT_DUAL_MAP = {0, 1};
-constexpr AudioChannelMap DEFAULT_MONO_MAP = {0, 0};
 
 inline float volume2gain(unsigned int vol)
 {
@@ -101,6 +99,9 @@ OAStream::OAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
       exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE), reset_strand(asio::make_strand(BG_SERVICE)),
       volume(50), muted(false)
 {
+    DBG_ASSERT_LT(omap[0], ch);
+    DBG_ASSERT_LT(omap[1], ch);
+
     auto ret = create_device(_name);
     if (ret)
     {
@@ -403,6 +404,12 @@ AudioDeviceName OAStream::name() const
 
 void OAStream::register_listener(const std::shared_ptr<IAStream> &ias)
 {
+    if (omap != ias->imap)
+    {
+        AUDIO_ERROR_PRINT("Channel map mismatch: (%u,%u) vs (%u,%u)", omap[0], omap[1], ias->imap[0], ias->imap[1]);
+        return;
+    }
+
     auto ret = ias->reset2echo({odevice->hw_name, 0}, fs, ch);
     if (!ret)
     {
@@ -465,8 +472,8 @@ void OAStream::process_data()
     }
 
     auto gain = volume2gain(volume.load());
-
     std::memset(databuf.get(), 0, ch * ps * sizeof(PCM_TYPE));
+
     {
         std::lock_guard<std::mutex> grd(session_mtx);
 
@@ -643,12 +650,16 @@ IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
 }
 
 IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs,
-                   unsigned int usr_ch, unsigned int dev_ch, AudioChannelMap _imap)
-    : token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(usr_ch), enable_reset(false), spf_ch(dev_ch), imap(_imap),
+                   unsigned int dev_ch, AudioChannelMap _imap)
+    : token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(2), enable_reset(false), spf_ch(dev_ch), imap(_imap),
       usr_name(_name), ias_ready(false), exec_timer(BG_SERVICE), exec_strand(asio::make_strand(BG_SERVICE)),
       reset_timer(BG_SERVICE), reset_strand(asio::make_strand(BG_SERVICE)), volume(50), muted(false), usr_cb(nullptr),
       usr_ptr(nullptr)
 {
+    DBG_ASSERT_GE(dev_ch, 2);
+    DBG_ASSERT_LT(imap[0], dev_ch);
+    DBG_ASSERT_LT(imap[1], dev_ch);
+
     auto ret = create_device(_name);
     if (ret)
     {
@@ -922,11 +933,16 @@ RetCode IAStream::process_data()
         return RetCode::OK;
     }
 
-    auto gain = volume2gain(volume.load());
+    // raw data
+    if (usr_cb)
+    {
+        usr_cb(reinterpret_cast<PCM_TYPE *>(dev_buf.get()), idevice->ch(), dev_fr, usr_ptr);
+    }
 
     InterleavedView<PCM_TYPE> iview(reinterpret_cast<PCM_TYPE *>(dev_buf.get()), dev_fr, idevice->ch());
     InterleavedView<PCM_TYPE> oview(reinterpret_cast<PCM_TYPE *>(usr_buf.get()), ps, ch);
 
+    auto gain = volume2gain(volume.load());
     ret = sampler->process(iview, oview, gain);
 
     if (ret != RetCode::OK)
@@ -948,11 +964,6 @@ RetCode IAStream::process_data()
     if (auto np = networker.lock())
     {
         np->send_audio(token, src, ps);
-    }
-
-    if (usr_cb)
-    {
-        usr_cb(src, ch, ps, usr_ptr);
     }
 
     return RetCode::OK;
@@ -1016,14 +1027,8 @@ RetCode IAStream::swap_device(idevice_ptr &new_device)
     auto new_dev_buf = std::make_unique<char[]>(dev_fr * new_device->ch() * sizeof(PCM_TYPE));
     auto new_usr_buf = std::make_unique<char[]>(ps * ch * sizeof(PCM_TYPE));
 
-    auto new_sampler = std::make_unique<LocSampler>(new_device->fs(), new_device->ch(), fs, ch, dev_fr,
-                                                    new_device->ch() == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP, imap);
-
-    // if (!new_sampler->is_valid())
-    // {
-    //     AUDIO_ERROR_PRINT("Failed to create sampler for device [%s]", new_device->hw_name.c_str());
-    //     return {RetCode::FAILED, "Failed to create sampler"};
-    // }
+    auto new_sampler = std::make_unique<LocSampler>(new_device->fs(), new_device->ch(), fs, ch, dev_fr, imap,
+                                                    ch == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP);
 
     idevice = std::move(new_device);
     dev_buf = std::move(new_dev_buf);
@@ -1101,7 +1106,7 @@ RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared
     }
 
     auto *raw_sender = new IAStream(static_cast<unsigned char>(token + preemptive), AudioDeviceName(name, cycles),
-                                    enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::SemiSuperWide), 2);
+                                    enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2);
 
     auto audio_sender = std::shared_ptr<IAStream>(raw_sender, [self = shared_from_this(), name](const IAStream *ptr) {
         --(self->preemptive);

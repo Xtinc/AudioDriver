@@ -412,7 +412,6 @@ class AudioCenter
      * @param name Audio device name and index
      * @param bw Audio bandwidth (sample rate)
      * @param ps Audio period size
-     * @param usr_ch Number of channels for user
      * @param dev_ch Number of channels to open device
      * @param imap Channel mapping between user channel and device channel
      * @param enable_network Whether to enable network functionality for this stream
@@ -420,7 +419,7 @@ class AudioCenter
      * @return RetCode indicating success or failure
      */
     RetCode create(IToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps,
-                   unsigned int usr_ch, unsigned int dev_ch, const AudioChannelMap &imap, bool enable_network = false);
+                   unsigned int dev_ch, const AudioChannelMap &imap, bool enable_network = false);
 
     /**
      * @brief Creates an output stream

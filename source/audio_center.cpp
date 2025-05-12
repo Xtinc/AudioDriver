@@ -240,7 +240,7 @@ RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBand
 }
 
 RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps,
-                            unsigned int usr_ch, unsigned int dev_ch, const AudioChannelMap &imap, bool enable_network)
+                            unsigned int dev_ch, const AudioChannelMap &imap, bool enable_network)
 {
     AUDIO_INFO_PRINT("Creating %s input stream with token %u", name.first.c_str(), token.tok);
 
@@ -256,13 +256,26 @@ RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBand
         return RetCode::EPARAM;
     }
 
+    if (dev_ch < 2)
+    {
+        AUDIO_ERROR_PRINT("Invalid device channel: %u, when channel map is specfied, at least two channel is necessary",
+                          dev_ch);
+        return RetCode::EPARAM;
+    }
+
+    if (imap[0] >= dev_ch || imap[1] >= dev_ch)
+    {
+        AUDIO_ERROR_PRINT("Invalid channel map: (%u, %u), total channel number is %u", imap[0], imap[1], dev_ch);
+        return RetCode::EPARAM;
+    }
+
     if (ias_map.find(token.tok) != ias_map.end())
     {
         AUDIO_ERROR_PRINT("Token already exists: %u", token.tok);
         return RetCode::NOACTION;
     }
 
-    ias_map[token.tok] = std::make_shared<IAStream>(token.tok, name, enum2val(ps), enum2val(bw), usr_ch, dev_ch, imap);
+    ias_map[token.tok] = std::make_shared<IAStream>(token.tok, name, enum2val(ps), enum2val(bw), dev_ch, imap);
 
     if (enable_network)
     {
@@ -310,8 +323,6 @@ RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBand
 RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps,
                             unsigned int dev_ch, const AudioChannelMap &omap, bool enable_network)
 {
-    AUDIO_INFO_PRINT("Creating %s output stream with token %u", name.first.c_str(), token.tok);
-
     if (center_state.load() != State::INIT)
     {
         AUDIO_ERROR_PRINT("Cannot create stream, AudioCenter not in INIT state");
@@ -321,6 +332,19 @@ RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBand
     if (!token)
     {
         AUDIO_ERROR_PRINT("Invalid token: %u", token.tok);
+        return RetCode::EPARAM;
+    }
+
+    if (dev_ch < 2)
+    {
+        AUDIO_ERROR_PRINT("Invalid device channel: %u, when channel map is specfied, at least two channel is necessary",
+                          dev_ch);
+        return RetCode::EPARAM;
+    }
+
+    if (omap[0] >= dev_ch || omap[1] >= dev_ch)
+    {
+        AUDIO_ERROR_PRINT("Invalid channel map: (%u, %u), total channel number is %u", omap[0], omap[1], dev_ch);
         return RetCode::EPARAM;
     }
 
@@ -348,6 +372,12 @@ RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBand
 
 RetCode AudioCenter::create(IToken itoken, OToken otoken, bool enable_network)
 {
+    if (center_state.load() != State::INIT)
+    {
+        AUDIO_ERROR_PRINT("Cannot create stream, AudioCenter not in INIT state");
+        return RetCode::ESTATE;
+    }
+
     if (!itoken)
     {
         AUDIO_ERROR_PRINT("Invalid input token: %u", itoken.tok);
@@ -373,9 +403,19 @@ RetCode AudioCenter::create(IToken itoken, OToken otoken, bool enable_network)
         return RetCode::EPARAM;
     }
 
-    ias_map[itoken.tok] =
-        std::make_shared<IAStream>(itoken.tok, AudioDeviceName("virt", 0), enum2val(AudioPeriodSize::INR_20MS),
-                                   enum2val(AudioBandWidth::CDQuality), 2);
+    if (oas->second->omap != DEFAULT_MONO_MAP && oas->second->omap != DEFAULT_DUAL_MAP)
+    {
+        ias_map[itoken.tok] =
+            std::make_shared<IAStream>(itoken.tok, AudioDeviceName("virt", 0), enum2val(AudioPeriodSize::INR_20MS),
+                                       enum2val(AudioBandWidth::Full), 99, oas->second->omap);
+    }
+    else
+    {
+        ias_map[itoken.tok] =
+            std::make_shared<IAStream>(itoken.tok, AudioDeviceName("virt", 0), enum2val(AudioPeriodSize::INR_20MS),
+                                       enum2val(AudioBandWidth::Full), 2);
+    }
+
     if (enable_network)
     {
         ias_map[itoken.tok]->initialize_network(net_mgr);
@@ -396,12 +436,12 @@ RetCode AudioCenter::prepare()
         return {RetCode::ESTATE, "AudioCenter not in INIT state"};
     }
 
-    ias_map.emplace(USR_DUMMY_IN.tok, std::make_shared<IAStream>(USR_DUMMY_IN.tok, AudioDeviceName("virt", 0),
-                                                                 enum2val(AudioPeriodSize::INR_20MS),
-                                                                 enum2val(AudioBandWidth::CDQuality), 2));
-    oas_map.emplace(USR_DUMMY_OUT.tok, std::make_shared<OAStream>(USR_DUMMY_OUT.tok, AudioDeviceName("virt", 0),
-                                                                  enum2val(AudioPeriodSize::INR_20MS),
-                                                                  enum2val(AudioBandWidth::CDQuality), 2));
+    ias_map.emplace(USR_DUMMY_IN.tok,
+                    std::make_shared<IAStream>(USR_DUMMY_IN.tok, AudioDeviceName("virt", 0),
+                                               enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2));
+    oas_map.emplace(USR_DUMMY_OUT.tok,
+                    std::make_shared<OAStream>(USR_DUMMY_OUT.tok, AudioDeviceName("virt", 0),
+                                               enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2));
     if (net_mgr)
     {
         ias_map[USR_DUMMY_IN.tok]->initialize_network(net_mgr);

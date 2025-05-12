@@ -10,6 +10,9 @@
 
 #define BG_SERVICE (BackgroundService::instance().context())
 
+constexpr AudioChannelMap DEFAULT_DUAL_MAP = {0, 1};
+constexpr AudioChannelMap DEFAULT_MONO_MAP = {0, 0};
+
 using SessionData = KFifo;
 using TimePointer = std::chrono::steady_clock::time_point;
 using sampler_ptr = std::unique_ptr<LocSampler>;
@@ -135,7 +138,7 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs, unsigned int _ch,
              bool auto_reset = false);
     IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs,
-             unsigned int usr_ch, unsigned int dev_ch, AudioChannelMap _imap);
+             unsigned int dev_ch, AudioChannelMap _imap);
     ~IAStream();
 
     RetCode start();
