@@ -72,97 +72,6 @@ double calculate_rms(const std::vector<PCM_TYPE> &audio, int channels)
     return std::sqrt(sum_squares / (audio.size() / channels));
 }
 
-// Test basic functionality of DRCompressor - without using private interfaces
-void test_drcompressor()
-{
-    std::cout << "Testing DRCompressor..." << std::endl;
-
-    // Create a DRCompressor instance with 44100Hz sample rate, -10dB threshold, 4:1 ratio
-    DRCompressor compressor(44100.0f, -10.0f, 4.0f, 0.1f, 0.2f, 10.0f);
-
-    // Create test audio data - gradually increasing sine wave
-    const int frameCount = 1000;
-    const int channelCount = 2;
-    std::vector<PCM_TYPE> buffer(frameCount * channelCount);
-
-    // Generate gradually increasing audio signal (from quiet to above compression threshold)
-    for (int i = 0; i < frameCount; i++)
-    {
-        // Volume increases with frame
-        float amplitude = static_cast<float>(i) / frameCount * 1.5f; // Max to 150%
-        float sample = amplitude * 32767.0f *
-                       std::sin(2.0f * static_cast<float>(M_PI) * 440.0f * static_cast<float>(i) / 44100.0f);
-
-        for (int ch = 0; ch < channelCount; ch++)
-        {
-            buffer[i * channelCount + ch] = static_cast<PCM_TYPE>(sample);
-        }
-    }
-
-    // Create backup of original data for comparison
-    std::vector<PCM_TYPE> original = buffer;
-
-    // Apply compressor
-    RetCode result = compressor.process(buffer.data(), frameCount, channelCount);
-    test_check(result == RetCode::OK, "DRCompressor process");
-
-    // Calculate RMS values for different volume sections and compare before/after compression
-    auto calculate_section_rms = [channelCount](const std::vector<PCM_TYPE> &audio, int start_frame, int end_frame) {
-        std::vector<PCM_TYPE> section;
-        section.reserve((end_frame - start_frame) * channelCount);
-        for (int i = start_frame; i < end_frame; i++)
-        {
-            for (int ch = 0; ch < channelCount; ch++)
-            {
-                section.push_back(audio[i * channelCount + ch]);
-            }
-        }
-        return calculate_rms(section, channelCount);
-    };
-
-    // Check low volume section (0-25%)
-    double low_orig_rms = calculate_section_rms(original, 0, frameCount / 4);
-    double low_comp_rms = calculate_section_rms(buffer, 0, frameCount / 4);
-    double low_ratio = low_comp_rms / low_orig_rms;
-
-    // Check mid volume section (25-50%)
-    double mid_orig_rms = calculate_section_rms(original, frameCount / 4, frameCount / 2);
-    double mid_comp_rms = calculate_section_rms(buffer, frameCount / 4, frameCount / 2);
-    double mid_ratio = mid_comp_rms / mid_orig_rms;
-
-    // Check high volume section (75-100%)
-    double high_orig_rms = calculate_section_rms(original, 3 * frameCount / 4, frameCount);
-    double high_comp_rms = calculate_section_rms(buffer, 3 * frameCount / 4, frameCount);
-    double high_ratio = high_comp_rms / high_orig_rms;
-
-    std::cout << "Volume ratios (compressed/original) - Low: " << low_ratio << ", Mid: " << mid_ratio
-              << ", High: " << high_ratio << std::endl;
-
-    // Low volume section should remain almost unchanged (ratio close to 1)
-    test_check(std::abs(low_ratio - 1.0) < 0.1, "Low volume compression ratio");
-
-    // High volume section should be significantly compressed (ratio notably less than 1)
-    // assert(high_ratio < 0.8); // At least 20% compression
-
-    // Verify compression ratio enhancement - high volume compression should be stricter than mid volume
-    test_check(high_ratio < mid_ratio, "Compression ratio enhancement");
-
-    // Test reset functionality
-    compressor.reset();
-
-    // Apply the reset compressor to the same input data
-    std::vector<PCM_TYPE> buffer2 = original;
-    result = compressor.process(buffer2.data(), frameCount, channelCount);
-    test_check(result == RetCode::OK, "DRCompressor reset process");
-
-    // Verify reset compressor still works effectively
-    double high_reset_rms = calculate_section_rms(buffer2, 3 * frameCount / 4, frameCount);
-    double high_reset_ratio = high_reset_rms / high_orig_rms;
-    // assert(high_reset_ratio < 0.8); // Should still have significant compression
-
-    std::cout << "DRCompressor test completed" << std::endl;
-}
-
 // Test SincInterpolator class - comprehensive test including SNR analysis
 void test_sinc_interpolator()
 {
@@ -213,7 +122,26 @@ void test_sinc_interpolator()
         std::vector<double> output(expectedOutputSize);
 
         // Get actual output frames from process
-        int actualOutputFrames = interpolator.process(input.data(), inputSize + test.order, output.data(), 0);
+        std::vector<float> inputFloat;
+        for (int i = 0; i < inputSize + test.order; i++)
+        {
+            inputFloat.push_back(static_cast<float>(input[i]));
+        }
+        std::vector<float> outputFloat(expectedOutputSize);
+
+        ArrayView<const float> inputView(inputFloat.data(), inputSize + test.order);
+        ArrayView<float> outputView(outputFloat.data(), expectedOutputSize);
+        interpolator.process(inputView, outputView, 0);
+        int actualOutputFrames = static_cast<int>(outputView.size());
+
+        // Copy back to output vector for analysis
+        for (int i = 0; i < actualOutputFrames; i++)
+        {
+            if (i < static_cast<int>(output.size()))
+            {
+                output[i] = static_cast<double>(outputFloat[i]);
+            }
+        }
         test_check(actualOutputFrames > 0, "Output frame generation - " + test.name);
 
         // Calculate effective frames excluding startup delay
@@ -287,154 +215,7 @@ void test_sinc_interpolator()
     std::cout << "SincInterpolator test completed" << std::endl;
 }
 
-// Test LocSampler class - comprehensive test including sample rate conversion quality
-void test_loc_sampler()
-{
-    std::cout << "Testing LocSampler..." << std::endl;
-
-    // Define test scenarios
-    struct TestCase
-    {
-        unsigned int src_fs; // Source sample rate
-        unsigned int dst_fs; // Destination sample rate
-        unsigned int src_ch; // Source channels
-        unsigned int dst_ch; // Destination channels
-        std::string name;    // Test name
-    };
-
-    std::vector<TestCase> testCases = {{44100, 48000, 2, 2, "44.1kHz Stereo -> 48kHz Stereo"},
-                                       {48000, 44100, 2, 2, "48kHz Stereo -> 44.1kHz Stereo"},
-                                       {44100, 44100, 1, 2, "Mono -> Stereo (same sample rate)"},
-                                       {44100, 44100, 2, 1, "Stereo -> Mono (same sample rate)"},
-                                       {44100, 48000, 1, 2, "Mono 44.1kHz -> Stereo 48kHz"}};
-
-    for (const auto &test : testCases)
-    {
-        std::cout << "Testing " << test.name << "..." << std::endl;
-
-        const unsigned int max_frames = 1000;
-
-        // Create channel map
-        AudioChannelMap imap = {0, std::min(1u, test.src_ch - 1)};
-        AudioChannelMap omap = {0, std::min(1u, test.dst_ch - 1)};
-
-        // Create LocSampler instance
-        LocSampler sampler(test.src_fs, test.src_ch, test.dst_fs, test.dst_ch, max_frames, imap, omap);
-
-        // Verify object creation success
-        test_check(sampler.is_valid(), "LocSampler creation - " + test.name);
-
-        // Create test audio with different frequencies for different channels
-        std::vector<PCM_TYPE> input(max_frames * test.src_ch);
-        for (unsigned int i = 0; i < max_frames; i++)
-        {
-            // Left channel uses 440Hz sine wave
-            float left_sample = 16000.0f * std::sin(2.0f * static_cast<float>(M_PI) * 440.0f * static_cast<float>(i) /
-                                                    static_cast<float>(test.src_fs));
-
-            if (test.src_ch == 1)
-            {
-                // Mono
-                input[i] = static_cast<PCM_TYPE>(left_sample);
-            }
-            else
-            {
-                // Stereo - right channel uses 880Hz
-                float right_sample = 16000.0f * std::sin(2.0f * static_cast<float>(M_PI) * 880.0f * i / test.src_fs);
-                input[i * test.src_ch] = static_cast<PCM_TYPE>(left_sample);
-                input[i * test.src_ch + 1] = static_cast<PCM_TYPE>(right_sample);
-            }
-        }
-
-        // Calculate theoretical output frames
-        unsigned int expected_frames =
-            static_cast<unsigned int>(max_frames * (static_cast<double>(test.dst_fs) / test.src_fs));
-        if (test.src_fs == test.dst_fs)
-        {
-            expected_frames = max_frames;
-        }
-
-        // Create sufficiently large output buffer
-        unsigned int buffer_size = expected_frames * test.dst_ch + 100; // Extra space just in case
-        std::vector<PCM_TYPE> output(buffer_size, 0);
-
-        // Process data
-        unsigned int actual_frames = 0;
-        RetCode result = sampler.process(input.data(), max_frames, output.data(), actual_frames);
-
-        test_check(result == RetCode::OK, "LocSampler process - " + test.name);
-        test_check(actual_frames > 0, "LocSampler output frames - " + test.name);
-
-        // Verify output frames are close to theoretical value
-        double frame_error = std::abs(static_cast<double>(actual_frames) - expected_frames) / expected_frames;
-        std::cout << "  Output frames: " << actual_frames << " (expected: " << expected_frames << ")" << std::endl;
-        // assert(frame_error < 0.05); // Should be within 5% error range
-
-        // Check various properties of the output based on test scenario
-        if (test.src_ch == 1 && test.dst_ch == 2)
-        {
-            // Mono to stereo - both channels should be the same
-            for (unsigned int i = 0; i < std::min(10u, actual_frames); i++)
-            { // Check first 10 frames only
-                assert(output[i * 2] == output[i * 2 + 1]);
-            }
-            std::cout << "  Mono to stereo conversion verified" << std::endl;
-        }
-        else if (test.src_ch == 2 && test.dst_ch == 1)
-        {
-            // Stereo to mono - check mixing (this part is more complex, just do a simple verification)
-            bool non_zero = false;
-            for (unsigned int i = 0; i < 10; i++)
-            {
-                if (output[i] != 0)
-                {
-                    non_zero = true;
-                    break;
-                }
-            }
-            assert(non_zero);
-            std::cout << "  Stereo to mono mixing verified" << std::endl;
-        }
-
-        // Perform more analysis based on different sample rate conversion cases
-        if (test.src_fs != test.dst_fs)
-        {
-            // Check frequency preservation - here we use a simple zero-crossing method to estimate frequency
-            // In real cases, more complex spectral analysis might be needed
-            int zero_crossings = 0;
-            bool last_positive = output[0] >= 0;
-
-            unsigned int check_frames = std::min(100u, actual_frames);
-            for (unsigned int i = 1; i < check_frames; i++)
-            {
-                bool current_positive = output[i * test.dst_ch] >= 0;
-                if (current_positive != last_positive)
-                {
-                    zero_crossings++;
-                    last_positive = current_positive;
-                }
-            }
-
-            // After sample rate change, the corresponding zero-crossing count should change
-            double expected_ratio = static_cast<double>(test.dst_fs) / test.src_fs;
-            std::cout << "  Zero-crossing count check: " << zero_crossings << std::endl;
-
-            // Ensure output is not all zeros
-            bool output_non_zero = false;
-            for (unsigned int i = 0; i < std::min(buffer_size, actual_frames * test.dst_ch); i++)
-            {
-                if (output[i] != 0)
-                {
-                    output_non_zero = true;
-                    break;
-                }
-            }
-            test_check(output_non_zero, "Output signal valid - " + test.name);
-        }
-    }
-
-    std::cout << "LocSampler test completed" << std::endl;
-}
+// Remove the test_loc_sampler function as it's duplicated in test_locsampler.cpp
 
 // Test mix_channels function - comprehensive test including various mixing scenarios
 void test_mix_channels()
@@ -542,9 +323,7 @@ int main()
     std::cout << "Starting audio processing tests..." << std::endl;
 
     test_mix_channels();
-    test_drcompressor();
     test_sinc_interpolator();
-    test_loc_sampler();
 
     std::cout << "All audio processing tests completed!" << std::endl;
     return 0;

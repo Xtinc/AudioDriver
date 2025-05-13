@@ -38,7 +38,7 @@ class SincInterpolator
 class DRCompressor
 {
   public:
-    explicit DRCompressor(float sample_rate, unsigned int chs, float threshold = -10.0f, float ratio = 2.0f,
+    explicit DRCompressor(float sample_rate, unsigned int chs, float threshold = -6.0f, float ratio = 2.0f,
                           float attack = 0.006f, float release = 0.1f, float knee_width = 6.0f);
 
     void process(const DeinterleavedView<float> &input, float gain);

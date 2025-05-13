@@ -17,7 +17,7 @@ void generateSineWave(PCM_TYPE *buffer, unsigned int numSamples, unsigned int nu
     for (unsigned int i = 0; i < numSamples; i++)
     {
         // 计算正弦波值（振幅为16000左右，避免截断）
-        float value = 16000.0f * std::sin(2.0f * (float)M_PI * frequency * i / sampleRate);
+        float value = 8000.0f * std::sin(2.0f * (float)M_PI * frequency * i / sampleRate);
 
         // 为所有通道填充相同值
         for (unsigned int ch = 0; ch < numChannels; ch++)
@@ -142,7 +142,7 @@ bool testLocSamplerProcess(unsigned int srcFs, unsigned int srcCh, unsigned int 
     const unsigned int processPeriod = 10; // ms
 
     // 创建LocSampler实例，使用10ms处理周期
-    LocSampler sampler(srcFs, srcCh, dstFs, dstCh, processPeriod, imap, omap);
+    LocSampler sampler(srcFs, srcCh, dstFs, dstCh, processPeriod * srcFs / 1000, imap, omap);
 
     // 计算处理次数
     unsigned int numProcessCalls = timeInterval / processPeriod;
@@ -180,14 +180,17 @@ bool testLocSamplerProcess(unsigned int srcFs, unsigned int srcCh, unsigned int 
     {
         // 计算当前处理批次的起始位置
         unsigned int srcStartIdx = i * srcFramesPerPeriod * srcCh;
-        unsigned int dstStartIdx = i * dstFramesPerPeriod * dstCh;
+        unsigned int dstStartIdx = i * dstFramesPerPeriod * dstCh; // 创建每个处理周期的视图
+        const PCM_TYPE *inputPtr = inputBuffer.data() + srcStartIdx;
+        PCM_TYPE *outputPtr = outputBuffer.data() + dstStartIdx;
 
-        // 创建每个处理周期的视图
-        InterleavedView<const PCM_TYPE> inputView(inputBuffer.data() + srcStartIdx, srcFramesPerPeriod, srcCh);
-        InterleavedView<PCM_TYPE> outputView(outputBuffer.data() + dstStartIdx, dstFramesPerPeriod, dstCh);
+        // 创建InterleavedView视图
+        InterleavedView<const PCM_TYPE> inputView(inputPtr, srcFramesPerPeriod, srcCh);
+        InterleavedView<PCM_TYPE> outputView(outputPtr, dstFramesPerPeriod, dstCh);
 
         // 处理当前批次的音频数据
-        RetCode result = sampler.process(inputView, outputView);
+        float gain = 0.0f; // 默认增益为0dB
+        RetCode result = sampler.process(inputView, outputView, gain);
         if (!result)
         {
             std::cout << "LocSampler process failed at iteration " << i + 1 << "/" << numProcessCalls << std::endl;
