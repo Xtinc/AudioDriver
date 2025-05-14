@@ -79,10 +79,10 @@ void SincInterpolator::process(ArrayView<const float> in, ArrayView<float> out, 
 {
     const auto isize = in.size();
 
-    if (in.size() < order * 2 || ch > chan)
-    {
-        return;
-    }
+    DBG_ASSERT_NE(step, 1.0);
+    DBG_ASSERT_LE(isize / step, out.size());
+    DBG_ASSERT_LT(ch, chan);
+    DBG_ASSERT_GE(isize, order * 2);
 
     const auto avail = static_cast<double>(isize - order);
     double x = left[ch] - (ready[ch] ? order : 0);
@@ -205,7 +205,7 @@ LocSampler::LocSampler(unsigned int src_fs, unsigned int src_ch, unsigned int ds
     // Create resampler if needed
     if (src_fs != dst_fs)
     {
-        resampler = std::make_unique<SincInterpolator>(64, 120, real_ochan, static_cast<double>(src_fs) / dst_fs);
+        resampler = std::make_unique<SincInterpolator>(48, 100, real_ochan, static_cast<double>(src_fs) / dst_fs);
         AUDIO_INFO_PRINT(
             "LocSampler: [fs] %u->%u, [ch] %u->%u, [L] (%u)--(%u), [R] (%u)--(%u)  ratio = %f, max_period = %ums",
             src_fs, dst_fs, src_ch, dst_ch, ichan_map[0], ochan_map[0], ichan_map[1], ochan_map[1], ratio, ti);
