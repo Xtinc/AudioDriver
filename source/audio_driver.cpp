@@ -56,7 +56,7 @@ class AlsaDriver final : public AudioDevice
 
 AlsaDriver::AlsaDriver(const std::string &name, bool capture, unsigned int fs, unsigned int ps, unsigned int ch,
                        bool enable_strict_recover)
-    : AudioDevice(name, capture, fs, ps, ch, enable_strict_recover), handle(nullptr), mmap_mode(true)
+    : AudioDevice(name, capture, fs, ps, ch, enable_strict_recover), mmap_mode(true), handle(nullptr)
 {
 }
 
@@ -385,7 +385,6 @@ void AlsaDriver::write_loop()
 void AlsaDriver::read_loop()
 {
     bool ok = true;
-    unsigned int print_cnt = 0;
     while (ok && hstate == STREAM_RUNNING)
     {
         auto cptr = dev_ps;

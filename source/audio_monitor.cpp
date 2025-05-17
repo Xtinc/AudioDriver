@@ -321,7 +321,7 @@ AudioDeviceInfo AudioMonitor::GetDefaultDevice(AudioDeviceType type)
     return {};
 }
 
-bool AudioMonitor::DeviceExists(const std::string &device_id) const
+bool AudioMonitor::DeviceExists(const std::string &device_id)
 {
     if (!enumerator_ || device_id.empty())
     {

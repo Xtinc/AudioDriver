@@ -108,7 +108,7 @@ class AudioMonitor
     AudioDeviceInfo GetDefaultDevice(AudioDeviceType type);
 
     // Check if device exists
-    bool DeviceExists(const std::string &device_id) const;
+    bool DeviceExists(const std::string &device_id);
 
     // Register device change callback
     bool RegisterCallback(DeviceChangeCallback callback);
