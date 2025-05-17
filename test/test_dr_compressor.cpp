@@ -27,32 +27,39 @@ void test_static_characteristics()
         PCM_TYPE buffer1[2] = {input_level, input_level};
         PCM_TYPE buffer2[2] = {input_level, input_level};
         PCM_TYPE buffer3[2] = {input_level, input_level};
-        PCM_TYPE buffer4[2] = {input_level, input_level};        // 将PCM缓冲区转换为float类型的DeinterleavedView
+        PCM_TYPE buffer4[2] = {input_level, input_level};
         float buffer1_float[2] = {buffer1[0] / 32767.0f, buffer1[1] / 32767.0f};
         float buffer2_float[2] = {buffer2[0] / 32767.0f, buffer2[1] / 32767.0f};
         float buffer3_float[2] = {buffer3[0] / 32767.0f, buffer3[1] / 32767.0f};
         float buffer4_float[2] = {buffer4[0] / 32767.0f, buffer4[1] / 32767.0f};
-        
-        DeinterleavedView<float> view1(buffer1_float, 1, channels);
-        DeinterleavedView<float> view2(buffer2_float, 1, channels);
-        DeinterleavedView<float> view3(buffer3_float, 1, channels);
-        DeinterleavedView<float> view4(buffer4_float, 1, channels);
-        
-        float gain = 0.0f; // 默认增益为0dB
-        comp1.process(view1, gain);
-        comp2.process(view2, gain);
-        comp3.process(view3, gain);
-        comp4.process(view4, gain);
-        
-        // 将结果转回PCM格式
-        buffer1[0] = static_cast<PCM_TYPE>(buffer1_float[0] * 32767.0f);
-        buffer1[1] = static_cast<PCM_TYPE>(buffer1_float[1] * 32767.0f);
-        buffer2[0] = static_cast<PCM_TYPE>(buffer2_float[0] * 32767.0f);
-        buffer2[1] = static_cast<PCM_TYPE>(buffer2_float[1] * 32767.0f);
-        buffer3[0] = static_cast<PCM_TYPE>(buffer3_float[0] * 32767.0f);
-        buffer3[1] = static_cast<PCM_TYPE>(buffer3_float[1] * 32767.0f);
-        buffer4[0] = static_cast<PCM_TYPE>(buffer4_float[0] * 32767.0f);
-        buffer4[1] = static_cast<PCM_TYPE>(buffer4_float[1] * 32767.0f);
+
+        ChannelBuffer<float> buffer1_cb(1, channels);
+        ChannelBuffer<float> buffer2_cb(1, channels);
+        ChannelBuffer<float> buffer3_cb(1, channels);
+        ChannelBuffer<float> buffer4_cb(1, channels);
+
+        for (unsigned int ch = 0; ch < channels; ch++)
+        {
+            buffer1_cb.channels_view()[ch][0] = buffer1_float[ch];
+            buffer2_cb.channels_view()[ch][0] = buffer2_float[ch];
+            buffer3_cb.channels_view()[ch][0] = buffer3_float[ch];
+            buffer4_cb.channels_view()[ch][0] = buffer4_float[ch];
+        }
+
+        float gain = 0.0f;
+        comp1.process(&buffer1_cb, gain);
+        comp2.process(&buffer2_cb, gain);
+        comp3.process(&buffer3_cb, gain);
+        comp4.process(&buffer4_cb, gain);
+
+        // buffer1[0] = static_cast<PCM_TYPE>(buffer1_cb.channels_view()[0][0] * 32767.0f);
+        buffer1[1] = static_cast<PCM_TYPE>(buffer1_cb.channels_view()[1][0] * 32767.0f);
+        buffer2[0] = static_cast<PCM_TYPE>(buffer2_cb.channels_view()[0][0] * 32767.0f);
+        buffer2[1] = static_cast<PCM_TYPE>(buffer2_cb.channels_view()[1][0] * 32767.0f);
+        buffer3[0] = static_cast<PCM_TYPE>(buffer3_cb.channels_view()[0][0] * 32767.0f);
+        buffer3[1] = static_cast<PCM_TYPE>(buffer3_cb.channels_view()[1][0] * 32767.0f);
+        buffer4[0] = static_cast<PCM_TYPE>(buffer4_cb.channels_view()[0][0] * 32767.0f);
+        buffer4[1] = static_cast<PCM_TYPE>(buffer4_cb.channels_view()[1][0] * 32767.0f);
 
         float output_level1 = static_cast<float>(std::abs(buffer1[0])) / 32767.0f;
         float output_level2 = static_cast<float>(std::abs(buffer2[0])) / 32767.0f;
@@ -75,7 +82,8 @@ void test_static_characteristics()
 void test_dynamic_response()
 {
     float sample_rate = 44100.0f;
-    unsigned int channels = 2;    DRCompressor fast_comp(sample_rate, channels, -20.0f, 4.0f, 0.001f, 0.01f, 6.0f);
+    unsigned int channels = 2;
+    DRCompressor fast_comp(sample_rate, channels, -20.0f, 4.0f, 0.001f, 0.01f, 6.0f);
     DRCompressor med_comp(sample_rate, channels, -20.0f, 4.0f, 0.006f, 0.1f, 6.0f);
     DRCompressor slow_comp(sample_rate, channels, -20.0f, 4.0f, 0.1f, 0.5f, 6.0f);
 
@@ -113,43 +121,39 @@ void test_dynamic_response()
             output_med[i * channels + ch] = input[i * channels + ch];
             output_slow[i * channels + ch] = input[i * channels + ch];
         }
-    }    fast_comp.reset();
-    med_comp.reset();
-    slow_comp.reset();
-
+    }
     const unsigned int block_size = 128;
     for (unsigned int i = 0; i < samples; i += block_size)
     {
         unsigned int frames = std::min(block_size, samples - i);
-        
-        // 为每个处理块创建临时缓冲区和视图
-        std::vector<float> fast_buffer(frames * channels);
-        std::vector<float> med_buffer(frames * channels);
-        std::vector<float> slow_buffer(frames * channels);
-        
-        // 将PCM数据转换为float
-        for (unsigned int j = 0; j < frames * channels; j++) {
-            fast_buffer[j] = output_fast[i * channels + j] / 32767.0f;
-            med_buffer[j] = output_med[i * channels + j] / 32767.0f;
-            slow_buffer[j] = output_slow[i * channels + j] / 32767.0f;
+
+        ChannelBuffer<float> fast_cb(frames, channels);
+        ChannelBuffer<float> med_cb(frames, channels);
+        ChannelBuffer<float> slow_cb(frames, channels);
+
+        for (unsigned int f = 0; f < frames; f++)
+        {
+            for (unsigned int ch = 0; ch < channels; ch++)
+            {
+                fast_cb.channels_view()[ch][f] = output_fast[(i + f) * channels + ch] / 32767.0f;
+                med_cb.channels_view()[ch][f] = output_med[(i + f) * channels + ch] / 32767.0f;
+                slow_cb.channels_view()[ch][f] = output_slow[(i + f) * channels + ch] / 32767.0f;
+            }
         }
-        
-        // 创建Deinterleaved视图
-        DeinterleavedView<float> fast_view(fast_buffer.data(), frames, channels);
-        DeinterleavedView<float> med_view(med_buffer.data(), frames, channels);
-        DeinterleavedView<float> slow_view(slow_buffer.data(), frames, channels);
-        
-        // 处理每个块
+
         float gain = 0.0f;
-        fast_comp.process(fast_view, gain);
-        med_comp.process(med_view, gain);
-        slow_comp.process(slow_view, gain);
-        
-        // 将结果转换回PCM格式
-        for (unsigned int j = 0; j < frames * channels; j++) {
-            output_fast[i * channels + j] = static_cast<PCM_TYPE>(fast_buffer[j] * 32767.0f);
-            output_med[i * channels + j] = static_cast<PCM_TYPE>(med_buffer[j] * 32767.0f);
-            output_slow[i * channels + j] = static_cast<PCM_TYPE>(slow_buffer[j] * 32767.0f);
+        fast_comp.process(&fast_cb, gain);
+        med_comp.process(&med_cb, gain);
+        slow_comp.process(&slow_cb, gain);
+
+        for (unsigned int f = 0; f < frames; f++)
+        {
+            for (unsigned int ch = 0; ch < channels; ch++)
+            {
+                output_fast[(i + f) * channels + ch] = static_cast<PCM_TYPE>(fast_cb.channels_view()[ch][f] * 32767.0f);
+                output_med[(i + f) * channels + ch] = static_cast<PCM_TYPE>(med_cb.channels_view()[ch][f] * 32767.0f);
+                output_slow[(i + f) * channels + ch] = static_cast<PCM_TYPE>(slow_cb.channels_view()[ch][f] * 32767.0f);
+            }
         }
     }
 
@@ -188,21 +192,25 @@ void test_makeup_gain()
     const int steps = 100;
     float input_db = -30.0f;
     float input_level = std::pow(10.0f, input_db / 20.0f) * 32767.0f;
-
     for (int i = 0; i <= steps; i++)
     {
-        float gain = -10.0f + (20.0f * i) / steps;        PCM_TYPE buffer[2] = {static_cast<PCM_TYPE>(input_level), static_cast<PCM_TYPE>(input_level)};
-        
-        // 将PCM转换为浮点
+        float gain = -10.0f + (20.0f * i) / steps;
+        PCM_TYPE buffer[2] = {static_cast<PCM_TYPE>(input_level), static_cast<PCM_TYPE>(input_level)};
+
         float buffer_float[2] = {buffer[0] / 32767.0f, buffer[1] / 32767.0f};
-        DeinterleavedView<float> view(buffer_float, 1, channels);
-        
-        compressor.reset();
-        compressor.process(view, gain);
-        
-        // 转回PCM格式
-        buffer[0] = static_cast<PCM_TYPE>(buffer_float[0] * 32767.0f);
-        buffer[1] = static_cast<PCM_TYPE>(buffer_float[1] * 32767.0f);
+
+        ChannelBuffer<float> cb(1, channels);
+        for (unsigned int ch = 0; ch < channels; ch++)
+        {
+            cb.channels_view()[ch][0] = buffer_float[ch];
+        }
+
+        compressor.process(&cb, gain);
+
+        for (unsigned int ch = 0; ch < channels; ch++)
+        {
+            buffer[ch] = static_cast<PCM_TYPE>(cb.channels_view()[ch][0] * 32767.0f);
+        }
 
         float output_level = static_cast<float>(std::abs(buffer[0])) / 32767.0f;
         float output_db = output_level > 0 ? 20.0f * std::log10(output_level) : -120.0f;

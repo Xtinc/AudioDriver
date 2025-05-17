@@ -7,15 +7,46 @@
 #include <memory>
 #include <vector>
 
+// Forward declarations
+class NoiseSuppressor;
+class AnalysisBuffer;
+class SplittingFilter;
+
+/**
+ * @brief Mixes audio channels together
+ *
+ * @param ssrc Source audio buffer
+ * @param chan Number of channels
+ * @param frames_num Number of frames
+ * @param output Output buffer (will be mixed with input)
+ */
 void mix_channels(const int16_t *ssrc, unsigned int chan, unsigned int frames_num, int16_t *output);
 
+/**
+ * @brief Implements a sinc interpolation based resampler
+ */
 class SincInterpolator
 {
   public:
+    /**
+     * @brief Constructs a sinc interpolation resampler
+     *
+     * @param order Filter order
+     * @param precision Interpolation precision
+     * @param chan Number of audio channels
+     * @param ratio Resampling ratio
+     */
     SincInterpolator(int order, int precision, unsigned int chan, double ratio);
 
     ~SincInterpolator();
 
+    /**
+     * @brief Processes audio data with the sinc interpolator
+     *
+     * @param in Input audio data
+     * @param out Output resampled audio data
+     * @param ch Channel number to process
+     */
     void process(ArrayView<const float> in, ArrayView<float> out, unsigned int ch);
 
   private:
@@ -35,15 +66,33 @@ class SincInterpolator
     std::unique_ptr<float[]> kern;
 };
 
+/**
+ * @brief Dynamic Range Compressor for audio processing
+ */
 class DRCompressor
 {
   public:
+    /**
+     * @brief Constructs a dynamic range compressor
+     *
+     * @param sample_rate Audio sample rate in Hz
+     * @param chs Number of audio channels
+     * @param threshold Compression threshold in dB
+     * @param ratio Compression ratio
+     * @param attack Attack time in seconds
+     * @param release Release time in seconds
+     * @param knee_width Width of the knee in dB
+     */
     explicit DRCompressor(float sample_rate, unsigned int chs, float threshold = -6.0f, float ratio = 2.0f,
                           float attack = 0.006f, float release = 0.1f, float knee_width = 6.0f);
 
-    void process(const DeinterleavedView<float> &input, float gain);
-
-    void reset();
+    /**
+     * @brief Processes audio through the compressor
+     *
+     * @param input Audio buffer to process
+     * @param gain Additional gain to apply in dB
+     */
+    void process(ChannelBuffer<float> *input, float gain);
 
   private:
     float compute_gain(float inputLevel) const;
@@ -64,12 +113,42 @@ class DRCompressor
     float knee_threshold_upper;
 };
 
+/**
+ * @brief Audio format conversion and processing class
+ *
+ * Handles sample rate conversion, channel mapping, and audio processing
+ */
 class LocSampler
 {
   public:
+    /**
+     * @brief Constructs an audio sample converter and processor
+     *
+     * @param src_fs Source sample rate in Hz
+     * @param src_ch Number of source channels
+     * @param dst_fs Destination sample rate in Hz
+     * @param dst_ch Number of destination channels
+     * @param max_frames Maximum number of input frames to process
+     * @param imap Input channel mapping configuration
+     * @param omap Output channel mapping configuration
+     * @param denoise Whether to apply noise suppression
+     */
     LocSampler(unsigned int src_fs, unsigned int src_ch, unsigned int dst_fs, unsigned int dst_ch,
-               unsigned int max_frames, const AudioChannelMap &imap, const AudioChannelMap &omap);
+               unsigned int max_frames, const AudioChannelMap &imap, const AudioChannelMap &omap, bool denoise);
 
+    ~LocSampler();
+
+    /**
+     * @brief Processes audio data with format conversion
+     *
+     * Performs channel conversion, sample rate conversion,
+     * noise suppression (if enabled), and dynamic range compression
+     *
+     * @param input Input audio data (interleaved PCM)
+     * @param output Output audio data buffer (interleaved PCM)
+     * @param gain Gain to apply in dB
+     * @return RetCode Status code indicating success or failure
+     */
     RetCode process(const InterleavedView<const PCM_TYPE> &input, const InterleavedView<PCM_TYPE> &output,
                     float gain) const;
 
@@ -86,20 +165,45 @@ class LocSampler
     const unsigned int real_ochan;
 
   private:
-    std::unique_ptr<float[]> ibuffer;
-    std::unique_ptr<float[]> obuffer;
+    bool enable_denoise;
     std::unique_ptr<SincInterpolator> resampler;
     std::unique_ptr<DRCompressor> compressor;
-
+    std::unique_ptr<NoiseSuppressor> denoiser;
+    std::unique_ptr<ChannelBuffer<float>> analysis_ibuffer;
+    std::unique_ptr<ChannelBuffer<float>> analysis_obuffer;
+    std::unique_ptr<ChannelBuffer<float>> split_data;
+    std::unique_ptr<SplittingFilter> splitting_filter;
+    /**
+     * @brief Converts interleaved 16-bit PCM to deinterleaved float samples
+     *
+     * @param interleaved Input interleaved PCM data
+     * @param deinterleaved Output deinterleaved float data
+     */
     void deinterleave_s16_f16(const InterleavedView<const PCM_TYPE> &interleaved,
-                              const DeinterleavedView<float> &deinterleaved) const;
+                              ChannelBuffer<float> *deinterleaved) const;
 
-    void interleave_f16_s16(const DeinterleavedView<const float> &deinterleaved,
-                            const InterleavedView<PCM_TYPE> &interleaved) const;
+    /**
+     * @brief Converts deinterleaved float samples to interleaved 16-bit PCM
+     *
+     * @param deinterleaved Input deinterleaved float data
+     * @param interleaved Output interleaved PCM data
+     */
+    void interleave_f16_s16(ChannelBuffer<float> *deinterleaved, const InterleavedView<PCM_TYPE> &interleaved) const;
 
-    void convert_channels(const DeinterleavedView<float> &input, const DeinterleavedView<float> &output) const;
+    /**
+     * @brief Converts between different channel configurations
+     *
+     * @param io Buffer containing audio data to be converted in place
+     */
+    void convert_channels(ChannelBuffer<float> *io) const;
 
-    void convert_sample_rate(const DeinterleavedView<float> &input, DeinterleavedView<float> &output) const;
+    /**
+     * @brief Converts audio data between different sample rates
+     *
+     * @param input Input audio data at source sample rate
+     * @param output Output audio data at destination sample rate
+     */
+    void convert_sample_rate(ChannelBuffer<float> *input, ChannelBuffer<float> *output) const;
 };
 
 #endif

@@ -6,8 +6,8 @@ int main()
 {
     AudioCenter center(true);
 
-    center.create(IToken(20), {"default", 0}, AudioBandWidth::Full, AudioPeriodSize::INR_20MS, 2, true, true);
-    center.create(OToken(120), {"default", 0}, AudioBandWidth::Full, AudioPeriodSize::INR_20MS, 2, true);
+    center.create(IToken(20), {"noise_audio.wav", 0}, AudioBandWidth::Full, AudioPeriodSize::INR_10MS, 1);
+    center.create(OToken(120), {"default", 0}, AudioBandWidth::CDQuality, AudioPeriodSize::INR_20MS, 1);
     center.prepare();
     center.start();
     center.connect(20_itk, 120_otk);

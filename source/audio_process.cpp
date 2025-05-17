@@ -1,4 +1,6 @@
 #include "audio_process.h"
+#include "audio_filterbanks.h"
+#include "ns/noise_supression.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -6,8 +8,9 @@
 static constexpr auto RS_BLKSIZE = 4;
 static constexpr auto A_PI = 3.141592653589793;
 static constexpr auto MAX_CONVERTER_RATIO = 8.0;
+static constexpr auto DENOISE_SAMPLE_RATE = 16000;
 
-constexpr int16_t clamp_s16(int32_t v)
+static constexpr int16_t clamp_s16(int32_t v)
 {
     return static_cast<int16_t>(v < -32768 ? -32768 : 32767 < v ? 32767 : v);
 }
@@ -80,7 +83,7 @@ void SincInterpolator::process(ArrayView<const float> in, ArrayView<float> out, 
     const auto isize = in.size();
 
     DBG_ASSERT_NE(step, 1.0);
-    DBG_ASSERT_LE(isize / step, out.size());
+    DBG_ASSERT_LE(isize / step, out.size() + 1u);
     DBG_ASSERT_LT(ch, chan);
     DBG_ASSERT_GE(isize, order * 2);
 
@@ -179,10 +182,10 @@ float SincInterpolator::interpolator(double x, const float *input, const float *
 }
 
 LocSampler::LocSampler(unsigned int src_fs, unsigned int src_ch, unsigned int dst_fs, unsigned int dst_ch,
-                       unsigned int max_iframe, const AudioChannelMap &imap, const AudioChannelMap &omap)
+                       unsigned int max_iframe, const AudioChannelMap &imap, const AudioChannelMap &omap, bool denoise)
     : src_fs(src_fs), src_ch(src_ch), dst_fs(dst_fs), dst_ch(dst_ch), ratio(static_cast<double>(dst_fs) / src_fs),
       ti(max_iframe * 1000 / src_fs), ichan_map(imap), ochan_map(omap), real_ichan(std::min(2u, src_ch)),
-      real_ochan(std::min(2u, dst_ch))
+      real_ochan(std::min(2u, dst_ch)), enable_denoise(denoise)
 {
     // Validate input parameters
     DBG_ASSERT_GT(src_ch, 0u);
@@ -196,11 +199,32 @@ LocSampler::LocSampler(unsigned int src_fs, unsigned int src_ch, unsigned int ds
     DBG_ASSERT_LE(ochan_map[1], dst_ch);
 
     // Allocate buffers for audio processing
-    auto max_frames = std::max(src_fs, dst_fs) * ti / 1000;
-    auto max_chan = std::max(src_ch, dst_ch);
-    ibuffer = std::make_unique<float[]>(max_frames * max_chan);
-    obuffer = std::make_unique<float[]>(max_frames * max_chan);
+    auto src_fr = src_fs * ti / 1000;
+    auto dst_fr = dst_fs * ti / 1000;
+    analysis_ibuffer = std::make_unique<ChannelBuffer<float>>(src_fr, std::max(src_ch, dst_ch));
+    analysis_obuffer = std::make_unique<ChannelBuffer<float>>(dst_fr, real_ochan);
     compressor = std::make_unique<DRCompressor>(static_cast<float>(dst_fs), real_ochan);
+
+    if (enable_denoise)
+    {
+        if (ti != 10 || dst_fs % DENOISE_SAMPLE_RATE)
+        {
+            AUDIO_ERROR_PRINT("Cannot enable denoise, ti = %u, dst_fs = %u", ti, dst_fs);
+            enable_denoise = false;
+        }
+        else
+        {
+            AUDIO_DEBUG_PRINT("Enable NoiseSuppressor");
+            denoiser = std::make_unique<NoiseSuppressor>(1, real_ochan);
+            if (dst_fs > DENOISE_SAMPLE_RATE)
+            {
+                split_data =
+                    std::make_unique<ChannelBuffer<float>>(dst_fr, real_ochan, dst_fr * 100 / DENOISE_SAMPLE_RATE);
+                splitting_filter =
+                    std::make_unique<SplittingFilter>(real_ochan, dst_fr * 100 / DENOISE_SAMPLE_RATE, dst_fr);
+            }
+        }
+    }
 
     // Create resampler if needed
     if (src_fs != dst_fs)
@@ -218,12 +242,16 @@ LocSampler::LocSampler(unsigned int src_fs, unsigned int src_ch, unsigned int ds
     }
 }
 
+LocSampler::~LocSampler() = default;
+
 RetCode LocSampler::process(const InterleavedView<const PCM_TYPE> &input, const InterleavedView<PCM_TYPE> &output,
                             float gain) const
 {
     // Calculate input and output frame counts
     const auto src_fr = ti * src_fs / 1000;
     const auto dst_fr = ti * dst_fs / 1000;
+    const auto ibuffer = analysis_ibuffer.get();
+    const auto obuffer = analysis_obuffer.get();
 
     // Validate buffer sizes
     DBG_ASSERT_LE(input.size(), src_fr * src_ch);
@@ -235,40 +263,66 @@ RetCode LocSampler::process(const InterleavedView<const PCM_TYPE> &input, const 
     }
 
     // Step 1: Deinterleave PCM data to float arrays
-    DeinterleavedView<float> data_ptr1(ibuffer.get(), src_fr, real_ichan);
-    deinterleave_s16_f16(input, data_ptr1);
+    // input is interleaved with src_ch & src_fr,
+    // output is deinterleaved with src_ch & src_fr
+    deinterleave_s16_f16(input, ibuffer);
 
     // Step 2: Perform channel conversion
-    DeinterleavedView<float> data_ptr2(obuffer.get(), src_fr, real_ochan);
-    convert_channels(data_ptr1, data_ptr2);
+    // Convert channels from src_ch & src_fr to dst_ch & src_fr
+    if (real_ichan != real_ochan)
+    {
+        convert_channels(ibuffer);
+    }
 
     // Step 3: Perform sample rate conversion if needed
-    DeinterleavedView<float> data_ptr3(ibuffer.get(), dst_fr, real_ochan);
-    convert_sample_rate(data_ptr2, data_ptr3);
+    // To Convert sample rate from src_fs to dst_fs
+    ChannelBuffer<float> *buf_ptr = ibuffer;
+    if (dst_fs != src_fs)
+    {
+        convert_sample_rate(ibuffer, obuffer);
+        buf_ptr = analysis_obuffer.get();
+    }
 
-    // Step 3.5: Apply dynamic range compression
-    compressor->process(data_ptr3, gain);
+    // Step 4: Apply noise suppression if enabled
+    if (enable_denoise)
+    {
+        if (dst_fs > DENOISE_SAMPLE_RATE)
+        {
+            splitting_filter->Analysis(buf_ptr, split_data.get());
+            denoiser->Analyze(*split_data);
+            denoiser->Process(*split_data);
+            splitting_filter->Synthesis(split_data.get(), buf_ptr);
+        }
+        else
+        {
+            denoiser->Analyze(*buf_ptr);
+            denoiser->Process(*buf_ptr);
+        }
+    }
 
-    // Step 4: Interleave float data back to PCM format
-    interleave_f16_s16(data_ptr3, output);
+    // Step 5: Apply dynamic range compression
+    compressor->process(buf_ptr, gain);
+
+    // Step 6: Interleave float data back to PCM format
+    interleave_f16_s16(buf_ptr, output);
 
     return RetCode::OK;
 }
 
 void LocSampler::deinterleave_s16_f16(const InterleavedView<const PCM_TYPE> &interleaved,
-                                      const DeinterleavedView<float> &deinterleaved) const
+                                      ChannelBuffer<float> *deinterleaved) const
 {
     // Ensure input and output have same number of samples per channel
-    DBG_ASSERT_EQ(SamplesPerChannel(interleaved), SamplesPerChannel(deinterleaved));
+    DBG_ASSERT_GE(SamplesPerChannel(interleaved), deinterleaved->num_frames());
 
     // Scale factor to normalize 16-bit PCM to float [-1.0, 1.0]
     constexpr float kScaling = 1.f / 32768.f;
-    const auto samples_per_channel = SamplesPerChannel(deinterleaved);
+    const auto samples_per_channel = SamplesPerChannel(interleaved);
 
     // Extract each channel from interleaved data based on channel map
     for (size_t i = 0; i < real_ichan; ++i)
     {
-        MonoView<float> channel = deinterleaved[i];
+        MonoView<float> channel = deinterleaved->channels_view()[i];
         size_t interleaved_idx = ichan_map[i];
         for (size_t j = 0; j < samples_per_channel; ++j)
         {
@@ -278,17 +332,17 @@ void LocSampler::deinterleave_s16_f16(const InterleavedView<const PCM_TYPE> &int
     }
 }
 
-void LocSampler::interleave_f16_s16(const DeinterleavedView<const float> &deinterleaved,
+void LocSampler::interleave_f16_s16(ChannelBuffer<float> *deinterleaved,
                                     const InterleavedView<PCM_TYPE> &interleaved) const
 {
     // Ensure input and output have same number of samples per channel
-    DBG_ASSERT_EQ(SamplesPerChannel(interleaved), SamplesPerChannel(deinterleaved));
-    const auto samples_per_channel = SamplesPerChannel(interleaved);
+    DBG_ASSERT_EQ(interleaved.samples_per_channel(), deinterleaved->num_frames());
+    const auto samples_per_channel = interleaved.samples_per_channel();
 
     // Convert each channel from float to 16-bit PCM and interleave based on channel map
     for (size_t i = 0; i < real_ochan; ++i)
     {
-        MonoView<const float> channel = deinterleaved[i];
+        MonoView<const float> channel = deinterleaved->channels_view()[i];
         size_t interleaved_idx = ochan_map[i];
         for (size_t j = 0; j < samples_per_channel; ++j)
         {
@@ -302,54 +356,48 @@ void LocSampler::interleave_f16_s16(const DeinterleavedView<const float> &deinte
     }
 }
 
-void LocSampler::convert_channels(const DeinterleavedView<float> &input, const DeinterleavedView<float> &output) const
+void LocSampler::convert_channels(ChannelBuffer<float> *io) const
 {
-    // Ensure input and output have same number of samples per channel
-    DBG_ASSERT_EQ(SamplesPerChannel(input), SamplesPerChannel(output));
+    DBG_ASSERT_LE(real_ichan, io->num_channels());
+    DBG_ASSERT_LE(real_ochan, io->num_channels());
+    const auto frames = io->num_frames();
 
-    // Case 1: Same number of channels - direct copy
-    if (real_ichan == real_ochan)
+    // Case 1: Mono to stereo conversion - copy left channel to right channel
+    if (real_ichan == 1 && real_ochan == 2)
     {
-        output.CopyFrom(input);
-    }
-    // Case 2: Mono to stereo conversion - duplicate mono signal to both channels
-    else if (real_ichan == 1 && real_ochan == 2)
-    {
-        for (size_t i = 0; i < input.samples_per_channel(); ++i)
+        auto left_channel = io->channels_view()[0];
+        auto right_channel = io->channels_view()[1];
+        for (size_t i = 0; i < frames; ++i)
         {
-            output[0][i] = input[0][i]; // Left channel
-            output[1][i] = input[0][i]; // Right channel
+            right_channel[i] = left_channel[i]; // Left channel
         }
     }
-    // Case 3: Stereo to mono conversion - average both channels
     else if (real_ichan == 2 && real_ochan == 1)
     {
-        for (size_t i = 0; i < input.samples_per_channel(); ++i)
+        // Case 3: Stereo to mono conversion - average both channels
+        auto left_channel = io->channels_view()[0];
+        auto right_channel = io->channels_view()[1];
+        for (size_t i = 0; i < frames; ++i)
         {
-            output[0][i] = 0.5f * (input[0][i] + input[1][i]); // Average of L+R
+            // Average of L+R
+            left_channel[i] = 0.5f * (left_channel[i] + right_channel[i]);
         }
     }
+
+    io->set_num_channels(real_ochan);
 }
 
-void LocSampler::convert_sample_rate(const DeinterleavedView<float> &input, DeinterleavedView<float> &output) const
+void LocSampler::convert_sample_rate(ChannelBuffer<float> *input, ChannelBuffer<float> *output) const
 {
     // Ensure input and output have the same number of channels
-    DBG_ASSERT_EQ(NumChannels(input), NumChannels(output));
-    const auto channels = NumChannels(input);
+    DBG_ASSERT_EQ(input->num_channels(), output->num_channels());
+    const auto channels = input->num_channels();
 
     // Apply resampling if source and destination sample rates differ
-    if (src_fs != dst_fs)
+    for (size_t c = 0; c < channels; c++)
     {
-        for (size_t c = 0; c < channels; c++)
-        {
-            // Resample each channel separately
-            resampler->process(input[c], output[c], static_cast<unsigned int>(c));
-        }
-    }
-    // No resampling needed: use input directly
-    else
-    {
-        output = input;
+        // Resample each channel separately
+        resampler->process(input->channels_view()[c], output->channels_view()[c], static_cast<unsigned int>(c));
     }
 }
 
@@ -365,14 +413,14 @@ DRCompressor::DRCompressor(float sample_rate, unsigned int chs, float _threshold
     knee_threshold_upper = threshold + knee_width / 2.0f;
 }
 
-void DRCompressor::process(const DeinterleavedView<float> &input, float gain)
+void DRCompressor::process(ChannelBuffer<float> *input, float gain)
 {
-    const auto frames = input.samples_per_channel();
-    DBG_ASSERT_EQ(channels, input.num_channels());
+    const auto frames = input->num_frames();
+    DBG_ASSERT_EQ(channels, input->num_channels());
 
     for (unsigned int c = 0; c < channels; c++)
     {
-        MonoView<float> channel = input[c];
+        MonoView<float> channel = input->channels_view()[c];
         for (unsigned int i = 0; i < frames; i++)
         {
             float inputLevelDB = float2db(channel[i]);
@@ -391,14 +439,6 @@ void DRCompressor::process(const DeinterleavedView<float> &input, float gain)
             result = std::max(-32768.0f, std::min(32767.0f, result));
             channel[i] = result;
         }
-    }
-}
-
-void DRCompressor::reset()
-{
-    for (unsigned int ch = 0; ch < channels; ++ch)
-    {
-        current_gain[ch] = 0.0f;
     }
 }
 

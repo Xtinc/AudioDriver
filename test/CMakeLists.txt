@@ -18,5 +18,5 @@ target_link_libraries(test_dr_compressor bettyaudio)
 add_executable(test_locsampler test_locsampler.cpp)
 target_link_libraries(test_locsampler bettyaudio)
 
-# add_executable(test_filter_banks test_filter_banks.cpp)
-# target_link_libraries(test_filter_banks bettyaudio)
+add_executable(test_filter_banks test_filter_banks.cpp)
+target_link_libraries(test_filter_banks bettyaudio)

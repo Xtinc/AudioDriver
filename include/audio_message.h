@@ -2,7 +2,7 @@
 #define AUDIO_MSG_PRINT_OPTS_H
 
 /**
- * @file msg_print_opts.h
+ * @file audio_message.h
  * @brief Message printing options for the AudioDriver library
  *
  * This header defines macros for printing messages with different severity levels
@@ -13,7 +13,7 @@
 #include <cassert>
 #include <iostream>
 
-#ifdef ENABLE_DBG_ASSERT
+#ifndef NDEBUG
 /**
  * @brief Macro for checking conditions with operators, outputs error and aborts if condition is false
  *

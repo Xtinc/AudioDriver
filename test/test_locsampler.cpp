@@ -26,7 +26,7 @@ class LinearResampler
     LinearResampler(unsigned int srcFs, unsigned int srcCh, unsigned int dstFs, unsigned int dstCh)
         : src_fs(srcFs), src_ch(srcCh), dst_fs(dstFs), dst_ch(dstCh), ratio(static_cast<double>(dstFs) / srcFs)
     {
-    }    // Linear interpolation resampling process
+    } // Linear interpolation resampling process
     void process(const InterleavedView<const PCM_TYPE> &input, InterleavedView<PCM_TYPE> &output) const
     {
         // Get frame counts
@@ -49,7 +49,7 @@ class LinearResampler
                 inIdx = inFrames - 2; // Ensure there's a next sample for interpolation
                 if (inIdx < 0)
                     inIdx = 0; // Prevent cases with only one sample
-            }            // Apply linear interpolation for each channel
+            } // Apply linear interpolation for each channel
             for (unsigned int ch = 0; ch < std::min(src_ch, dst_ch); ++ch)
             {
                 // Get adjacent samples
@@ -174,7 +174,10 @@ bool validateResampling(const PCM_TYPE *original, unsigned int origSamples, unsi
             resampledPeak = std::max(resampledPeak, std::abs(sample));
         }
     }
-    resampledRms = std::sqrt(resampledRms / (resampledSamples * resampledChannels));    // 3. Analyze characteristics of the resampled signal and output diagnostic info
+    resampledRms =
+        std::sqrt(resampledRms /
+                  (resampledSamples *
+                   resampledChannels)); // 3. Analyze characteristics of the resampled signal and output diagnostic info
     std::cout << "  Signal Analysis:" << std::endl;
     std::cout << "    Original - RMS: " << origRms << ", Peak: " << origPeak << std::endl;
     std::cout << "    Resampled - RMS: " << resampledRms << ", Peak: " << resampledPeak << std::endl;
@@ -255,7 +258,7 @@ bool testLocSamplerProcess(const LocSamplerTestCase &testcase)
     const unsigned int processPeriod = 10; // ms
 
     // Create LocSampler instance using 10ms processing period
-    LocSampler sampler(srcFs, srcCh, dstFs, dstCh, processPeriod * srcFs / 1000, imap, omap);
+    LocSampler sampler(srcFs, srcCh, dstFs, dstCh, processPeriod * srcFs / 1000, imap, omap, false);
 
     // Calculate number of processing iterations
     unsigned int numProcessCalls = timeInterval / processPeriod;
@@ -275,7 +278,7 @@ bool testLocSamplerProcess(const LocSamplerTestCase &testcase)
 
     // Allocate complete input and output buffers
     std::vector<PCM_TYPE> inputBuffer(totalSrcFrames * srcCh, 0);
-    std::vector<PCM_TYPE> outputBuffer(totalDstFrames * dstCh, 0); 
+    std::vector<PCM_TYPE> outputBuffer(totalDstFrames * dstCh, 0);
     // Choose a frequency that won't cause severe aliasing
     // Frequency should be less than half the lowest sample rate (Nyquist frequency)
     float testFreq = std::min(srcFs, dstFs) / 8.0f;
@@ -301,7 +304,7 @@ bool testLocSamplerProcess(const LocSamplerTestCase &testcase)
     {
         // Calculate the starting position for the current processing batch
         unsigned int srcStartIdx = i * srcFramesPerPeriod * srcCh;
-        unsigned int dstStartIdx = i * dstFramesPerPeriod * dstCh; 
+        unsigned int dstStartIdx = i * dstFramesPerPeriod * dstCh;
         // Create view for each processing period
         const PCM_TYPE *inputPtr = inputBuffer.data() + srcStartIdx;
         PCM_TYPE *outputPtr = outputBuffer.data() + dstStartIdx;
@@ -338,7 +341,7 @@ bool testLocSamplerProcess(const LocSamplerTestCase &testcase)
     totalSrcFrames -= srcFramesPerPeriod;
 
     std::string inputFilename = "input_" + testName + ".pcm";
-    std::string outputFilename = "output_" + testName + ".pcm"; 
+    std::string outputFilename = "output_" + testName + ".pcm";
     // Save original and processed signals
     savePCMToFile(inputFilename, inputBuffer_processed, totalSrcFrames, srcCh);
     savePCMToFile(outputFilename, outputBuffer_processed, totalDstFrames, dstCh);
@@ -356,7 +359,7 @@ bool testLocSamplerProcess(const LocSamplerTestCase &testcase)
         metaFile << "test_frequency=" << testFreq << std::endl;
         metaFile.close();
         std::cout << "  Saved test metadata to " << metadataFilename << std::endl;
-    } 
+    }
     // Validate results
     float ratio = static_cast<float>(dstFs) / static_cast<float>(srcFs);
     float errorThreshold = 0.2f; // Allow 20% RMS difference

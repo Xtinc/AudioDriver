@@ -50,12 +50,12 @@ struct NetStatInfos
     uint32_t packets_out_of_order;
 };
 
-template <typename T> constexpr typename std::underlying_type<T>::type enum2val(T e)
+template <typename T> constexpr std::underlying_type_t<T> enum2val(T e)
 {
-    return static_cast<typename std::underlying_type<T>::type>(e);
+    return static_cast<std::underlying_type_t<T>>(e);
 }
 
-template <typename E> constexpr E val2enum(typename std::underlying_type<E>::type val)
+template <typename E> constexpr E val2enum(std::underlying_type_t<E> val)
 {
     return static_cast<E>(val);
 }
