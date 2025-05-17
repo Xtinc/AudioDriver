@@ -33,7 +33,8 @@ struct NetPacketHeader
     uint8_t sample_rate;
     uint8_t magic_num;
     uint8_t receiver_id;
-    uint8_t padding[3];
+    uint8_t packet_type; // 0=普通数据包, 1=RTT探测包, 2=RTT响应包
+    uint8_t padding[2];
     uint32_t sequence;
     uint64_t timestamp;
 
@@ -45,6 +46,8 @@ struct NetStatInfos
     double packet_loss_rate;
     double average_jitter;
     double max_jitter;
+    double average_rtt;
+    double max_rtt;
     uint32_t packets_received;
     uint32_t packets_lost;
     uint32_t packets_out_of_order;
@@ -362,6 +365,64 @@ struct KFifo
     }
 };
 
+// 网络统计类，用于维护和计算网络相关统计数据
+class NetStatistics
+{
+  public:
+    NetStatistics()
+        : packets_received(0), packets_lost(0), packets_out_of_order(0), period_packets_received(0),
+          period_packets_lost(0), period_packets_out_of_order(0), total_jitter(0.0), max_jitter(0.0),
+          period_total_jitter(0.0), total_rtt(0.0), max_rtt(0.0), period_total_rtt(0.0), packets_with_rtt(0),
+          period_packets_with_rtt(0), last_sequence(0), highest_sequence_seen(0), last_timestamp(0),
+          last_arrival_time(0), first_packet(true)
+    {
+        last_report_time = std::chrono::steady_clock::now();
+    }
+
+    // 更新基本网络统计（抖动、丢包等）
+    void update_network_stats(uint32_t sequence, uint64_t timestamp);
+
+    // 更新RTT统计
+    void update_rtt_stats(double rtt);
+
+    // 获取当前周期的统计信息，并重置周期统计
+    NetStatInfos get_period_stats();
+
+  private:
+    // 累计统计
+    uint32_t packets_received;
+    uint32_t packets_lost;
+    uint32_t packets_out_of_order;
+
+    // 周期统计（用于报告）
+    uint32_t period_packets_received;
+    uint32_t period_packets_lost;
+    uint32_t period_packets_out_of_order;
+
+    // 抖动统计
+    double total_jitter;
+    double max_jitter;
+    double period_total_jitter;
+
+    // RTT统计
+    double total_rtt;
+    double max_rtt;
+    double period_total_rtt;
+    uint32_t packets_with_rtt;
+    uint32_t period_packets_with_rtt;
+
+    // 序列号跟踪
+    uint32_t last_sequence;
+    uint32_t highest_sequence_seen;
+
+    // 时间戳跟踪
+    uint64_t last_timestamp;
+    uint64_t last_arrival_time;
+
+    bool first_packet;
+    std::chrono::steady_clock::time_point last_report_time;
+};
+
 class NetEncoder
 {
   private:
@@ -435,7 +496,6 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
             return endpoint == other.endpoint && receiver_token == other.receiver_token;
         }
     };
-
     struct SenderContext
     {
         std::unique_ptr<NetEncoder> encoder;
@@ -443,45 +503,38 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
         unsigned int channels;
         unsigned int sample_rate;
         unsigned int isequence;
+        unsigned int packet_count;
+        std::map<uint32_t, uint64_t> rtt_probes; // 序列号 -> 发送时间戳
 
         SenderContext(unsigned int ch, unsigned int sr)
-            : encoder(std::make_unique<NetEncoder>(ch, NETWORK_MAX_FRAMES)), channels(ch), sample_rate(sr), isequence(0)
+            : encoder(std::make_unique<NetEncoder>(ch, NETWORK_MAX_FRAMES)), channels(ch), sample_rate(sr),
+              isequence(0), packet_count(0)
         {
         }
     };
-
     struct DecoderContext
     {
         std::unique_ptr<NetDecoder> decoder;
+        NetStatistics stats;
 
-        uint32_t last_sequence{0};
-        uint64_t last_timestamp{0};
-        uint64_t last_arrival_time{0};
-
-        uint32_t packets_received{0};
-        uint32_t packets_lost{0};
-        double total_jitter{0.0};
-        double max_jitter{0.0};
-
-        uint32_t packets_out_of_order{0};
-
-        uint32_t period_packets_received{0};
-        uint32_t period_packets_lost{0};
-        double period_total_jitter{0.0};
-        uint32_t period_packets_out_of_order{0};
-
-        uint32_t highest_sequence_seen{0};
-        bool first_packet{true};
-
-        std::chrono::steady_clock::time_point last_report_time;
-
-        DecoderContext(unsigned int ch, unsigned int max_frames)
-            : decoder(std::make_unique<NetDecoder>(ch, max_frames)), last_report_time(std::chrono::steady_clock::now())
+        DecoderContext(unsigned int ch, unsigned int max_frames) : decoder(std::make_unique<NetDecoder>(ch, max_frames))
         {
         }
 
-        void update_stats(uint32_t sequence, uint64_t timestamp);
-        NetStatInfos get_period_stats();
+        void update_stats(uint32_t sequence, uint64_t timestamp)
+        {
+            stats.update_network_stats(sequence, timestamp);
+        }
+
+        void update_rtt(double rtt)
+        {
+            stats.update_rtt_stats(rtt);
+        }
+
+        NetStatInfos get_period_stats()
+        {
+            return stats.get_period_stats();
+        }
     };
 
   public:
@@ -507,6 +560,7 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     void start_receive_loop();
     void start_stats_loop();
     void handle_receive(const asio::error_code &error, std::size_t bytes);
+    void process_rtt_packet(const NetPacketHeader *header);
     void retry_receive_with_backoff();
     DecoderContext &get_decoder(uint8_t sender_id, unsigned int channels);
 

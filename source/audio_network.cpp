@@ -487,9 +487,10 @@ void NetWorker::report()
         auto stats = pair.second.get_period_stats();
         auto token = pair.first;
 
-        AUDIO_INFO_PRINT("NETSTATS(%u) : [loss] %.2f%%, [jitter] %.2fms, [received] %u, [lost] %u, [out-of-order] %u",
-                         token, stats.packet_loss_rate, stats.average_jitter, stats.packets_received,
-                         stats.packets_lost, stats.packets_out_of_order);
+        AUDIO_INFO_PRINT(
+            "NETSTATS(%u) : [loss] %.2f%%, [jitter] %.2fms, [rtt] %.2fms, [received] %u, [lost] %u, [out-of-order] %u",
+            token, stats.packet_loss_rate, stats.average_jitter, stats.average_rtt, stats.packets_received,
+            stats.packets_lost, stats.packets_out_of_order);
     }
 }
 
@@ -677,7 +678,6 @@ RetCode NetWorker::send_audio(uint8_t sender_id, const int16_t *data, unsigned i
     {
         return {RetCode::FAILED, "Encoding failed"};
     }
-
     NetPacketHeader header{};
     header.sender_id = sender_id;
     header.channels = static_cast<uint8_t>(context.channels);
@@ -687,6 +687,18 @@ RetCode NetWorker::send_audio(uint8_t sender_id, const int16_t *data, unsigned i
     header.timestamp =
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
             .count();
+
+    // 每100个包发送一个RTT探测包
+    context.packet_count++;
+    if (context.packet_count % 100 == 0)
+    {
+        header.packet_type = 1;                                 // RTT探测包
+        context.rtt_probes[header.sequence] = header.timestamp; // 存储发送时间
+    }
+    else
+    {
+        header.packet_type = 0; // 普通数据包
+    }
 
     std::array<asio::const_buffer, 2> buffers{asio::buffer(&header, sizeof(header)),
                                               asio::buffer(encoded_data, encoded_size)};
@@ -772,26 +784,34 @@ void NetWorker::handle_receive(const asio::error_code &error, std::size_t bytes_
     {
         goto exit;
     }
-
     adpcm_data = reinterpret_cast<const uint8_t *>(receive_buffer.get() + sizeof(NetPacketHeader));
     adpcm_size = bytes_transferred - sizeof(NetPacketHeader);
-
     {
         auto &context = get_decoder(sender_id, channels);
         context.update_stats(header->sequence, header->timestamp);
 
-        unsigned int decode_frames = 0;
-        auto decoded_data = context.decoder->decode(adpcm_data, adpcm_size, decode_frames);
-
-        if (decoded_data && decode_frames > 0)
+        // 处理RTT数据包
+        if (header->packet_type == 1 || header->packet_type == 2)
         {
-            std::lock_guard<std::mutex> lock(receivers_mutex);
-            auto it = receivers.find(receiver_id);
-            if (it != receivers.end() && (it->second))
+            process_rtt_packet(header);
+        }
+
+        // 只有普通数据包才进行音频解码
+        if (header->packet_type == 0)
+        {
+            unsigned int decode_frames = 0;
+            auto decoded_data = context.decoder->decode(adpcm_data, adpcm_size, decode_frames);
+
+            if (decoded_data && decode_frames > 0)
             {
-                uint32_t ip_address =
-                    sender_endpoint.address().is_v4() ? sender_endpoint.address().to_v4().to_uint() : 0;
-                (it->second)(sender_id, channels, decode_frames, enum2val(sample_enum), decoded_data, ip_address);
+                std::lock_guard<std::mutex> lock(receivers_mutex);
+                auto it = receivers.find(receiver_id);
+                if (it != receivers.end() && (it->second))
+                {
+                    uint32_t ip_address =
+                        sender_endpoint.address().is_v4() ? sender_endpoint.address().to_v4().to_uint() : 0;
+                    (it->second)(sender_id, channels, decode_frames, enum2val(sample_enum), decoded_data, ip_address);
+                }
             }
         }
     }
@@ -833,7 +853,8 @@ NetWorker::DecoderContext &NetWorker::get_decoder(uint8_t sender_id, unsigned in
     return it->second;
 }
 
-void NetWorker::DecoderContext::update_stats(uint32_t sequence, uint64_t timestamp)
+// NetStatistics 实现
+void NetStatistics::update_network_stats(uint32_t sequence, uint64_t timestamp)
 {
     auto now = std::chrono::steady_clock::now();
     uint64_t arrival_time = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
@@ -885,7 +906,19 @@ void NetWorker::DecoderContext::update_stats(uint32_t sequence, uint64_t timesta
     last_arrival_time = arrival_time;
 }
 
-NetStatInfos NetWorker::DecoderContext::get_period_stats()
+void NetStatistics::update_rtt_stats(double rtt)
+{
+    if (rtt <= 0)
+        return;
+
+    total_rtt += rtt;
+    period_total_rtt += rtt;
+    max_rtt = std::max(max_rtt, rtt);
+    packets_with_rtt++;
+    period_packets_with_rtt++;
+}
+
+NetStatInfos NetStatistics::get_period_stats()
 {
     NetStatInfos stats{};
 
@@ -900,16 +933,82 @@ NetStatInfos NetWorker::DecoderContext::get_period_stats()
         stats.average_jitter = period_total_jitter / period_packets_received;
     }
 
+    if (period_packets_with_rtt > 0)
+    {
+        stats.average_rtt = period_total_rtt / period_packets_with_rtt;
+    }
+
     stats.packets_received = period_packets_received;
     stats.packets_lost = period_packets_lost;
     stats.max_jitter = max_jitter;
+    stats.max_rtt = max_rtt;
     stats.packets_out_of_order = period_packets_out_of_order;
 
+    // 重置周期统计
     period_packets_received = 0;
     period_packets_lost = 0;
     period_packets_out_of_order = 0;
     period_total_jitter = 0.0;
+    period_total_rtt = 0.0;
+    period_packets_with_rtt = 0;
     last_report_time = std::chrono::steady_clock::now();
 
     return stats;
+}
+
+void NetWorker::process_rtt_packet(const NetPacketHeader *header)
+{
+    if (!header || !is_ready())
+        return;
+
+    if (header->packet_type == 1)
+    { // RTT探测包
+        // 创建响应包
+        NetPacketHeader response_header = *header;
+        response_header.packet_type = 2; // RTT响应包
+        response_header.receiver_id = header->sender_id;
+        response_header.sender_id = header->receiver_id;
+
+        // 发送响应包（不包含音频数据）
+        std::array<asio::const_buffer, 1> buffers{asio::buffer(&response_header, sizeof(response_header))};
+        socket->async_send_to(buffers, sender_endpoint, [](const asio::error_code &error, std::size_t /*bytes*/) {
+            if (error)
+            {
+                AUDIO_DEBUG_PRINT("RTT response send error: %s", error.message().c_str());
+            }
+        });
+    }
+    else if (header->packet_type == 2)
+    { // RTT响应包
+        std::lock_guard<std::mutex> lock(senders_mutex);
+        auto sender_it = senders.find(header->receiver_id); // 注意：因为ID已交换，这里用receiver_id查找
+
+        if (sender_it != senders.end())
+        {
+            auto &context = sender_it->second;
+            auto probe_it = context.rtt_probes.find(header->sequence);
+
+            if (probe_it != context.rtt_probes.end())
+            {
+                uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::steady_clock::now().time_since_epoch())
+                                   .count();
+                uint64_t start_time = probe_it->second;
+                double rtt = static_cast<double>(now - start_time);
+
+                // 获取decoder并更新RTT统计
+                auto &decoder_context = get_decoder(header->sender_id, header->channels);
+                decoder_context.update_rtt(rtt);
+
+                // 移除已处理的探测记录
+                context.rtt_probes.erase(probe_it);
+            }
+
+            if (context.rtt_probes.size() > 100)
+            {
+                AUDIO_DEBUG_PRINT("RTT probe list too large, clearing");
+                context.rtt_probes.clear();
+            }
+        }
+    }
 }
