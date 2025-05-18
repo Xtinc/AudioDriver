@@ -3,6 +3,10 @@
 
 #include "asio.hpp"
 #include "audio_interface.h"
+#include <array>
+#include <bitset>
+#include <chrono>
+#include <deque>
 #include <mutex>
 #include <utility>
 #include <vector>
@@ -111,8 +115,102 @@ inline AudioBandWidth byte_to_bandwidth(uint8_t byte)
 }
 
 constexpr uint8_t NET_MAGIC_NUM = 0xBA;
+constexpr uint8_t FEC_MAGIC_NUM = 0xFE;
 constexpr unsigned int NETWORK_MAX_FRAMES = enum2val(AudioPeriodSize::INR_40MS) * enum2val(AudioBandWidth::Full) / 1000;
 constexpr unsigned int NETWORK_MAX_BUFFER_SIZE = NETWORK_MAX_FRAMES + 2 * sizeof(NetPacketHeader);
+constexpr unsigned int FEC_GROUP_SIZE = 8;         // 一个FEC组中包含的数据包数量
+constexpr unsigned int FEC_MAX_PACKET_SIZE = 2048; // 单个FEC包最大大小
+
+// FEC包头格式
+struct FecPacketHeader
+{
+    uint8_t magic_num;     // 魔数 0xFE
+    uint8_t sender_id;     // 发送者ID
+    uint8_t group_id;      // FEC组ID
+    uint8_t packet_count;  // 组中数据包数量
+    uint32_t seq_base;     // 组中第一个数据包的序列号
+    uint32_t fec_sequence; // FEC包序列号
+    uint64_t timestamp;    // 时间戳
+
+    static bool validate(const char *data, size_t length);
+};
+
+// FEC编码器
+class FecEncoder
+{
+  public:
+    FecEncoder(unsigned int max_packet_size = FEC_MAX_PACKET_SIZE);
+    ~FecEncoder() = default;
+
+    // 添加数据包到当前FEC组
+    void add_packet(const char *data, size_t length, uint32_t sequence);
+
+    // 获取FEC恢复包数据，如果组不完整则返回nullptr
+    const char *generate_fec_packet(size_t &out_size);
+
+    // 重置编码器状态
+    void reset();
+
+    // 设置FEC组大小
+    void set_group_size(unsigned int size);
+
+    // 获取当前FEC组大小
+    unsigned int get_group_size() const;
+
+    // 设置包缓冲大小
+    void set_packet_size(unsigned int size);
+
+  private:
+    std::vector<char> fec_buffer;  // FEC包缓冲区
+    std::vector<bool> packet_mask; // 记录已添加的包
+    unsigned int packet_count;     // 当前组中的包数量
+    unsigned int max_packet_size;  // 最大包大小
+    uint8_t current_group_id;      // 当前FEC组ID
+    uint32_t base_sequence;        // 组中第一个包的序列号
+    unsigned int group_size;       // FEC组大小
+};
+
+// 存储待恢复的数据包
+struct RecoveryPacket
+{
+    uint32_t sequence;                                  // 序列号
+    std::chrono::steady_clock::time_point arrival_time; // 到达时间
+    std::vector<char> data;                             // 包数据
+
+    RecoveryPacket(uint32_t seq, const char *data_ptr, size_t size)
+        : sequence(seq), arrival_time(std::chrono::steady_clock::now())
+    {
+        data.assign(data_ptr, data_ptr + size);
+    }
+};
+
+// FEC解码器
+class FecDecoder
+{
+  public:
+    FecDecoder(unsigned int max_packet_size = FEC_MAX_PACKET_SIZE);
+    ~FecDecoder() = default;
+
+    // 处理普通数据包（需要为FEC恢复准备）
+    void process_data_packet(uint32_t sequence, const char *data, size_t length);
+
+    // 处理FEC包，尝试恢复丢失的包
+    bool process_fec_packet(const FecPacketHeader *header, const char *fec_data, size_t fec_length);
+
+    // 获取恢复的数据包，如果没有则返回nullptr
+    const RecoveryPacket *get_recovered_packet();
+
+    // 清理过期的包
+    void cleanup(std::chrono::milliseconds max_age = std::chrono::milliseconds(500));
+
+  private:
+    bool try_recover_packet(uint32_t missing_seq, const char *fec_data,
+                            const std::vector<const RecoveryPacket *> &group_packets);
+
+    std::deque<RecoveryPacket> packet_buffer;     // 保存最近的数据包
+    std::deque<RecoveryPacket> recovered_packets; // 已恢复的包队列
+    unsigned int max_packet_size;                 // 最大包大小
+};
 
 /*                                                            Info Label Format
 0                   1                   2                   3                   4                   5 6 0 1 2 3 4 5 6 7
@@ -474,9 +572,13 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
         unsigned int channels;
         unsigned int sample_rate;
         unsigned int isequence;
+        // FEC相关
+        std::unique_ptr<FecEncoder> fec_encoder;
+        bool fec_enabled;
 
         SenderContext(unsigned int ch, unsigned int sr)
-            : encoder(std::make_unique<NetEncoder>(ch, NETWORK_MAX_FRAMES)), channels(ch), sample_rate(sr), isequence(0)
+            : encoder(std::make_unique<NetEncoder>(ch, NETWORK_MAX_FRAMES)), channels(ch), sample_rate(sr),
+              isequence(0), fec_encoder(std::make_unique<FecEncoder>()), fec_enabled(false)
         {
         }
     };
@@ -484,9 +586,11 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     struct DecoderContext
     {
         std::unique_ptr<NetDecoder> decoder;
+        std::unique_ptr<FecDecoder> fec_decoder;
         NetState stats;
 
-        DecoderContext(unsigned int ch, unsigned int max_frames) : decoder(std::make_unique<NetDecoder>(ch, max_frames))
+        DecoderContext(unsigned int ch, unsigned int max_frames)
+            : decoder(std::make_unique<NetDecoder>(ch, max_frames)), fec_decoder(std::make_unique<FecDecoder>())
         {
         }
 
@@ -511,6 +615,12 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     RetCode register_sender(uint8_t sender_id, unsigned int channels, unsigned int sample_rate);
     RetCode unregister_sender(uint8_t sender_id);
     RetCode send_audio(uint8_t sender_id, const int16_t *data, unsigned int frames);
+
+    // 启用或禁用FEC
+    RetCode enable_fec(uint8_t sender_id, bool enable);
+    // 设置FEC参数
+    RetCode set_fec_params(uint8_t sender_id, unsigned int group_size);
+
     RetCode add_destination(uint8_t sender_id, uint8_t receiver_token, const std::string &ip, uint16_t port);
     RetCode del_destination(uint8_t sender_id, uint8_t receiver_token, const std::string &ip, uint16_t port);
 
@@ -526,6 +636,15 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     void handle_receive(const asio::error_code &error, std::size_t bytes);
     void retry_receive_with_backoff();
     DecoderContext &get_decoder(uint8_t sender_id, unsigned int channels);
+
+    // 处理FEC数据包
+    void handle_fec_packet(const FecPacketHeader *header, const char *data, size_t bytes);
+    // 发送FEC数据包
+    void send_fec_packet(uint8_t sender_id, const char *data, size_t length);
+    // 处理并分发已解码的音频数据
+    void process_and_deliver_audio(uint8_t sender_id, uint8_t receiver_id, uint8_t channels, uint32_t sequence,
+                                   uint64_t timestamp, const uint8_t *adpcm_data, size_t adpcm_size, uint32_t source_ip,
+                                   AudioBandWidth sample_enum);
 
     bool is_ready() const
     {
