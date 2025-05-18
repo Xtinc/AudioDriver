@@ -92,6 +92,111 @@ bool KFifo::load_aside(size_t read_length)
     return load(buffer_addr, read_length);
 }
 
+// NetState implementation
+NetState::NetState() : last_report_time(std::chrono::steady_clock::now())
+{
+}
+
+void NetState::reset()
+{
+    last_sequence = 0;
+    last_timestamp = 0;
+    last_arrival_time = 0;
+    packets_received = 0;
+    packets_lost = 0;
+    total_jitter = 0.0;
+    max_jitter = 0.0;
+    packets_out_of_order = 0;
+    period_packets_received = 0;
+    period_packets_lost = 0;
+    period_total_jitter = 0.0;
+    period_packets_out_of_order = 0;
+    highest_sequence_seen = 0;
+    first_packet = true;
+    last_report_time = std::chrono::steady_clock::now();
+}
+
+void NetState::update(uint32_t sequence, uint64_t timestamp)
+{
+    auto now = std::chrono::steady_clock::now();
+    uint64_t arrival_time = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+
+    packets_received++;
+    period_packets_received++;
+
+    if (first_packet)
+    {
+        first_packet = false;
+        last_sequence = sequence;
+        highest_sequence_seen = sequence;
+        last_timestamp = timestamp;
+        last_arrival_time = arrival_time;
+        return;
+    }
+
+    if (sequence < highest_sequence_seen)
+    {
+        packets_out_of_order++;
+        period_packets_out_of_order++;
+    }
+    else
+    {
+        if (sequence > last_sequence + 1)
+        {
+            uint32_t lost = sequence - last_sequence - 1;
+            packets_lost += lost;
+            period_packets_lost += lost;
+        }
+
+        highest_sequence_seen = sequence;
+    }
+
+    if (timestamp > last_timestamp)
+    {
+        uint64_t send_interval = timestamp - last_timestamp;
+        uint64_t arrival_interval = arrival_time - last_arrival_time;
+
+        double jitter = std::abs(static_cast<double>(arrival_interval) - static_cast<double>(send_interval));
+
+        total_jitter += jitter;
+        period_total_jitter += jitter;
+        max_jitter = std::max(max_jitter, jitter);
+    }
+
+    last_sequence = sequence;
+    last_timestamp = timestamp;
+    last_arrival_time = arrival_time;
+}
+
+NetStatInfos NetState::get_period_stats()
+{
+    NetStatInfos stats{};
+
+    if (period_packets_received + period_packets_lost > 0)
+    {
+        stats.packet_loss_rate =
+            static_cast<double>(period_packets_lost) / (period_packets_received + period_packets_lost) * 100.0;
+    }
+
+    if (period_packets_received > 0)
+    {
+        stats.average_jitter = period_total_jitter / period_packets_received;
+    }
+
+    stats.packets_received = period_packets_received;
+    stats.packets_lost = period_packets_lost;
+    stats.max_jitter = max_jitter;
+    stats.packets_out_of_order = period_packets_out_of_order;
+
+    period_packets_received = 0;
+    period_packets_lost = 0;
+    period_packets_out_of_order = 0;
+    period_total_jitter = 0.0;
+    last_report_time = std::chrono::steady_clock::now();
+
+    return stats;
+}
+
 // Standard IMA ADPCM index table and step table
 static constexpr int ADPCM_INDEX_TABLE_8BIT[256] = {
     // 0-15
@@ -755,6 +860,7 @@ void NetWorker::handle_receive(const asio::error_code &error, std::size_t bytes_
         return;
     }
 
+    // 处理音频数据包
     const NetPacketHeader *header = nullptr;
     uint8_t sender_id = 0;
     uint8_t receiver_id = 0;
@@ -851,164 +957,4 @@ NetWorker::DecoderContext &NetWorker::get_decoder(uint8_t sender_id, unsigned in
     }
 
     return it->second;
-}
-
-// NetStatistics 实现
-void NetStatistics::update_network_stats(uint32_t sequence, uint64_t timestamp)
-{
-    auto now = std::chrono::steady_clock::now();
-    uint64_t arrival_time = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-
-    packets_received++;
-    period_packets_received++;
-
-    if (first_packet)
-    {
-        first_packet = false;
-        last_sequence = sequence;
-        highest_sequence_seen = sequence;
-        last_timestamp = timestamp;
-        last_arrival_time = arrival_time;
-        return;
-    }
-
-    if (sequence < highest_sequence_seen)
-    {
-        packets_out_of_order++;
-        period_packets_out_of_order++;
-    }
-    else
-    {
-        if (sequence > last_sequence + 1)
-        {
-            uint32_t lost = sequence - last_sequence - 1;
-            packets_lost += lost;
-            period_packets_lost += lost;
-        }
-
-        highest_sequence_seen = sequence;
-    }
-
-    if (timestamp > last_timestamp)
-    {
-        uint64_t send_interval = timestamp - last_timestamp;
-        uint64_t arrival_interval = arrival_time - last_arrival_time;
-
-        double jitter = std::abs(static_cast<double>(arrival_interval) - static_cast<double>(send_interval));
-
-        total_jitter += jitter;
-        period_total_jitter += jitter;
-        max_jitter = std::max(max_jitter, jitter);
-    }
-
-    last_sequence = sequence;
-    last_timestamp = timestamp;
-    last_arrival_time = arrival_time;
-}
-
-void NetStatistics::update_rtt_stats(double rtt)
-{
-    if (rtt <= 0)
-        return;
-
-    total_rtt += rtt;
-    period_total_rtt += rtt;
-    max_rtt = std::max(max_rtt, rtt);
-    packets_with_rtt++;
-    period_packets_with_rtt++;
-}
-
-NetStatInfos NetStatistics::get_period_stats()
-{
-    NetStatInfos stats{};
-
-    if (period_packets_received + period_packets_lost > 0)
-    {
-        stats.packet_loss_rate =
-            static_cast<double>(period_packets_lost) / (period_packets_received + period_packets_lost) * 100.0;
-    }
-
-    if (period_packets_received > 0)
-    {
-        stats.average_jitter = period_total_jitter / period_packets_received;
-    }
-
-    if (period_packets_with_rtt > 0)
-    {
-        stats.average_rtt = period_total_rtt / period_packets_with_rtt;
-    }
-
-    stats.packets_received = period_packets_received;
-    stats.packets_lost = period_packets_lost;
-    stats.max_jitter = max_jitter;
-    stats.max_rtt = max_rtt;
-    stats.packets_out_of_order = period_packets_out_of_order;
-
-    // 重置周期统计
-    period_packets_received = 0;
-    period_packets_lost = 0;
-    period_packets_out_of_order = 0;
-    period_total_jitter = 0.0;
-    period_total_rtt = 0.0;
-    period_packets_with_rtt = 0;
-    last_report_time = std::chrono::steady_clock::now();
-
-    return stats;
-}
-
-void NetWorker::process_rtt_packet(const NetPacketHeader *header)
-{
-    if (!header || !is_ready())
-        return;
-
-    if (header->packet_type == 1)
-    { // RTT探测包
-        // 创建响应包
-        NetPacketHeader response_header = *header;
-        response_header.packet_type = 2; // RTT响应包
-        response_header.receiver_id = header->sender_id;
-        response_header.sender_id = header->receiver_id;
-
-        // 发送响应包（不包含音频数据）
-        std::array<asio::const_buffer, 1> buffers{asio::buffer(&response_header, sizeof(response_header))};
-        socket->async_send_to(buffers, sender_endpoint, [](const asio::error_code &error, std::size_t /*bytes*/) {
-            if (error)
-            {
-                AUDIO_DEBUG_PRINT("RTT response send error: %s", error.message().c_str());
-            }
-        });
-    }
-    else if (header->packet_type == 2)
-    { // RTT响应包
-        std::lock_guard<std::mutex> lock(senders_mutex);
-        auto sender_it = senders.find(header->receiver_id); // 注意：因为ID已交换，这里用receiver_id查找
-
-        if (sender_it != senders.end())
-        {
-            auto &context = sender_it->second;
-            auto probe_it = context.rtt_probes.find(header->sequence);
-
-            if (probe_it != context.rtt_probes.end())
-            {
-                uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                   std::chrono::steady_clock::now().time_since_epoch())
-                                   .count();
-                uint64_t start_time = probe_it->second;
-                double rtt = static_cast<double>(now - start_time);
-
-                // 获取decoder并更新RTT统计
-                auto &decoder_context = get_decoder(header->sender_id, header->channels);
-                decoder_context.update_rtt(rtt);
-
-                // 移除已处理的探测记录
-                context.rtt_probes.erase(probe_it);
-            }
-
-            if (context.rtt_probes.size() > 100)
-            {
-                AUDIO_DEBUG_PRINT("RTT probe list too large, clearing");
-                context.rtt_probes.clear();
-            }
-        }
-    }
 }
