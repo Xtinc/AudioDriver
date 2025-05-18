@@ -50,6 +50,37 @@ struct NetStatInfos
     uint32_t packets_out_of_order;
 };
 
+class NetState
+{
+  public:
+    NetState();
+    void update(uint32_t sequence, uint64_t timestamp);
+    NetStatInfos get_period_stats();
+    void reset();
+
+  private:
+    uint32_t last_sequence{0};
+    uint64_t last_timestamp{0};
+    uint64_t last_arrival_time{0};
+
+    uint32_t packets_received{0};
+    uint32_t packets_lost{0};
+    double total_jitter{0.0};
+    double max_jitter{0.0};
+
+    uint32_t packets_out_of_order{0};
+
+    uint32_t period_packets_received{0};
+    uint32_t period_packets_lost{0};
+    double period_total_jitter{0.0};
+    uint32_t period_packets_out_of_order{0};
+
+    uint32_t highest_sequence_seen{0};
+    bool first_packet{true};
+
+    std::chrono::steady_clock::time_point last_report_time;
+};
+
 template <typename T> constexpr std::underlying_type_t<T> enum2val(T e)
 {
     return static_cast<std::underlying_type_t<T>>(e);
@@ -453,35 +484,21 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     struct DecoderContext
     {
         std::unique_ptr<NetDecoder> decoder;
+        NetState stats;
 
-        uint32_t last_sequence{0};
-        uint64_t last_timestamp{0};
-        uint64_t last_arrival_time{0};
-
-        uint32_t packets_received{0};
-        uint32_t packets_lost{0};
-        double total_jitter{0.0};
-        double max_jitter{0.0};
-
-        uint32_t packets_out_of_order{0};
-
-        uint32_t period_packets_received{0};
-        uint32_t period_packets_lost{0};
-        double period_total_jitter{0.0};
-        uint32_t period_packets_out_of_order{0};
-
-        uint32_t highest_sequence_seen{0};
-        bool first_packet{true};
-
-        std::chrono::steady_clock::time_point last_report_time;
-
-        DecoderContext(unsigned int ch, unsigned int max_frames)
-            : decoder(std::make_unique<NetDecoder>(ch, max_frames)), last_report_time(std::chrono::steady_clock::now())
+        DecoderContext(unsigned int ch, unsigned int max_frames) : decoder(std::make_unique<NetDecoder>(ch, max_frames))
         {
         }
 
-        void update_stats(uint32_t sequence, uint64_t timestamp);
-        NetStatInfos get_period_stats();
+        void update_stats(uint32_t sequence, uint64_t timestamp)
+        {
+            stats.update(sequence, timestamp);
+        }
+
+        NetStatInfos get_period_stats()
+        {
+            return stats.get_period_stats();
+        }
     };
 
   public:
@@ -529,7 +546,6 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
 
     std::map<uint8_t, DecoderContext> decoders;
     std::mutex decoders_mutex;
-
     std::map<uint8_t, ReceiverContext> receivers;
     std::mutex receivers_mutex;
 

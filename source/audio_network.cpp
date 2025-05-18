@@ -92,6 +92,111 @@ bool KFifo::load_aside(size_t read_length)
     return load(buffer_addr, read_length);
 }
 
+// NetState implementation
+NetState::NetState() : last_report_time(std::chrono::steady_clock::now())
+{
+}
+
+void NetState::reset()
+{
+    last_sequence = 0;
+    last_timestamp = 0;
+    last_arrival_time = 0;
+    packets_received = 0;
+    packets_lost = 0;
+    total_jitter = 0.0;
+    max_jitter = 0.0;
+    packets_out_of_order = 0;
+    period_packets_received = 0;
+    period_packets_lost = 0;
+    period_total_jitter = 0.0;
+    period_packets_out_of_order = 0;
+    highest_sequence_seen = 0;
+    first_packet = true;
+    last_report_time = std::chrono::steady_clock::now();
+}
+
+void NetState::update(uint32_t sequence, uint64_t timestamp)
+{
+    auto now = std::chrono::steady_clock::now();
+    uint64_t arrival_time = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+
+    packets_received++;
+    period_packets_received++;
+
+    if (first_packet)
+    {
+        first_packet = false;
+        last_sequence = sequence;
+        highest_sequence_seen = sequence;
+        last_timestamp = timestamp;
+        last_arrival_time = arrival_time;
+        return;
+    }
+
+    if (sequence < highest_sequence_seen)
+    {
+        packets_out_of_order++;
+        period_packets_out_of_order++;
+    }
+    else
+    {
+        if (sequence > last_sequence + 1)
+        {
+            uint32_t lost = sequence - last_sequence - 1;
+            packets_lost += lost;
+            period_packets_lost += lost;
+        }
+
+        highest_sequence_seen = sequence;
+    }
+
+    if (timestamp > last_timestamp)
+    {
+        uint64_t send_interval = timestamp - last_timestamp;
+        uint64_t arrival_interval = arrival_time - last_arrival_time;
+
+        double jitter = std::abs(static_cast<double>(arrival_interval) - static_cast<double>(send_interval));
+
+        total_jitter += jitter;
+        period_total_jitter += jitter;
+        max_jitter = std::max(max_jitter, jitter);
+    }
+
+    last_sequence = sequence;
+    last_timestamp = timestamp;
+    last_arrival_time = arrival_time;
+}
+
+NetStatInfos NetState::get_period_stats()
+{
+    NetStatInfos stats{};
+
+    if (period_packets_received + period_packets_lost > 0)
+    {
+        stats.packet_loss_rate =
+            static_cast<double>(period_packets_lost) / (period_packets_received + period_packets_lost) * 100.0;
+    }
+
+    if (period_packets_received > 0)
+    {
+        stats.average_jitter = period_total_jitter / period_packets_received;
+    }
+
+    stats.packets_received = period_packets_received;
+    stats.packets_lost = period_packets_lost;
+    stats.max_jitter = max_jitter;
+    stats.packets_out_of_order = period_packets_out_of_order;
+
+    period_packets_received = 0;
+    period_packets_lost = 0;
+    period_packets_out_of_order = 0;
+    period_total_jitter = 0.0;
+    last_report_time = std::chrono::steady_clock::now();
+
+    return stats;
+}
+
 // Standard IMA ADPCM index table and step table
 static constexpr int ADPCM_INDEX_TABLE_8BIT[256] = {
     // 0-15
@@ -743,6 +848,7 @@ void NetWorker::handle_receive(const asio::error_code &error, std::size_t bytes_
         return;
     }
 
+    // 处理音频数据包
     const NetPacketHeader *header = nullptr;
     uint8_t sender_id = 0;
     uint8_t receiver_id = 0;
@@ -831,85 +937,4 @@ NetWorker::DecoderContext &NetWorker::get_decoder(uint8_t sender_id, unsigned in
     }
 
     return it->second;
-}
-
-void NetWorker::DecoderContext::update_stats(uint32_t sequence, uint64_t timestamp)
-{
-    auto now = std::chrono::steady_clock::now();
-    uint64_t arrival_time = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-
-    packets_received++;
-    period_packets_received++;
-
-    if (first_packet)
-    {
-        first_packet = false;
-        last_sequence = sequence;
-        highest_sequence_seen = sequence;
-        last_timestamp = timestamp;
-        last_arrival_time = arrival_time;
-        return;
-    }
-
-    if (sequence < highest_sequence_seen)
-    {
-        packets_out_of_order++;
-        period_packets_out_of_order++;
-    }
-    else
-    {
-        if (sequence > last_sequence + 1)
-        {
-            uint32_t lost = sequence - last_sequence - 1;
-            packets_lost += lost;
-            period_packets_lost += lost;
-        }
-
-        highest_sequence_seen = sequence;
-    }
-
-    if (timestamp > last_timestamp)
-    {
-        uint64_t send_interval = timestamp - last_timestamp;
-        uint64_t arrival_interval = arrival_time - last_arrival_time;
-
-        double jitter = std::abs(static_cast<double>(arrival_interval) - static_cast<double>(send_interval));
-
-        total_jitter += jitter;
-        period_total_jitter += jitter;
-        max_jitter = std::max(max_jitter, jitter);
-    }
-
-    last_sequence = sequence;
-    last_timestamp = timestamp;
-    last_arrival_time = arrival_time;
-}
-
-NetStatInfos NetWorker::DecoderContext::get_period_stats()
-{
-    NetStatInfos stats{};
-
-    if (period_packets_received + period_packets_lost > 0)
-    {
-        stats.packet_loss_rate =
-            static_cast<double>(period_packets_lost) / (period_packets_received + period_packets_lost) * 100.0;
-    }
-
-    if (period_packets_received > 0)
-    {
-        stats.average_jitter = period_total_jitter / period_packets_received;
-    }
-
-    stats.packets_received = period_packets_received;
-    stats.packets_lost = period_packets_lost;
-    stats.max_jitter = max_jitter;
-    stats.packets_out_of_order = period_packets_out_of_order;
-
-    period_packets_received = 0;
-    period_packets_lost = 0;
-    period_packets_out_of_order = 0;
-    period_total_jitter = 0.0;
-    last_report_time = std::chrono::steady_clock::now();
-
-    return stats;
 }
