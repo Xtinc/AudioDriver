@@ -252,6 +252,7 @@ RetCode LocSampler::process(const InterleavedView<const PCM_TYPE> &input, const 
     const auto dst_fr = ti * dst_fs / 1000;
     const auto ibuffer = analysis_ibuffer.get();
     const auto obuffer = analysis_obuffer.get();
+    ibuffer->set_num_channels(real_ichan);
 
     // Validate buffer sizes
     DBG_ASSERT_LE(input.size(), src_fr * src_ch);
@@ -272,6 +273,7 @@ RetCode LocSampler::process(const InterleavedView<const PCM_TYPE> &input, const 
     if (real_ichan != real_ochan)
     {
         convert_channels(ibuffer);
+        ibuffer->set_num_channels(real_ochan);
     }
 
     // Step 3: Perform sample rate conversion if needed
@@ -383,8 +385,6 @@ void LocSampler::convert_channels(ChannelBuffer<float> *io) const
             left_channel[i] = 0.5f * (left_channel[i] + right_channel[i]);
         }
     }
-
-    io->set_num_channels(real_ochan);
 }
 
 void LocSampler::convert_sample_rate(ChannelBuffer<float> *input, ChannelBuffer<float> *output) const
