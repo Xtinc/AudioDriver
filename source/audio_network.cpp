@@ -354,7 +354,6 @@ const uint8_t *NetEncoder::encode(const int16_t *pcm_data, unsigned int frames, 
 NetDecoder::NetDecoder(unsigned int channels, unsigned int max_frames) : channels(channels), max_frames(max_frames)
 {
     decode_states.resize(channels);
-    decode_buffer = std::make_unique<int16_t[]>(max_frames * channels);
     reset();
 }
 
@@ -401,21 +400,28 @@ int16_t NetDecoder::decode_sample(uint8_t code, NetDecoder::State &state)
     return static_cast<int16_t>(state.predictor);
 }
 
-const int16_t *NetDecoder::decode(const uint8_t *adpcm_data, size_t adpcm_size, unsigned int &out_frames)
+bool NetDecoder::decode_to_frame(const uint8_t *adpcm_data, size_t adpcm_size, AudioFrame *frame)
 {
-    if (!adpcm_data || adpcm_size <= channels * ADPCM_HEADER_SIZE_PER_CHANNEL)
+    if (!adpcm_data || !frame || adpcm_size <= channels * ADPCM_HEADER_SIZE_PER_CHANNEL)
     {
-        out_frames = 0;
-        return nullptr;
+        frame->frames = 0;
+        return false;
     }
 
+    // 计算能解码的帧数
     size_t header_size = channels * ADPCM_HEADER_SIZE_PER_CHANNEL;
     size_t adpcm_data_size = adpcm_size - header_size;
-    out_frames = static_cast<unsigned int>(adpcm_data_size / channels);
-    out_frames = std::min(out_frames, max_frames);
+    frame->frames = static_cast<unsigned int>(adpcm_data_size / channels);
+    frame->frames = std::min(frame->frames, max_frames);
 
-    std::memset(decode_buffer.get(), 0, out_frames * channels * sizeof(int16_t));
+    // 确认 AudioFrame 缓冲区容量足够
+    if (!frame->check_capacity(frame->frames * channels))
+    {
+        frame->frames = 0;
+        return false;
+    }
 
+    // 解析头部并设置解码状态
     const uint8_t *in = adpcm_data;
     for (unsigned int ch = 0; ch < channels; ch++)
     {
@@ -424,19 +430,21 @@ const int16_t *NetDecoder::decode(const uint8_t *adpcm_data, size_t adpcm_size, 
         in += 2;
 
         decode_states[ch].step_index = *in++;
-        in++; // Skip reserved byte
+        in++; // 跳过保留字节
     }
 
+    // 解码样本数据到 AudioFrame
     unsigned int sample_index = 0;
-    for (unsigned int i = 0; i < adpcm_data_size && sample_index < out_frames * channels; i++)
+    for (unsigned int i = 0; i < adpcm_data_size && sample_index < frame->frames * channels; i++)
     {
         uint8_t byte = adpcm_data[header_size + i];
-
         unsigned int ch = sample_index % channels;
-        decode_buffer[sample_index++] = decode_sample(byte, decode_states[ch]);
+        frame->pcm_data[sample_index++] = decode_sample(byte, decode_states[ch]);
     }
 
-    return decode_buffer.get();
+    // 更新帧属性
+    frame->data_size = frame->frames * channels * sizeof(int16_t);
+    return true;
 }
 
 // Packet header validation
@@ -615,16 +623,18 @@ RetCode NetWorker::register_receiver(uint8_t token, ReceiveCallback callback)
     }
 
     std::lock_guard<std::mutex> lock(receivers_mutex);
-
-    auto result = receivers.emplace(token, ReceiverContext(std::move(callback)));
-    if (!result.second)
+    auto it = receivers.find(token);
+    if (it != receivers.end())
     {
-        result.first->second = std::move(callback);
+        it->second.callback = callback;
         return {RetCode::OK, "Receiver callback updated"};
     }
-
-    AUDIO_DEBUG_PRINT("Registered receiver for token %u", token);
-    return {RetCode::OK, "Receiver registered"};
+    else
+    {
+        receivers.emplace(token, std::move(callback));
+        AUDIO_DEBUG_PRINT("Registered receiver for token %u", token);
+        return {RetCode::OK, "Receiver registered"};
+    }
 }
 
 RetCode NetWorker::unregister_receiver(uint8_t token)
@@ -935,19 +945,76 @@ void NetWorker::process_and_deliver_audio(uint8_t sender_id, uint8_t receiver_id
     auto &decoder_context = get_decoder(sender_id, channels);
 
     // 更新统计信息
-    decoder_context.update_stats(sequence, timestamp);
+    decoder_context.stats.update(sequence, timestamp);
 
-    // 解码音频数据
-    unsigned int decode_frames = 0;
-    auto decoded_data = decoder_context.decoder->decode(adpcm_data, adpcm_size, decode_frames);
-
-    if (decoded_data && decode_frames > 0)
+    std::lock_guard<std::mutex> lock(receivers_mutex);
+    auto it = receivers.find(receiver_id);
+    if (it != receivers.end())
     {
-        std::lock_guard<std::mutex> lock(receivers_mutex);
-        auto it = receivers.find(receiver_id);
-        if (it != receivers.end() && it->second)
+        // 预先估算需要的样本数
+        unsigned int estimate_frames =
+            static_cast<unsigned int>((adpcm_size - channels * ADPCM_HEADER_SIZE_PER_CHANNEL) / channels);
+        estimate_frames = std::min(estimate_frames, NETWORK_MAX_FRAMES);
+        uint32_t required_samples = estimate_frames * channels;
+
+        // 分配帧
+        AudioFrame *frame = AudioFrame::alloc(required_samples);
+        frame->sender_id = sender_id;
+        frame->channels = channels;
+        frame->sample_rate = enum2val(sample_enum);
+        frame->sequence = sequence;
+        frame->timestamp = timestamp;
+        frame->source_ip = source_ip;
+
+        // 直接解码到帧中
+        if (decoder_context.decoder->decode_to_frame(adpcm_data, adpcm_size, frame) && frame->frames > 0)
         {
-            (it->second)(sender_id, channels, decode_frames, enum2val(sample_enum), decoded_data, source_ip);
+            it->second.frame_queue.insert(frame);
+            frame = it->second.frame_queue.pop_front();
+
+            if (it->second.callback)
+            {
+                it->second.callback(sender_id, channels, frame->frames, enum2val(sample_enum), frame->pcm_data,
+                                    source_ip);
+            }
         }
+
+        AudioFrame::free(frame);
     }
+}
+
+void NetWorker::process_frame_queue(uint8_t receiver_id)
+{
+    std::lock_guard<std::mutex> lock(receivers_mutex);
+    auto it = receivers.find(receiver_id);
+    if (it == receivers.end())
+    {
+        return;
+    }
+
+    AudioFrame *frame = nullptr;
+    while ((frame = it->second.frame_queue.pop_front()) != nullptr)
+    {
+        // 处理音频帧
+        if (it->second.callback)
+        {
+            it->second.callback(frame->sender_id, frame->channels, frame->frames, frame->sample_rate, frame->pcm_data,
+                                frame->source_ip);
+        }
+
+        // 处理完毕后释放帧对象
+        AudioFrame::free(frame);
+    }
+}
+
+AudioFrameQueue *NetWorker::get_frame_queue(uint8_t receiver_id)
+{
+    std::lock_guard<std::mutex> lock(receivers_mutex);
+    auto it = receivers.find(receiver_id);
+    if (it == receivers.end())
+    {
+        return nullptr;
+    }
+
+    return &(it->second.frame_queue);
 }

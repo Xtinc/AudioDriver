@@ -2,6 +2,7 @@
 #define AUDIO_NETWORK_HEADER
 
 #include "asio.hpp"
+#include "audio_frame.h"
 #include "audio_interface.h"
 #include <array>
 #include <bitset>
@@ -434,7 +435,9 @@ class NetDecoder
 
   public:
     NetDecoder(unsigned int channels, unsigned int max_frames);
-    const int16_t *decode(const uint8_t *adpcm_data, size_t adpcm_size, unsigned int &out_frames);
+
+    bool decode_to_frame(const uint8_t *adpcm_data, size_t adpcm_size, AudioFrame *frame);
+
     void reset() noexcept;
 
   public:
@@ -445,7 +448,6 @@ class NetDecoder
     int16_t decode_sample(uint8_t code, State &state);
 
     std::vector<State> decode_states;
-    std::unique_ptr<int16_t[]> decode_buffer;
 };
 
 class NetWorker : public std::enable_shared_from_this<NetWorker>
@@ -453,7 +455,17 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
   public:
     using ReceiveCallback = std::function<void(uint8_t sender_id, unsigned int channels, unsigned int frames,
                                                unsigned int sample_rate, const int16_t *data, uint32_t source_ip)>;
-    using ReceiverContext = ReceiveCallback;
+
+    // 接收者上下文，包含回调和音频帧队列
+    struct ReceiverContext
+    {
+        ReceiveCallback callback;
+        AudioFrameQueue frame_queue;
+
+        explicit ReceiverContext(ReceiveCallback &&cb) : callback(std::move(cb))
+        {
+        }
+    };
 
   private:
     struct Destination
@@ -517,9 +529,14 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
 
     RetCode add_destination(uint8_t sender_id, uint8_t receiver_token, const std::string &ip, uint16_t port);
     RetCode del_destination(uint8_t sender_id, uint8_t receiver_token, const std::string &ip, uint16_t port);
-
     RetCode register_receiver(uint8_t token, ReceiveCallback callback);
     RetCode unregister_receiver(uint8_t token);
+
+    // 处理接收者队列中的音频帧
+    void process_frame_queue(uint8_t receiver_id);
+
+    // 获取接收者的音频帧队列
+    AudioFrameQueue *get_frame_queue(uint8_t receiver_id);
 
     void report_conns(std::vector<InfoLabel> &result);
 
