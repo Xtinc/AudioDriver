@@ -1,5 +1,6 @@
 #include "audio_network.h"
 #include "audio_stream.h"
+#include <set>
 
 // KFifo
 KFifo::KFifo(size_t blk_sz, size_t blk_num, unsigned int channel)
@@ -295,7 +296,6 @@ uint8_t NetEncoder::encode_sample(int16_t sample, NetEncoder::State &state)
         }
     }
     diff += step >> 7;
-    // std::cout<<"code:\t"<<(int)code<<"\t\tdiff:\t"<<recon_diff<<std::endl;
 
     if (code & 0x80)
         state.predictor -= diff;
@@ -354,6 +354,7 @@ const uint8_t *NetEncoder::encode(const int16_t *pcm_data, unsigned int frames, 
 NetDecoder::NetDecoder(unsigned int channels, unsigned int max_frames) : channels(channels), max_frames(max_frames)
 {
     decode_states.resize(channels);
+    decode_buffer = std::make_unique<int16_t[]>(max_frames * channels);
     reset();
 }
 
@@ -400,51 +401,39 @@ int16_t NetDecoder::decode_sample(uint8_t code, NetDecoder::State &state)
     return static_cast<int16_t>(state.predictor);
 }
 
-bool NetDecoder::decode_to_frame(const uint8_t *adpcm_data, size_t adpcm_size, AudioFrame *frame)
+const int16_t *NetDecoder::decode(const uint8_t *adpcm_data, size_t adpcm_size, unsigned int &out_frames)
 {
-    if (!adpcm_data || !frame || adpcm_size <= channels * ADPCM_HEADER_SIZE_PER_CHANNEL)
+    if (!adpcm_data || adpcm_size <= channels * ADPCM_HEADER_SIZE_PER_CHANNEL)
     {
-        frame->frames = 0;
-        return false;
+        out_frames = 0;
+        return nullptr;
     }
 
-    // 计算能解码的帧数
     size_t header_size = channels * ADPCM_HEADER_SIZE_PER_CHANNEL;
     size_t adpcm_data_size = adpcm_size - header_size;
-    frame->frames = static_cast<unsigned int>(adpcm_data_size / channels);
-    frame->frames = std::min(frame->frames, max_frames);
+    out_frames = static_cast<unsigned int>(adpcm_data_size / channels);
+    out_frames = std::min(out_frames, max_frames);
 
-    // 确认 AudioFrame 缓冲区容量足够
-    if (!frame->check_capacity(frame->frames * channels))
-    {
-        frame->frames = 0;
-        return false;
-    }
+    std::memset(decode_buffer.get(), 0, out_frames * channels * sizeof(int16_t));
 
-    // 解析头部并设置解码状态
     const uint8_t *in = adpcm_data;
     for (unsigned int ch = 0; ch < channels; ch++)
     {
-        int16_t predictor_value = in[0] | (in[1] << 8);
-        decode_states[ch].predictor = predictor_value;
         in += 2;
-
         decode_states[ch].step_index = *in++;
-        in++; // 跳过保留字节
+        in++; // Skip reserved byte
     }
 
-    // 解码样本数据到 AudioFrame
     unsigned int sample_index = 0;
-    for (unsigned int i = 0; i < adpcm_data_size && sample_index < frame->frames * channels; i++)
+    for (unsigned int i = 0; i < adpcm_data_size && sample_index < out_frames * channels; i++)
     {
         uint8_t byte = adpcm_data[header_size + i];
+
         unsigned int ch = sample_index % channels;
-        frame->pcm_data[sample_index++] = decode_sample(byte, decode_states[ch]);
+        decode_buffer[sample_index++] = decode_sample(byte, decode_states[ch]);
     }
 
-    // 更新帧属性
-    frame->data_size = frame->frames * channels * sizeof(int16_t);
-    return true;
+    return decode_buffer.get();
 }
 
 // Packet header validation
@@ -626,7 +615,7 @@ RetCode NetWorker::register_receiver(uint8_t token, ReceiveCallback callback)
     auto it = receivers.find(token);
     if (it != receivers.end())
     {
-        it->second.callback = callback;
+        it->second = callback;
         return {RetCode::OK, "Receiver callback updated"};
     }
     else
@@ -845,9 +834,126 @@ void NetWorker::start_stats_loop()
         if (!ec && self->running)
         {
             self->report();
+            self->send_rtt_probes();
             self->start_stats_loop();
         }
     });
+}
+
+void NetWorker::send_rtt_probes()
+{
+    if (!is_ready())
+    {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(senders_mutex);
+
+    // 获取当前时间戳
+    uint64_t current_time =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+
+    // 使用set自动去重端点
+    std::set<asio::ip::udp::endpoint> unique_endpoints;
+
+    // 收集所有唯一的目标端点
+    for (const auto &sender_pair : senders)
+    {
+        for (const auto &dest : sender_pair.second.destinations)
+        {
+            unique_endpoints.insert(dest.endpoint);
+        }
+    }
+
+    // 为每个唯一端点发送探测包
+    for (const auto &endpoint : unique_endpoints)
+    {
+        ProbePacket probe{};
+        probe.magic_num = NET_PROBE_MAGIC;
+        probe.sender_id = 0;   // 对于RTT测量，发送者ID不重要
+        probe.receiver_id = 0; // 对于RTT测量，接收者ID不重要
+        probe.is_response = 0; // 0表示请求包
+        probe.sequence = probe_sequence++;
+        probe.timestamp = current_time;
+
+        socket->async_send_to(asio::buffer(&probe, sizeof(probe)), endpoint,
+                              [endpoint](const asio::error_code &error, std::size_t /*bytes*/) {
+                                  if (error)
+                                  {
+                                      AUDIO_DEBUG_PRINT("RTT probe send error to %s:%d: %s",
+                                                        endpoint.address().to_string().c_str(), endpoint.port(),
+                                                        error.message().c_str());
+                                  }
+                              });
+    }
+}
+
+void NetWorker::process_probe_packet(const ProbePacket *probe, const asio::ip::udp::endpoint &endpoint)
+{
+    if (!probe || !is_ready())
+    {
+        return;
+    }
+
+    // 检查魔数
+    if (probe->magic_num != NET_PROBE_MAGIC)
+    {
+        return;
+    }
+
+    if (probe->is_response == 0)
+    {
+        // 收到请求，发送响应
+        ProbePacket response{};
+        response.magic_num = NET_PROBE_MAGIC;
+        response.sender_id = probe->receiver_id;
+        response.receiver_id = probe->sender_id;
+        response.is_response = 1; // 标记为响应包
+        response.sequence = probe->sequence;
+        response.timestamp = probe->timestamp; // 保留原始时间戳
+
+        socket->async_send_to(asio::buffer(&response, sizeof(response)), endpoint,
+                              [](const asio::error_code &error, std::size_t /*bytes*/) {
+                                  if (error)
+                                  {
+                                      AUDIO_DEBUG_PRINT("RTT probe response error: %s", error.message().c_str());
+                                  }
+                              });
+    }
+    else
+    {
+        // 收到响应，计算RTT
+        auto now = std::chrono::steady_clock::now();
+        uint64_t current_time = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+
+        uint64_t send_time = probe->timestamp;
+        double rtt = static_cast<double>(current_time - send_time);
+
+        // 使用端点IP作为键
+        uint32_t endpoint_ip = endpoint.address().is_v4() ? endpoint.address().to_v4().to_uint() : 0;
+
+        std::lock_guard<std::mutex> lock(rtt_mutex);
+        auto &metrics = rtt_data[endpoint_ip];
+
+        // 更新RTT指标
+        metrics.last_rtt = rtt;
+        metrics.sample_count++;
+        metrics.last_update_time = now;
+
+        // 首次采样或使用指数移动平均计算
+        if (metrics.sample_count == 1)
+        {
+            metrics.avg_rtt = rtt;
+        }
+        else
+        {
+            // 指数移动平均: EMA = alpha * current + (1 - alpha) * EMA
+            metrics.avg_rtt = RttMetrics::alpha * rtt + (1.0 - RttMetrics::alpha) * metrics.avg_rtt;
+        }
+
+        AUDIO_INFO_PRINT("RTT to %X08: %.2f ms (avg: %.2f ms)", endpoint_ip, rtt, metrics.avg_rtt);
+    }
 }
 
 void NetWorker::handle_receive(const asio::error_code &error, std::size_t bytes_transferred)
@@ -863,12 +969,23 @@ void NetWorker::handle_receive(const asio::error_code &error, std::size_t bytes_
     }
 
     const NetPacketHeader *header = nullptr;
+    const uint8_t *adpcm_data = nullptr;
+    size_t adpcm_size = 0;
+    uint32_t ip_address = 0;
     uint8_t sender_id = 0;
     uint8_t receiver_id = 0;
     uint8_t channels = 0;
     AudioBandWidth sample_enum = AudioBandWidth::Unknown;
-    const uint8_t *adpcm_data = nullptr;
-    size_t adpcm_size = 0;
+
+    if (bytes_transferred >= sizeof(ProbePacket))
+    {
+        const ProbePacket *probe = reinterpret_cast<const ProbePacket *>(receive_buffer.get());
+        if (probe->magic_num == NET_PROBE_MAGIC)
+        {
+            process_probe_packet(probe, sender_endpoint);
+            goto exit;
+        }
+    }
 
     if (bytes_transferred < sizeof(NetPacketHeader))
     {
@@ -895,11 +1012,9 @@ void NetWorker::handle_receive(const asio::error_code &error, std::size_t bytes_
     adpcm_data = reinterpret_cast<const uint8_t *>(receive_buffer.get() + sizeof(NetPacketHeader));
     adpcm_size = bytes_transferred - sizeof(NetPacketHeader);
 
-    {
-        uint32_t ip_address = sender_endpoint.address().is_v4() ? sender_endpoint.address().to_v4().to_uint() : 0;
-        process_and_deliver_audio(sender_id, receiver_id, channels, header->sequence, header->timestamp, adpcm_data,
-                                  adpcm_size, ip_address, sample_enum);
-    }
+    ip_address = sender_endpoint.address().is_v4() ? sender_endpoint.address().to_v4().to_uint() : 0;
+    process_and_deliver_audio(sender_id, receiver_id, channels, header->sequence, header->timestamp, adpcm_data,
+                              adpcm_size, ip_address, sample_enum);
 
 exit:
     if (running)
@@ -943,78 +1058,17 @@ void NetWorker::process_and_deliver_audio(uint8_t sender_id, uint8_t receiver_id
                                           uint32_t source_ip, AudioBandWidth sample_enum)
 {
     auto &decoder_context = get_decoder(sender_id, channels);
+    decoder_context.update_stats(sequence, timestamp);
+    unsigned int decode_frames = 0;
+    auto decoded_data = decoder_context.decoder->decode(adpcm_data, adpcm_size, decode_frames);
 
-    // 更新统计信息
-    decoder_context.stats.update(sequence, timestamp);
-
-    std::lock_guard<std::mutex> lock(receivers_mutex);
-    auto it = receivers.find(receiver_id);
-    if (it != receivers.end())
+    if (decoded_data && decode_frames > 0)
     {
-        // 预先估算需要的样本数
-        unsigned int estimate_frames =
-            static_cast<unsigned int>((adpcm_size - channels * ADPCM_HEADER_SIZE_PER_CHANNEL) / channels);
-        estimate_frames = std::min(estimate_frames, NETWORK_MAX_FRAMES);
-        uint32_t required_samples = estimate_frames * channels;
-
-        // 分配帧
-        AudioFrame *frame = AudioFrame::alloc(required_samples);
-        frame->sender_id = sender_id;
-        frame->channels = channels;
-        frame->sample_rate = enum2val(sample_enum);
-        frame->sequence = sequence;
-        frame->timestamp = timestamp;
-        frame->source_ip = source_ip;
-
-        // 直接解码到帧中
-        if (decoder_context.decoder->decode_to_frame(adpcm_data, adpcm_size, frame) && frame->frames > 0)
+        std::lock_guard<std::mutex> lock(receivers_mutex);
+        auto it = receivers.find(receiver_id);
+        if (it != receivers.end() && it->second)
         {
-            it->second.frame_queue.insert(frame);
-            frame = it->second.frame_queue.pop_front();
-
-            if (it->second.callback)
-            {
-                it->second.callback(sender_id, channels, frame->frames, enum2val(sample_enum), frame->pcm_data,
-                                    source_ip);
-            }
+            it->second(sender_id, channels, decode_frames, enum2val(sample_enum), decoded_data, source_ip);
         }
-
-        AudioFrame::free(frame);
     }
-}
-
-void NetWorker::process_frame_queue(uint8_t receiver_id)
-{
-    std::lock_guard<std::mutex> lock(receivers_mutex);
-    auto it = receivers.find(receiver_id);
-    if (it == receivers.end())
-    {
-        return;
-    }
-
-    AudioFrame *frame = nullptr;
-    while ((frame = it->second.frame_queue.pop_front()) != nullptr)
-    {
-        // 处理音频帧
-        if (it->second.callback)
-        {
-            it->second.callback(frame->sender_id, frame->channels, frame->frames, frame->sample_rate, frame->pcm_data,
-                                frame->source_ip);
-        }
-
-        // 处理完毕后释放帧对象
-        AudioFrame::free(frame);
-    }
-}
-
-AudioFrameQueue *NetWorker::get_frame_queue(uint8_t receiver_id)
-{
-    std::lock_guard<std::mutex> lock(receivers_mutex);
-    auto it = receivers.find(receiver_id);
-    if (it == receivers.end())
-    {
-        return nullptr;
-    }
-
-    return &(it->second.frame_queue);
 }

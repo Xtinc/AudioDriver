@@ -2,7 +2,6 @@
 #define AUDIO_NETWORK_HEADER
 
 #include "asio.hpp"
-#include "audio_frame.h"
 #include "audio_interface.h"
 #include <array>
 #include <bitset>
@@ -116,6 +115,7 @@ inline AudioBandWidth byte_to_bandwidth(uint8_t byte)
 }
 
 constexpr uint8_t NET_MAGIC_NUM = 0xBA;
+constexpr uint8_t NET_PROBE_MAGIC = 0xBB; // 用于RTT探测包的魔数
 constexpr unsigned int NETWORK_MAX_FRAMES = enum2val(AudioPeriodSize::INR_40MS) * enum2val(AudioBandWidth::Full) / 1000;
 constexpr unsigned int NETWORK_MAX_BUFFER_SIZE = NETWORK_MAX_FRAMES + 2 * sizeof(NetPacketHeader);
 
@@ -436,7 +436,7 @@ class NetDecoder
   public:
     NetDecoder(unsigned int channels, unsigned int max_frames);
 
-    bool decode_to_frame(const uint8_t *adpcm_data, size_t adpcm_size, AudioFrame *frame);
+    const int16_t *decode(const uint8_t *adpcm_data, size_t adpcm_size, unsigned int &out_frames);
 
     void reset() noexcept;
 
@@ -448,6 +448,17 @@ class NetDecoder
     int16_t decode_sample(uint8_t code, State &state);
 
     std::vector<State> decode_states;
+    std::unique_ptr<int16_t[]> decode_buffer;
+};
+
+struct ProbePacket
+{
+    uint8_t magic_num;   // 固定为NET_PROBE_MAGIC
+    uint8_t sender_id;   // 发送者ID
+    uint8_t receiver_id; // 接收者ID
+    uint8_t is_response; // 0表示请求，1表示响应
+    uint32_t sequence;   // 序列号
+    uint64_t timestamp;  // 发送时间戳
 };
 
 class NetWorker : public std::enable_shared_from_this<NetWorker>
@@ -455,19 +466,18 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
   public:
     using ReceiveCallback = std::function<void(uint8_t sender_id, unsigned int channels, unsigned int frames,
                                                unsigned int sample_rate, const int16_t *data, uint32_t source_ip)>;
-
-    // 接收者上下文，包含回调和音频帧队列
-    struct ReceiverContext
-    {
-        ReceiveCallback callback;
-        AudioFrameQueue frame_queue;
-
-        explicit ReceiverContext(ReceiveCallback &&cb) : callback(std::move(cb))
-        {
-        }
-    };
+    using ReceiverContext = ReceiveCallback;
 
   private:
+    struct RttMetrics
+    {
+        double avg_rtt{0.0};
+        double last_rtt{0.0};
+        uint32_t sample_count{0};
+        std::chrono::steady_clock::time_point last_update_time{std::chrono::steady_clock::now()};
+        static constexpr double alpha = 0.2;
+    };
+
     struct Destination
     {
         asio::ip::udp::endpoint endpoint;
@@ -532,18 +542,14 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     RetCode register_receiver(uint8_t token, ReceiveCallback callback);
     RetCode unregister_receiver(uint8_t token);
 
-    // 处理接收者队列中的音频帧
-    void process_frame_queue(uint8_t receiver_id);
-
-    // 获取接收者的音频帧队列
-    AudioFrameQueue *get_frame_queue(uint8_t receiver_id);
-
     void report_conns(std::vector<InfoLabel> &result);
 
   private:
     void report();
     void start_receive_loop();
     void start_stats_loop();
+    void send_rtt_probes();
+    void process_probe_packet(const ProbePacket *probe, const asio::ip::udp::endpoint &endpoint);
     void handle_receive(const asio::error_code &error, std::size_t bytes);
     void retry_receive_with_backoff();
     DecoderContext &get_decoder(uint8_t sender_id, unsigned int channels);
@@ -573,8 +579,11 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     std::mutex decoders_mutex;
     std::map<uint8_t, ReceiverContext> receivers;
     std::mutex receivers_mutex;
-
     asio::steady_timer stats_timer;
+
+    std::map<uint32_t, RttMetrics> rtt_data;
+    std::mutex rtt_mutex;
+    uint32_t probe_sequence{0};
 };
 
 #endif
