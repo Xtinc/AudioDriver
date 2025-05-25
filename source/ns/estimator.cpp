@@ -1,4 +1,5 @@
 #include "estimator.h"
+#include <cmath>
 
 static constexpr float kOneByFftSizeBy2Plus1 = 1.f / kFftSizeBy2Plus1;
 
