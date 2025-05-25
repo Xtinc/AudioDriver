@@ -11,39 +11,6 @@
 #include <utility>
 #include <vector>
 
-/*                    Packet Frame Format
- 0                   1                   2                   3
- 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|  sender id   |    channels   |  sample rate  |  magic number  |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|  receiver id |                     reserved                   |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                            sequence                           |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                           timestamp                           |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|                           timestamp                           |
-+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
-|                            payload                            |
-|                             ....                              |
-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-*/
-
-struct NetPacketHeader
-{
-    uint8_t sender_id;
-    uint8_t channels;
-    uint8_t sample_rate;
-    uint8_t magic_num;
-    uint8_t receiver_id;
-    uint8_t padding[3];
-    uint32_t sequence;
-    uint64_t timestamp;
-
-    static bool validate(const char *data, size_t length);
-};
-
 struct NetStatInfos
 {
     double packet_loss_rate;
@@ -114,10 +81,10 @@ inline AudioBandWidth byte_to_bandwidth(uint8_t byte)
     }
 }
 
-constexpr uint8_t NET_MAGIC_NUM = 0xBA;
-constexpr uint8_t NET_PROBE_MAGIC = 0xBB; // 用于RTT探测包的魔数
+constexpr uint8_t NET_PROBE_MAGIC = 0xBB;
+constexpr uint8_t NET_FEC_MAGIC = 0xBC;
 constexpr unsigned int NETWORK_MAX_FRAMES = enum2val(AudioPeriodSize::INR_40MS) * enum2val(AudioBandWidth::Full) / 1000;
-constexpr unsigned int NETWORK_MAX_BUFFER_SIZE = NETWORK_MAX_FRAMES + 2 * sizeof(NetPacketHeader);
+constexpr unsigned int NETWORK_MAX_BUFFER_SIZE = NETWORK_MAX_FRAMES + 128;
 
 /*                                                            Info Label Format
 0                   1                   2                   3                   4                   5 6 0 1 2 3 4 5 6 7
@@ -451,14 +418,27 @@ class NetDecoder
     std::unique_ptr<int16_t[]> decode_buffer;
 };
 
+struct FECPacket
+{
+    uint8_t sender_id;
+    uint8_t channels;
+    uint8_t sample_rate;
+    uint8_t magic_num;
+    uint8_t receiver_id;
+    uint8_t part_index;
+    uint8_t padding[2];
+    uint32_t sequence;
+    uint64_t timestamp;
+};
+
 struct ProbePacket
 {
-    uint8_t magic_num;   // 固定为NET_PROBE_MAGIC
-    uint8_t sender_id;   // 发送者ID
-    uint8_t receiver_id; // 接收者ID
-    uint8_t is_response; // 0表示请求，1表示响应
-    uint32_t sequence;   // 序列号
-    uint64_t timestamp;  // 发送时间戳
+    uint8_t magic_num;
+    uint8_t sender_id;
+    uint8_t receiver_id;
+    uint8_t is_response;
+    uint32_t sequence;
+    uint64_t timestamp;
 };
 
 class NetWorker : public std::enable_shared_from_this<NetWorker>
@@ -511,6 +491,39 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     {
         std::unique_ptr<NetDecoder> decoder;
         NetState stats;
+        struct FECPacketBuffer
+        {
+            static constexpr size_t MAX_PART_SIZE = NETWORK_MAX_FRAMES + 128;
+            uint8_t parts[3][MAX_PART_SIZE];
+            size_t part_sizes[3] = {0};
+            bool received[3] = {false};
+            uint32_t sequence = 0;
+            uint64_t timestamp = 0;
+
+            void reset()
+            {
+                for (int i = 0; i < 3; ++i)
+                {
+                    part_sizes[i] = 0;
+                    received[i] = false;
+                }
+                sequence = 0;
+                timestamp = 0;
+            }
+
+            bool can_reconstruct() const
+            {
+                int count = 0;
+                for (int i = 0; i < 3; ++i)
+                {
+                    if (received[i])
+                    {
+                        count++;
+                    }
+                }
+                return count >= 2;
+            }
+        } fec_buffer;
 
         DecoderContext(unsigned int ch, unsigned int max_frames) : decoder(std::make_unique<NetDecoder>(ch, max_frames))
         {
@@ -556,7 +569,14 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
 
     void process_and_deliver_audio(uint8_t sender_id, uint8_t receiver_id, uint8_t channels, uint32_t sequence,
                                    uint64_t timestamp, const uint8_t *adpcm_data, size_t adpcm_size, uint32_t source_ip,
-                                   AudioBandWidth sample_enum);
+                                   AudioBandWidth sample_enum); // FEC相关方法
+    void send_fec_part(const Destination &dest, uint8_t sender_id, uint8_t receiver_id, uint32_t sequence,
+                       uint64_t timestamp, const uint8_t *data, size_t size, uint8_t part_index, uint8_t channels,
+                       uint8_t sample_rate);
+    void process_fec_part(const FECPacket *fec_header, const uint8_t *fec_data, size_t fec_data_size,
+                          uint32_t source_ip);
+    bool try_reconstruct_packet(DecoderContext::FECPacketBuffer &buffer, uint8_t *reconstructed,
+                                size_t &reconstructed_size);
 
     bool is_ready() const
     {
@@ -582,7 +602,6 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     asio::steady_timer stats_timer;
 
     std::map<uint32_t, RttMetrics> rtt_data;
-    std::mutex rtt_mutex;
     uint32_t probe_sequence{0};
 };
 
