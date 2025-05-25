@@ -1006,12 +1006,12 @@ void NetWorker::send_fec_part(const Destination &dest, uint8_t sender_id, uint8_
                               uint8_t channels, uint8_t sample_rate)
 {
     FECPacket fec_header{};
-    fec_header.sender_id = sender_id;
-    fec_header.channels = channels;
-    fec_header.sample_rate = sample_rate;
     fec_header.magic_num = NET_FEC_MAGIC;
+    fec_header.sender_id = sender_id;
     fec_header.receiver_id = receiver_id;
     fec_header.part_index = part_index;
+    fec_header.channels = channels;
+    fec_header.sample_rate = sample_rate;
     fec_header.sequence = sequence;
     fec_header.timestamp = timestamp;
 

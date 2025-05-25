@@ -420,12 +420,12 @@ class NetDecoder
 
 struct FECPacket
 {
-    uint8_t sender_id;
-    uint8_t channels;
-    uint8_t sample_rate;
     uint8_t magic_num;
+    uint8_t sender_id;
     uint8_t receiver_id;
     uint8_t part_index;
+    uint8_t channels;
+    uint8_t sample_rate;
     uint8_t padding[2];
     uint32_t sequence;
     uint64_t timestamp;
@@ -569,7 +569,7 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
 
     void process_and_deliver_audio(uint8_t sender_id, uint8_t receiver_id, uint8_t channels, uint32_t sequence,
                                    uint64_t timestamp, const uint8_t *adpcm_data, size_t adpcm_size, uint32_t source_ip,
-                                   AudioBandWidth sample_enum); // FEC相关方法
+                                   AudioBandWidth sample_enum);    // FEC related methods
     void send_fec_part(const Destination &dest, uint8_t sender_id, uint8_t receiver_id, uint32_t sequence,
                        uint64_t timestamp, const uint8_t *data, size_t size, uint8_t part_index, uint8_t channels,
                        uint8_t sample_rate);
