@@ -127,7 +127,12 @@ RetCode OAStream::initialize_network(const std::shared_ptr<NetWorker> &nw)
                                                  unsigned int sample_rate, const int16_t *data, uint32_t source_ip) {
             if (auto self = weak_self.lock())
             {
-                self->direct_push(sender_id, channels, frames, sample_rate, data, source_ip);
+                auto ret = self->direct_push(sender_id, channels, frames, sample_rate, data, source_ip);
+                if (ret != RetCode::OK)
+                {
+                    AUDIO_ERROR_PRINT("Failed to push data: %s", ret.what());
+                    return;
+                }
             }
         });
 

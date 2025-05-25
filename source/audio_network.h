@@ -68,7 +68,7 @@ struct FECGroup
 
 struct FECRecoveryGroup
 {
-    static constexpr size_t GROUP_SIZE = 4;
+    static constexpr size_t GROUP_SIZE = 3;
     static constexpr size_t MAX_PACKET_SIZE = NETWORK_MAX_FRAMES + 128;
 
     uint8_t packets[GROUP_SIZE][MAX_PACKET_SIZE];
