@@ -1,4 +1,5 @@
 #include "noise_supression.h"
+#include <cmath>
 
 // Hybrib Hanning and flat window for the filterbank.
 static constexpr std::array<float, 96> kBlocks160w256FirstHalf = {
