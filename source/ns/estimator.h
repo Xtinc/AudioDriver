@@ -2,13 +2,14 @@
 #define AUDIO_PROCESSING_NS_ESTIMATOR_H
 
 #include "ns_define.h"
+#include <cmath>
 
 constexpr int kHistogramSize = 1000;
 constexpr int kSimult = 3;
 
 struct SignalModel
 {
-    SignalModel() : lrt(0.5f), spectral_flatness(0.5f), spectral_diff(0.5f)
+    SignalModel() : lrt(0.5f), spectral_diff(0.5f), spectral_flatness(0.5f)
     {
         avg_log_lrt.fill(0.0f);
     }
