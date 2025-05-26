@@ -233,7 +233,8 @@ RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBand
         return RetCode::NOACTION;
     }
 
-    ias_map[token.tok] = std::make_shared<IAStream>(token.tok, name, enum2val(ps), enum2val(bw), ch, enable_reset);
+    ias_map[token.tok] =
+        std::make_shared<IAStream>(token.tok, name, enum2val(ps), enum2val(bw), ch, true, enable_reset);
 
     if (enable_network && net_mgr)
     {
@@ -285,7 +286,7 @@ RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBand
         return RetCode::NOACTION;
     }
 
-    ias_map[token.tok] = std::make_shared<IAStream>(token.tok, name, enum2val(ps), enum2val(bw), dev_ch, imap);
+    ias_map[token.tok] = std::make_shared<IAStream>(token.tok, name, enum2val(ps), enum2val(bw), dev_ch, imap, true);
 
     if (enable_network && net_mgr)
     {
@@ -431,13 +432,13 @@ RetCode AudioCenter::create(IToken itoken, OToken otoken, bool enable_network)
     {
         ias_map[itoken.tok] =
             std::make_shared<IAStream>(itoken.tok, AudioDeviceName("virt", 0), enum2val(AudioPeriodSize::INR_20MS),
-                                       enum2val(AudioBandWidth::Full), 99, oas->second->omap);
+                                       enum2val(AudioBandWidth::Full), 99, oas->second->omap, false);
     }
     else
     {
         ias_map[itoken.tok] =
             std::make_shared<IAStream>(itoken.tok, AudioDeviceName("virt", 0), enum2val(AudioPeriodSize::INR_20MS),
-                                       enum2val(AudioBandWidth::Full), 2);
+                                       enum2val(AudioBandWidth::Full), 2, false, false);
     }
 
     if (enable_network && net_mgr)
@@ -464,9 +465,9 @@ RetCode AudioCenter::prepare()
         AUDIO_ERROR_PRINT("AudioCenter not in INIT state");
         return {RetCode::ESTATE, "AudioCenter not in INIT state"};
     }
-    ias_map.emplace(USR_DUMMY_IN.tok,
-                    std::make_shared<IAStream>(USR_DUMMY_IN.tok, AudioDeviceName("virt", 0),
-                                               enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2));
+    ias_map.emplace(USR_DUMMY_IN.tok, std::make_shared<IAStream>(USR_DUMMY_IN.tok, AudioDeviceName("virt", 0),
+                                                                 enum2val(AudioPeriodSize::INR_20MS),
+                                                                 enum2val(AudioBandWidth::Full), 2, false, false));
     oas_map.emplace(USR_DUMMY_OUT.tok,
                     std::make_shared<OAStream>(USR_DUMMY_OUT.tok, AudioDeviceName("virt", 0),
                                                enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2));

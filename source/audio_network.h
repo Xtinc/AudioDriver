@@ -47,44 +47,58 @@ constexpr uint8_t NET_FEC_MAGIC = 0xBC;
 constexpr unsigned int NETWORK_MAX_FRAMES = enum2val(AudioPeriodSize::INR_40MS) * enum2val(AudioBandWidth::Full) / 1000;
 constexpr unsigned int NETWORK_MAX_BUFFER_SIZE = NETWORK_MAX_FRAMES + 128;
 
-// Forward declarations for FEC structures
-struct FECGroup
+// Unified FEC processor for both encoding and recovery
+class FECProcessor
 {
+  public:
     static constexpr size_t GROUP_SIZE = 3;
     static constexpr size_t MAX_PACKET_SIZE = NETWORK_MAX_FRAMES + 128;
 
-    uint8_t packets[GROUP_SIZE][MAX_PACKET_SIZE];
-    size_t packet_sizes[GROUP_SIZE];
-    uint8_t fec_packet[MAX_PACKET_SIZE];
-    size_t fec_size;
-    size_t count;
-    uint32_t base_sequence;
-
-    FECGroup();
+    FECProcessor();
     void reset();
+
+    // For encoding (sender side)
     bool add_packet(const uint8_t *data, size_t size, uint32_t sequence);
-    bool is_complete() const;
-};
 
-struct FECRecoveryGroup
-{
-    static constexpr size_t GROUP_SIZE = 3;
-    static constexpr size_t MAX_PACKET_SIZE = NETWORK_MAX_FRAMES + 128;
+    bool is_complete() const
+    {
+        return packet_count == GROUP_SIZE;
+    }
 
+    const uint8_t *get_fec_data() const
+    {
+        return fec_data;
+    }
+
+    size_t get_fec_size() const
+    {
+        return fec_size;
+    }
+
+    uint32_t get_base_sequence() const
+    {
+        return base_sequence;
+    }
+
+    // For recovery (receiver side)
+    bool add_received_packet(const uint8_t *data, size_t size, uint32_t sequence);
+    bool add_fec_packet(const uint8_t *fec, size_t size);
+    bool can_recover() const;
+    bool recover_missing(uint8_t *output, size_t &size);
+    bool is_packet_received(size_t index) const
+    {
+        return index < GROUP_SIZE ? received[index] : false;
+    }
+
+  private:
     uint8_t packets[GROUP_SIZE][MAX_PACKET_SIZE];
     size_t packet_sizes[GROUP_SIZE];
     bool received[GROUP_SIZE];
-    uint8_t fec_packet[MAX_PACKET_SIZE];
+    uint8_t fec_data[MAX_PACKET_SIZE];
     size_t fec_size;
-    bool fec_received;
+    bool has_fec;
     uint32_t base_sequence;
-    bool active;
-
-    FECRecoveryGroup();
-    void reset();
-    bool can_recover() const;
-    int get_missing_index() const;
-    bool recover_missing_packet(uint8_t *output, size_t &output_size);
+    size_t packet_count;
 };
 
 struct NetStatInfos
@@ -513,7 +527,6 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
             return endpoint == other.endpoint && receiver_token == other.receiver_token;
         }
     };
-
     struct SenderContext
     {
         std::unique_ptr<NetEncoder> encoder;
@@ -521,10 +534,11 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
         unsigned int channels;
         unsigned int sample_rate;
         unsigned int isequence;
-        std::unique_ptr<struct FECGroup> fec_group;
+        std::unique_ptr<FECProcessor> fec_processor;
 
         SenderContext(unsigned int ch, unsigned int sr)
-            : encoder(std::make_unique<NetEncoder>(ch, NETWORK_MAX_FRAMES)), channels(ch), sample_rate(sr), isequence(0)
+            : encoder(std::make_unique<NetEncoder>(ch, NETWORK_MAX_FRAMES)), channels(ch), sample_rate(sr),
+              isequence(0), fec_processor(std::make_unique<FECProcessor>())
         {
         }
     };
@@ -533,9 +547,10 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     {
         std::unique_ptr<NetDecoder> decoder;
         NetState stats;
-        FECRecoveryGroup fec_recovery_group;
+        std::unique_ptr<FECProcessor> fec_processor;
 
-        DecoderContext(unsigned int ch, unsigned int max_frames) : decoder(std::make_unique<NetDecoder>(ch, max_frames))
+        DecoderContext(unsigned int ch, unsigned int max_frames)
+            : decoder(std::make_unique<NetDecoder>(ch, max_frames)), fec_processor(std::make_unique<FECProcessor>())
         {
         }
 
@@ -575,20 +590,21 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     void process_probe_packet(const ProbePacket *probe, const asio::ip::udp::endpoint &endpoint);
     void handle_receive(const asio::error_code &error, std::size_t bytes);
     void retry_receive_with_backoff();
-    DecoderContext &get_decoder(uint8_t sender_id, unsigned int channels);    void process_and_deliver_audio(uint8_t sender_id, uint8_t receiver_id, uint8_t channels, uint32_t sequence,
+    DecoderContext &get_decoder(uint8_t sender_id, unsigned int channels);
+    void process_and_deliver_audio(uint8_t sender_id, uint8_t receiver_id, uint8_t channels, uint32_t sequence,
                                    uint64_t timestamp, const uint8_t *adpcm_data, size_t adpcm_size, uint32_t source_ip,
                                    AudioBandWidth sample_enum);
+
+    // Unified packet processing
+    void process_data_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size, uint32_t source_ip);
+    bool validate_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size);
+    void handle_audio_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size, uint32_t source_ip);
+    void handle_fec_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size, uint32_t source_ip);
 
     // FEC related methods
     void send_data_packet(const Destination &dest, uint8_t sender_id, uint8_t receiver_id, uint32_t sequence,
                           uint64_t timestamp, const uint8_t *data, size_t size, uint8_t channels, uint8_t sample_rate,
                           bool is_fec);
-    void process_audio_packet(const DataPacket *data_header, const uint8_t *audio_data, size_t audio_data_size,
-                              uint32_t source_ip);
-    void process_fec_packet(const DataPacket *data_header, const uint8_t *fec_data, size_t fec_data_size,
-                            uint32_t source_ip);
-    void try_recover_missing_packets(FECRecoveryGroup &recovery_group, const DataPacket *data_header,
-                                     uint32_t source_ip, AudioBandWidth sample_enum);
 
     bool is_ready() const
     {

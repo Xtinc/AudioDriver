@@ -134,9 +134,9 @@ class IAStream : public std::enable_shared_from_this<IAStream>
 
   public:
     IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs, unsigned int _ch,
-             bool auto_reset = false);
+             bool enable_denoise, bool auto_reset);
     IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs,
-             unsigned int dev_ch, AudioChannelMap _imap);
+             unsigned int dev_ch, AudioChannelMap _imap,bool enable_denoise);
     ~IAStream();
 
     RetCode start();
@@ -172,6 +172,7 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     const unsigned int fs;
     const unsigned int ps;
     const unsigned int ch;
+    const bool enable_denoise;
     const bool enable_reset;
     const unsigned int spf_ch;
     const AudioChannelMap imap;
