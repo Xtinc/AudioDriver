@@ -20,3 +20,6 @@ target_link_libraries(test_locsampler bettyaudio)
 
 add_executable(test_filter_banks test_filter_banks.cpp)
 target_link_libraries(test_filter_banks bettyaudio)
+
+add_executable(udp_forwarder udp_forwarder_test.cpp)
+target_link_libraries(udp_forwarder asio)

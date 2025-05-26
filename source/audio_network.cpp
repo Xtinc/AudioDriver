@@ -1194,8 +1194,6 @@ void NetWorker::handle_fec_packet(const DataPacket *header, const uint8_t *paylo
                         break; // Only recover one missing packet
                     }
                 }
-
-                AUDIO_DEBUG_PRINT("Recovered missing packet using FEC");
             }
         }
     }
