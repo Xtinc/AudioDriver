@@ -2,6 +2,7 @@
 #define AUDIO_PROCESSING_NS_ESTIMATOR_H
 
 #include "ns_define.h"
+#include <cmath>
 
 constexpr int kHistogramSize = 1000;
 constexpr int kSimult = 3;

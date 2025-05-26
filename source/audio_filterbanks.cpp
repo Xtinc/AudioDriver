@@ -27,6 +27,24 @@
 #include "audio_filterbanks.h"
 #include <cmath>
 
+// Static constant definitions for ThreeBandFilterBank (required for C++17 and earlier)
+constexpr int ThreeBandFilterBank::kSparsity;
+constexpr int ThreeBandFilterBank::kStrideLog2;
+constexpr int ThreeBandFilterBank::kStride;
+constexpr int ThreeBandFilterBank::kNumZeroFilters;
+constexpr int ThreeBandFilterBank::kFilterSize;
+constexpr int ThreeBandFilterBank::kMemorySize;
+constexpr int ThreeBandFilterBank::kNumBands;
+constexpr int ThreeBandFilterBank::kFullBandSize;
+constexpr int ThreeBandFilterBank::kSplitBandSize;
+constexpr int ThreeBandFilterBank::kNumNonZeroFilters;
+
+// Static constant definitions for TwoBandFilterBank (required for C++17 and earlier)
+constexpr int TwoBandFilterBank::kStateSize;
+constexpr int TwoBandFilterBank::kNumBands;
+constexpr int TwoBandFilterBank::kFullBandSize;
+constexpr int TwoBandFilterBank::kSplitBandSize;
+
 namespace
 {
 /**

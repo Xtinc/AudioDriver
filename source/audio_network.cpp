@@ -440,6 +440,120 @@ const int16_t *NetDecoder::decode(const uint8_t *adpcm_data, size_t adpcm_size, 
 // NetWorker
 using udp = asio::ip::udp;
 
+// FEC implementations - Optimized version
+FECGroup::FECGroup() : fec_size(0), count(0), base_sequence(0)
+{
+}
+
+void FECGroup::reset()
+{
+    count = 0;
+    fec_size = 0;
+    memset(packet_sizes, 0, sizeof(packet_sizes));
+    memset(fec_packet, 0, MAX_PACKET_SIZE); // Fix: use MAX_PACKET_SIZE
+}
+
+bool FECGroup::add_packet(const uint8_t *data, size_t size, uint32_t sequence)
+{
+    if (count >= GROUP_SIZE || size > MAX_PACKET_SIZE)
+    {
+        return false;
+    }
+
+    if (count == 0)
+    {
+        base_sequence = sequence;
+        fec_size = size;
+        memset(fec_packet, 0, MAX_PACKET_SIZE); // Fix: use MAX_PACKET_SIZE
+    }
+    else if (size != fec_size)
+    {
+        return false;  // All packets must have the same size
+    }
+
+    memcpy(packets[count], data, size);
+    packet_sizes[count] = size;
+
+    // XOR into FEC packet
+    for (size_t i = 0; i < size; ++i) {
+        fec_packet[i] ^= data[i];
+    }
+
+    count++;
+    return true;
+}
+
+bool FECGroup::is_complete() const
+{
+    return count == GROUP_SIZE;
+}
+
+FECRecoveryGroup::FECRecoveryGroup() : fec_size(0), fec_received(false), base_sequence(0), active(false)
+{
+    reset();
+}
+
+void FECRecoveryGroup::reset()
+{
+    memset(received, false, sizeof(received));
+    fec_received = false;
+    fec_size = 0;
+    active = false;
+    memset(packet_sizes, 0, sizeof(packet_sizes));
+}
+
+bool FECRecoveryGroup::can_recover() const
+{
+    if (!fec_received)
+        return false;
+
+    int missing_count = 0;
+    for (size_t i = 0; i < GROUP_SIZE; ++i)
+    {
+        if (!received[i])
+        {
+            missing_count++;
+        }
+    }
+    return missing_count == 1; // Can only recover one missing packet
+}
+
+int FECRecoveryGroup::get_missing_index() const
+{
+    for (size_t i = 0; i < GROUP_SIZE; ++i)
+    {
+        if (!received[i])
+        {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+bool FECRecoveryGroup::recover_missing_packet(uint8_t *output, size_t &output_size)
+{
+    int missing_idx = get_missing_index();
+    if (missing_idx < 0 || !can_recover())
+    {
+        return false;
+    }
+
+    output_size = fec_size;
+    memcpy(output, fec_packet, fec_size);
+
+    // XOR all received packets to recover missing packet
+    for (size_t i = 0; i < GROUP_SIZE; ++i) {
+        if (i != static_cast<size_t>(missing_idx) && received[i]) {
+            size_t min_size = std::min(packet_sizes[i], output_size); // Fix: prevent overflow
+            for (size_t j = 0; j < min_size; ++j) {
+                output[j] ^= packets[i][j];
+            }
+        }
+    }
+
+    return true;
+}
+
 static RetCode resolve_endpoint(const std::string &ip, uint16_t port, asio::ip::udp::endpoint &endpoint)
 {
     try
@@ -636,8 +750,8 @@ RetCode NetWorker::register_sender(uint8_t sender_id, unsigned int channels, uns
     {
         return {RetCode::FAILED, "Sender ID already exists"};
     }
-
-    senders.emplace(sender_id, SenderContext(channels, sample_rate));
+    auto result = senders.emplace(sender_id, SenderContext(channels, sample_rate));
+    result.first->second.fec_group = std::make_unique<FECGroup>();
     return {RetCode::OK, "Sender registered"};
 }
 
@@ -754,11 +868,6 @@ RetCode NetWorker::send_audio(uint8_t sender_id, const int16_t *data, unsigned i
         return {RetCode::EPARAM, "Failed to encode audio data"};
     }
 
-    if (encoded_size % 2 != 0)
-    {
-        return {RetCode::EPARAM, "Encoded data size must be even for equal splitting"};
-    }
-
     uint32_t sequence = context.isequence++;
     uint64_t timestamp =
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
@@ -766,26 +875,27 @@ RetCode NetWorker::send_audio(uint8_t sender_id, const int16_t *data, unsigned i
     uint8_t channels = static_cast<uint8_t>(context.channels);
     uint8_t sample_rate = static_cast<uint8_t>((context.sample_rate) / 1000);
 
-    size_t part_size = encoded_size / 2;
-    uint8_t xor_data[NETWORK_MAX_FRAMES + 128];
-    memset(xor_data, 0, sizeof(xor_data));
-
-    for (size_t i = 0; i < part_size; ++i)
-    {
-        xor_data[i] = encoded_data[i] ^ encoded_data[part_size + i];
+    // Send original data packets
+    for (const auto &dest : context.destinations) {
+        send_data_packet(dest, sender_id, dest.receiver_token, sequence, timestamp, encoded_data, encoded_size,
+                         channels, sample_rate, false);
     }
 
-    for (const auto &dest : context.destinations)
-    {
-        send_fec_part(dest, sender_id, dest.receiver_token, sequence, timestamp, encoded_data, part_size, 0, channels,
-                      sample_rate);
-        send_fec_part(dest, sender_id, dest.receiver_token, sequence, timestamp, encoded_data + part_size, part_size, 1,
-                      channels, sample_rate);
-        send_fec_part(dest, sender_id, dest.receiver_token, sequence, timestamp, xor_data, part_size, 2, channels,
-                      sample_rate);
+    // Add to FEC group
+    if (context.fec_group->add_packet(encoded_data, encoded_size, sequence)) {
+        // If FEC group is complete, send FEC packet
+        if (context.fec_group->is_complete()) {
+            uint32_t fec_sequence = context.fec_group->base_sequence + FECGroup::GROUP_SIZE;
+            for (const auto &dest : context.destinations) {
+                send_data_packet(dest, sender_id, dest.receiver_token, fec_sequence, timestamp,
+                                 context.fec_group->fec_packet, context.fec_group->fec_size, channels, sample_rate,
+                                 true);
+            }
+            context.fec_group->reset(); // Reset FEC group
+        }
     }
 
-    return {RetCode::OK, "Data sent with FEC"};
+    return {RetCode::OK, "Data sent"};
 }
 
 void NetWorker::start_receive_loop()
@@ -926,7 +1036,7 @@ void NetWorker::handle_receive(const asio::error_code &error, std::size_t bytes_
         return;
     }
 
-    if (bytes_transferred > sizeof(ProbePacket))
+    if (bytes_transferred >= sizeof(ProbePacket))
     {
         auto magic_num = static_cast<uint8_t>(receive_buffer.get()[0]);
 
@@ -935,13 +1045,21 @@ void NetWorker::handle_receive(const asio::error_code &error, std::size_t bytes_
             auto probe = reinterpret_cast<const ProbePacket *>(receive_buffer.get());
             process_probe_packet(probe, sender_endpoint);
         }
+        else if (magic_num == NET_AUDIO_MAGIC)
+        {
+            auto data_header = reinterpret_cast<const DataPacket *>(receive_buffer.get());
+            const uint8_t *audio_data = reinterpret_cast<const uint8_t *>(receive_buffer.get() + sizeof(DataPacket));
+            size_t audio_data_size = bytes_transferred - sizeof(DataPacket);
+            uint32_t source_ip = sender_endpoint.address().is_v4() ? sender_endpoint.address().to_v4().to_uint() : 0;
+            process_audio_packet(data_header, audio_data, audio_data_size, source_ip);
+        }
         else if (magic_num == NET_FEC_MAGIC)
         {
-            auto fec_header = reinterpret_cast<const FECPacket *>(receive_buffer.get());
-            const uint8_t *fec_data = reinterpret_cast<const uint8_t *>(receive_buffer.get() + sizeof(FECPacket));
-            size_t fec_data_size = bytes_transferred - sizeof(FECPacket);
+            auto data_header = reinterpret_cast<const DataPacket *>(receive_buffer.get());
+            const uint8_t *fec_data = reinterpret_cast<const uint8_t *>(receive_buffer.get() + sizeof(DataPacket));
+            size_t fec_data_size = bytes_transferred - sizeof(DataPacket);
             uint32_t source_ip = sender_endpoint.address().is_v4() ? sender_endpoint.address().to_v4().to_uint() : 0;
-            process_fec_part(fec_header, fec_data, fec_data_size, source_ip);
+            process_fec_packet(data_header, fec_data, fec_data_size, source_ip);
         }
     }
 
@@ -1001,165 +1119,142 @@ void NetWorker::process_and_deliver_audio(uint8_t sender_id, uint8_t receiver_id
     }
 }
 
-void NetWorker::send_fec_part(const Destination &dest, uint8_t sender_id, uint8_t receiver_id, uint32_t sequence,
-                              uint64_t timestamp, const uint8_t *data, size_t size, uint8_t part_index,
-                              uint8_t channels, uint8_t sample_rate)
+void NetWorker::send_data_packet(const Destination &dest, uint8_t sender_id, uint8_t receiver_id, uint32_t sequence,
+                                 uint64_t timestamp, const uint8_t *data, size_t size, uint8_t channels,
+                                 uint8_t sample_rate, bool is_fec)
 {
-    FECPacket fec_header{};
-    fec_header.magic_num = NET_FEC_MAGIC;
-    fec_header.sender_id = sender_id;
-    fec_header.receiver_id = receiver_id;
-    fec_header.part_index = part_index;
-    fec_header.channels = channels;
-    fec_header.sample_rate = sample_rate;
-    fec_header.sequence = sequence;
-    fec_header.timestamp = timestamp;
+    DataPacket packet{};
+    packet.magic_num = is_fec ? NET_FEC_MAGIC : NET_AUDIO_MAGIC;
+    packet.sender_id = sender_id;
+    packet.receiver_id = receiver_id;
+    packet.sequence = sequence;
+    packet.timestamp = timestamp;
+    packet.channels = channels;
+    packet.sample_rate = sample_rate;
+    packet.is_fec = is_fec ? 1 : 0;
 
-    std::array<asio::const_buffer, 2> buffers{asio::buffer(&fec_header, sizeof(fec_header)), asio::buffer(data, size)};
+    std::array<asio::const_buffer, 2> buffers{asio::buffer(&packet, sizeof(packet)), asio::buffer(data, size)};
 
-    socket->async_send_to(buffers, dest.endpoint, [part_index](const asio::error_code &error, std::size_t /*bytes*/) {
+    socket->async_send_to(buffers, dest.endpoint, [is_fec](const asio::error_code &error, std::size_t) {
         if (error)
         {
-            AUDIO_DEBUG_PRINT("FEC part %u send error: %s", part_index, error.message().c_str());
+            AUDIO_DEBUG_PRINT("Send %s packet error: %s", is_fec ? "FEC" : "audio", error.message().c_str());
         }
     });
 }
 
-void NetWorker::process_fec_part(const FECPacket *fec_header, const uint8_t *fec_data, size_t fec_data_size,
-                                 uint32_t source_ip)
+void NetWorker::process_audio_packet(const DataPacket *data_header, const uint8_t *audio_data, size_t audio_data_size,
+                                     uint32_t source_ip)
 {
-    if (!fec_header || !fec_data || fec_data_size == 0 || fec_header->part_index >= 3)
+    // Basic validation
+    if (!data_header || !audio_data || audio_data_size == 0 || data_header->is_fec != 0 || data_header->channels == 0 ||
+        data_header->channels > 2)
     {
         return;
     }
 
-    if (fec_header->channels == 0 || fec_header->channels > 2)
-    {
-        AUDIO_DEBUG_PRINT("Invalid channel count: %u", fec_header->channels);
-        return;
-    }
-
-    AudioBandWidth sample_enum = byte_to_bandwidth(fec_header->sample_rate);
+    AudioBandWidth sample_enum = byte_to_bandwidth(data_header->sample_rate);
     if (sample_enum == AudioBandWidth::Unknown)
     {
-        AUDIO_DEBUG_PRINT("Invalid sample rate: %u", fec_header->sample_rate);
         return;
     }
 
-    if (fec_data_size > NETWORK_MAX_FRAMES + 128)
-    {
-        AUDIO_DEBUG_PRINT("FEC data size too large: %zu", fec_data_size);
+    auto &decoder_context = get_decoder(data_header->sender_id, data_header->channels);
+    auto &recovery_group = decoder_context.fec_recovery_group;
+
+    // Calculate FEC group index
+    uint32_t group_base = (data_header->sequence / FECRecoveryGroup::GROUP_SIZE) * FECRecoveryGroup::GROUP_SIZE;
+    uint32_t group_index = data_header->sequence - group_base;
+
+    if (group_index >= FECRecoveryGroup::GROUP_SIZE || audio_data_size > FECRecoveryGroup::MAX_PACKET_SIZE) {
         return;
     }
 
-    auto &decoder_context = get_decoder(fec_header->sender_id, fec_header->channels);
-    auto &buffer = decoder_context.fec_buffer;
-
-    if (buffer.sequence != fec_header->sequence)
-    {
-        buffer.reset();
-        buffer.sequence = fec_header->sequence;
-        buffer.timestamp = fec_header->timestamp;
+    // If it's a new group, reset
+    if (!recovery_group.active || recovery_group.base_sequence != group_base) {
+        recovery_group.reset();
+        recovery_group.base_sequence = group_base;
+        recovery_group.active = true;
     }
 
-    uint8_t part_idx = fec_header->part_index;
-    if (!buffer.received[part_idx] && fec_data_size <= DecoderContext::FECPacketBuffer::MAX_PART_SIZE)
-    {
-        memcpy(buffer.parts[part_idx], fec_data, fec_data_size);
-        buffer.part_sizes[part_idx] = fec_data_size;
-        buffer.received[part_idx] = true;
+    // Store and process original packet
+    if (!recovery_group.received[group_index]) {
+        memcpy(recovery_group.packets[group_index], audio_data, audio_data_size);
+        recovery_group.packet_sizes[group_index] = audio_data_size;
+        recovery_group.received[group_index] = true;
 
-        if (buffer.can_reconstruct())
-        {
-            static uint8_t reconstructed[NETWORK_MAX_FRAMES + 128];
-            size_t reconstructed_size;
-            if (try_reconstruct_packet(buffer, reconstructed, reconstructed_size))
-            {
-                process_and_deliver_audio(fec_header->sender_id, fec_header->receiver_id, fec_header->channels,
-                                          fec_header->sequence, fec_header->timestamp, reconstructed,
-                                          reconstructed_size, source_ip, sample_enum);
-                buffer.reset();
-            }
+        // Process original packet immediately
+        process_and_deliver_audio(data_header->sender_id, data_header->receiver_id, data_header->channels,
+                                  data_header->sequence, data_header->timestamp, audio_data, audio_data_size, source_ip,
+                                  sample_enum);
+    }
+}
+
+void NetWorker::process_fec_packet(const DataPacket *data_header, const uint8_t *fec_data, size_t fec_data_size,
+                                   uint32_t source_ip)
+{
+    // Basic validation
+    if (!data_header || !fec_data || fec_data_size == 0 || data_header->is_fec != 1 || data_header->channels == 0 ||
+        data_header->channels > 2 || fec_data_size > FECRecoveryGroup::MAX_PACKET_SIZE)
+    {
+        return;
+    }
+
+    AudioBandWidth sample_enum = byte_to_bandwidth(data_header->sample_rate);
+    if (sample_enum == AudioBandWidth::Unknown)
+    {
+        return;
+    }
+
+    auto &decoder_context = get_decoder(data_header->sender_id, data_header->channels);
+    auto &recovery_group = decoder_context.fec_recovery_group;
+
+    // FEC packet sequence number corresponds to original group base sequence number
+    uint32_t group_base = data_header->sequence - FECRecoveryGroup::GROUP_SIZE;
+
+    // Set up or verify group
+    if (!recovery_group.active || recovery_group.base_sequence != group_base) {
+        recovery_group.reset();
+        recovery_group.base_sequence = group_base;
+        recovery_group.active = true;
+    }
+
+    // Store FEC packet and try to recover
+    if (!recovery_group.fec_received) {
+        memcpy(recovery_group.fec_packet, fec_data, fec_data_size);
+        recovery_group.fec_size = fec_data_size;
+        recovery_group.fec_received = true;
+
+        // Try to recover missing packets
+        if (recovery_group.can_recover()) {
+            try_recover_missing_packets(recovery_group, data_header, source_ip, sample_enum);
         }
     }
 }
 
-bool NetWorker::try_reconstruct_packet(DecoderContext::FECPacketBuffer &buffer, uint8_t *reconstructed,
-                                       size_t &reconstructed_size)
+void NetWorker::try_recover_missing_packets(FECRecoveryGroup &recovery_group, const DataPacket *data_header,
+                                            uint32_t source_ip, AudioBandWidth sample_enum)
 {
-    if (!buffer.can_reconstruct())
-    {
-        return false;
-    }
+    static thread_local uint8_t recovered_data[FECRecoveryGroup::MAX_PACKET_SIZE];
 
-    size_t part_size = 0;
-    size_t total_size = 0;
-
-    if (buffer.received[0] && buffer.received[1])
+    size_t recovered_size;
+    if (recovery_group.recover_missing_packet(recovered_data, recovered_size))
     {
-        if (buffer.part_sizes[0] != buffer.part_sizes[1])
+        int missing_idx = recovery_group.get_missing_index();
+        if (missing_idx >= 0)
         {
-            return false;
-        }
-        part_size = buffer.part_sizes[0];
-        total_size = part_size * 2;
-    }
-    else if (buffer.received[0] && buffer.received[2])
-    {
-        if (buffer.part_sizes[0] != buffer.part_sizes[2])
-        {
-            return false;
-        }
-        part_size = buffer.part_sizes[0];
-        total_size = part_size * 2;
-    }
-    else if (buffer.received[1] && buffer.received[2])
-    {
-        if (buffer.part_sizes[1] != buffer.part_sizes[2])
-        {
-            return false;
-        }
-        part_size = buffer.part_sizes[1];
-        total_size = part_size * 2;
-    }
-    else
-    {
-        return false;
-    }
+            uint32_t recovered_sequence = recovery_group.base_sequence + missing_idx;
 
-    if (total_size > NETWORK_MAX_FRAMES + 128)
-    {
-        return false;
-    }
+            process_and_deliver_audio(data_header->sender_id, data_header->receiver_id, data_header->channels,
+                                      recovered_sequence, data_header->timestamp, recovered_data, recovered_size,
+                                      source_ip, sample_enum);
 
-    reconstructed_size = total_size;
+            AUDIO_DEBUG_PRINT("Recovered missing packet %u using FEC", recovered_sequence);
 
-    if (buffer.received[0] && buffer.received[1])
-    {
-        memcpy(reconstructed, buffer.parts[0], part_size);
-        memcpy(reconstructed + part_size, buffer.parts[1], part_size);
-        return true;
-    }
-    else if (buffer.received[0] && buffer.received[2])
-    {
-        memcpy(reconstructed, buffer.parts[0], part_size);
-        for (size_t i = 0; i < part_size; ++i)
-        {
-            reconstructed[part_size + i] = buffer.parts[2][i] ^ buffer.parts[0][i];
+            // Mark as recovered
+            recovery_group.received[missing_idx] = true;
+            memcpy(recovery_group.packets[missing_idx], recovered_data, recovered_size);
+            recovery_group.packet_sizes[missing_idx] = recovered_size;
         }
-        AUDIO_DEBUG_PRINT("Reconstructed packet using parts 0 and 2");
-        return true;
     }
-    else if (buffer.received[1] && buffer.received[2])
-    {
-        memcpy(reconstructed + part_size, buffer.parts[1], part_size);
-        for (size_t i = 0; i < part_size; ++i)
-        {
-            reconstructed[i] = buffer.parts[2][i] ^ buffer.parts[1][i];
-        }
-        AUDIO_DEBUG_PRINT("Reconstructed packet using parts 1 and 2");
-        return true;
-    }
-
-    return false;
 }
