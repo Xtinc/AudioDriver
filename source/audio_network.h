@@ -11,7 +11,7 @@
 #include <utility>
 #include <vector>
 
-// 前置常量定义
+// Template utility functions
 template <typename T> constexpr std::underlying_type_t<T> enum2val(T e)
 {
     return static_cast<std::underlying_type_t<T>>(e);
@@ -575,12 +575,11 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     void process_probe_packet(const ProbePacket *probe, const asio::ip::udp::endpoint &endpoint);
     void handle_receive(const asio::error_code &error, std::size_t bytes);
     void retry_receive_with_backoff();
-    DecoderContext &get_decoder(uint8_t sender_id, unsigned int channels);
-    void process_and_deliver_audio(uint8_t sender_id, uint8_t receiver_id, uint8_t channels, uint32_t sequence,
+    DecoderContext &get_decoder(uint8_t sender_id, unsigned int channels);    void process_and_deliver_audio(uint8_t sender_id, uint8_t receiver_id, uint8_t channels, uint32_t sequence,
                                    uint64_t timestamp, const uint8_t *adpcm_data, size_t adpcm_size, uint32_t source_ip,
                                    AudioBandWidth sample_enum);
 
-    // FEC相关方法
+    // FEC related methods
     void send_data_packet(const Destination &dest, uint8_t sender_id, uint8_t receiver_id, uint32_t sequence,
                           uint64_t timestamp, const uint8_t *data, size_t size, uint8_t channels, uint8_t sample_rate,
                           bool is_fec);
