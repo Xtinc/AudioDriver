@@ -252,7 +252,7 @@ RetCode LocSampler::process(const InterleavedView<const PCM_TYPE> &input, const 
     const auto dst_fr = ti * dst_fs / 1000;
     const auto ibuffer = analysis_ibuffer.get();
     const auto obuffer = analysis_obuffer.get();
-    // ibuffer->set_num_channels(real_ichan);
+    ibuffer->set_num_channels(std::max(real_ochan, real_ichan));
 
     // Validate buffer sizes
     DBG_ASSERT_LE(input.size(), src_fr * src_ch);
