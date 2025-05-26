@@ -1225,8 +1225,7 @@ void NetWorker::process_and_deliver_audio(uint8_t sender_id, uint8_t receiver_id
     auto receiver_it = receivers.find(receiver_id);
     if (receiver_it != receivers.end())
     {
-        auto sample_rate = static_cast<unsigned int>(enum2val(sample_enum)) * 1000;
-        receiver_it->second(sender_id, channels, frames, sample_rate, decoded_pcm, source_ip);
+        receiver_it->second(sender_id, channels, frames, enum2val(sample_enum), decoded_pcm, source_ip);
     }
     else
     {
