@@ -1036,7 +1036,7 @@ void NetWorker::handle_receive(const asio::error_code &error, std::size_t bytes_
         return;
     }
 
-    if (bytes_transferred > sizeof(ProbePacket))
+    if (bytes_transferred >= sizeof(ProbePacket))
     {
         auto magic_num = static_cast<uint8_t>(receive_buffer.get()[0]);
 
