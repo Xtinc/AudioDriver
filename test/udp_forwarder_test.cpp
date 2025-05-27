@@ -65,8 +65,8 @@ class UDPForwarder
 {
   public:
     UDPForwarder(asio::io_context &io_context, const ForwardRule &rule, GlobalStatistics &global_stats)
-        : io_context_(io_context), rule_(rule), listen_socket_(io_context), global_stats_(global_stats),
-          local_stats_(make_shared<ThreadLocalStats>()),
+        : io_context_(io_context), rule_(rule), listen_socket_(io_context), forward_socket_(io_context),
+          global_stats_(global_stats), local_stats_(make_shared<ThreadLocalStats>()),
           target_endpoint_(asio::ip::address::from_string(rule.target_ip),
                            static_cast<unsigned short>(rule.target_port))
     {
@@ -78,6 +78,9 @@ class UDPForwarder
                                       static_cast<unsigned short>(rule.listen_port));
         listen_socket_.open(udp::v4());
         listen_socket_.bind(listen_endpoint);
+
+        // Open forward socket once
+        forward_socket_.open(udp::v4());
 
         cout << "UDP Forwarder started: " << rule.listen_ip << ":" << rule.listen_port << " -> " << rule.target_ip
              << ":" << rule.target_port << endl;
@@ -102,37 +105,36 @@ class UDPForwarder
                                               start_receive(); // Continue receiving next packet
                                           });
     }
+
     void forward_data(size_t bytes)
     {
-        // Create new socket for forwarding
-        auto forward_socket = make_shared<udp::socket>(io_context_);
-        forward_socket->open(udp::v4());
-
-        // Copy data to new buffer
+        // Create a dedicated buffer for this send operation to avoid race conditions
         auto send_buffer = make_shared<vector<char>>(recv_buffer_.begin(), recv_buffer_.begin() + bytes);
 
-        forward_socket->async_send_to(
-            asio::buffer(*send_buffer), target_endpoint_,
-            [forward_socket, send_buffer, this, bytes](asio::error_code ec, size_t bytes_sent) {
-                if (ec)
-                {
-                    local_stats_->forward_errors++;
-                    cerr << "Forward failed: " << ec.message() << endl;
-                }
-                else
-                {
-                    local_stats_->packets_forwarded++;
-                    local_stats_->bytes_forwarded += bytes_sent;
-                    // Reduce console output for better performance
-                    // cout << "Forwarded " << bytes_sent << " bytes to " << rule_.target_ip << ":"
-                    //      << rule_.target_port << endl;
-                }
-                forward_socket->close();
-            });
+        // Reuse the existing forward socket instead of creating new ones
+        forward_socket_.async_send_to(asio::buffer(*send_buffer), target_endpoint_,
+                                      [this, send_buffer, bytes](asio::error_code ec, size_t bytes_sent) {
+                                          if (ec)
+                                          {
+                                              local_stats_->forward_errors++;
+                                              cerr << "Forward failed: " << ec.message() << endl;
+                                          }
+                                          else
+                                          {
+                                              local_stats_->packets_forwarded++;
+                                              local_stats_->bytes_forwarded += bytes_sent;
+                                              // Reduce console output for better performance
+                                              // cout << "Forwarded " << bytes_sent << " bytes to " << rule_.target_ip
+                                              // << ":"
+                                              //      << rule_.target_port << endl;
+                                          }
+                                          // send_buffer will be automatically destroyed here
+                                      });
     }
     asio::io_context &io_context_;
     ForwardRule rule_;
     udp::socket listen_socket_;
+    udp::socket forward_socket_;
     udp::endpoint target_endpoint_;
     udp::endpoint sender_endpoint_;
     array<char, 1024> recv_buffer_;
