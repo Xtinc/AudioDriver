@@ -527,6 +527,7 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
             return endpoint == other.endpoint && receiver_token == other.receiver_token;
         }
     };
+
     struct SenderContext
     {
         std::unique_ptr<NetEncoder> encoder;
@@ -590,7 +591,7 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     void process_probe_packet(const ProbePacket *probe, const asio::ip::udp::endpoint &endpoint);
     void handle_receive(const asio::error_code &error, std::size_t bytes);
     void retry_receive_with_backoff();
-    DecoderContext &get_decoder(uint8_t sender_id, unsigned int channels);
+    DecoderContext &get_decoder(uint8_t sender_id, uint32_t source_ip, unsigned int channels);
     void process_and_deliver_audio(uint8_t sender_id, uint8_t receiver_id, uint8_t channels, uint32_t sequence,
                                    uint64_t timestamp, const uint8_t *adpcm_data, size_t adpcm_size, uint32_t source_ip,
                                    AudioBandWidth sample_enum);
@@ -623,10 +624,9 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     std::map<uint8_t, SenderContext> senders;
     std::mutex senders_mutex;
 
-    std::map<uint8_t, DecoderContext> decoders;
+    std::map<uint64_t, DecoderContext> decoders;
     std::mutex decoders_mutex;
     std::map<uint8_t, ReceiverContext> receivers;
-    std::mutex receivers_mutex;
     asio::steady_timer stats_timer;
 
     std::map<uint32_t, RttMetrics> rtt_data;

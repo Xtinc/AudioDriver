@@ -669,15 +669,16 @@ RetCode NetWorker::stop()
     }
 
     stats_timer.cancel();
-
-    {
-        std::lock_guard<std::mutex> lock(receivers_mutex);
-        receivers.clear();
-    }
+    receivers.clear();
 
     {
         std::lock_guard<std::mutex> lock(senders_mutex);
         senders.clear();
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(decoders_mutex);
+        decoders.clear();
     }
 
     AUDIO_INFO_PRINT("NetWorker stopped");
@@ -686,8 +687,6 @@ RetCode NetWorker::stop()
 
 void NetWorker::report()
 {
-    std::lock_guard<std::mutex> lock(receivers_mutex);
-
     for (auto &pair : decoders)
     {
         auto stats = pair.second.get_period_stats();
@@ -696,9 +695,9 @@ void NetWorker::report()
         if (stats.packets_received > 0)
         {
             AUDIO_INFO_PRINT(
-                "NETSTATS(%u) : [loss] %.2f%%, [jitter] %.2fms, [received] %u, [lost] %u, [out-of-order] %u", token,
-                stats.packet_loss_rate, stats.average_jitter, stats.packets_received, stats.packets_lost,
-                stats.packets_out_of_order);
+                "NETSTATS(0x%08X:%u) : [loss] %.2f%%, [jitter] %.2fms, [received] %u, [lost] %u, [out-of-order] %u",
+                InfoLabel::extract_ip(token), InfoLabel::extract_token(token), stats.packet_loss_rate,
+                stats.average_jitter, stats.packets_received, stats.packets_lost, stats.packets_out_of_order);
         }
     }
 }
@@ -715,7 +714,6 @@ RetCode NetWorker::register_receiver(uint8_t token, ReceiveCallback callback)
         return {RetCode::FAILED, "NetWorker not ready"};
     }
 
-    std::lock_guard<std::mutex> lock(receivers_mutex);
     auto it = receivers.find(token);
     if (it != receivers.end())
     {
@@ -732,8 +730,6 @@ RetCode NetWorker::register_receiver(uint8_t token, ReceiveCallback callback)
 
 RetCode NetWorker::unregister_receiver(uint8_t token)
 {
-    std::lock_guard<std::mutex> lock(receivers_mutex);
-
     auto it = receivers.find(token);
     if (it == receivers.end())
     {
@@ -1101,14 +1097,15 @@ void NetWorker::retry_receive_with_backoff()
     });
 }
 
-NetWorker::DecoderContext &NetWorker::get_decoder(uint8_t sender_id, unsigned int channels)
+NetWorker::DecoderContext &NetWorker::get_decoder(uint8_t sender_id, uint32_t source_ip, unsigned int channels)
 {
     std::lock_guard<std::mutex> lock(decoders_mutex);
 
     auto it = decoders.find(sender_id);
     if (it == decoders.end())
     {
-        auto result = decoders.emplace(sender_id, DecoderContext(channels, NETWORK_MAX_FRAMES));
+        auto result = decoders.emplace(InfoLabel::make_composite(source_ip, sender_id),
+                                       DecoderContext(channels, NETWORK_MAX_FRAMES));
         return result.first->second;
     }
 
@@ -1149,7 +1146,7 @@ void NetWorker::handle_audio_packet(const DataPacket *header, const uint8_t *pay
         return;
     }
 
-    auto &decoder_context = get_decoder(header->sender_id, header->channels);
+    auto &decoder_context = get_decoder(header->sender_id, source_ip, header->channels);
 
     // Add to FEC recovery group
     decoder_context.fec_processor->add_received_packet(payload, payload_size, header->sequence);
@@ -1168,7 +1165,7 @@ void NetWorker::handle_fec_packet(const DataPacket *header, const uint8_t *paylo
         return;
     }
 
-    auto &decoder_context = get_decoder(header->sender_id, header->channels);
+    auto &decoder_context = get_decoder(header->sender_id, source_ip, header->channels);
 
     // Add FEC data and try recovery
     if (decoder_context.fec_processor->add_fec_packet(payload, payload_size))
@@ -1208,7 +1205,7 @@ void NetWorker::process_and_deliver_audio(uint8_t sender_id, uint8_t receiver_id
         return;
     }
 
-    auto &decoder_context = get_decoder(sender_id, channels);
+    auto &decoder_context = get_decoder(sender_id, source_ip, channels);
     decoder_context.update_stats(sequence, timestamp);
 
     unsigned int frames = 0;
@@ -1219,7 +1216,6 @@ void NetWorker::process_and_deliver_audio(uint8_t sender_id, uint8_t receiver_id
         return;
     }
 
-    std::lock_guard<std::mutex> lock(receivers_mutex);
     auto receiver_it = receivers.find(receiver_id);
     if (receiver_it != receivers.end())
     {
