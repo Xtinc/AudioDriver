@@ -1091,7 +1091,7 @@ AudioPlayer::~AudioPlayer() = default;
 
 RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared_ptr<OAStream> &sink)
 {
-    if (preemptive.fetch_add(1, std::memory_order_seq_cst) > 5)
+    if (preemptive.load(std::memory_order_release) > 5)
     {
         return {RetCode::FAILED, "Too many player streams"};
     }
@@ -1112,7 +1112,7 @@ RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared
                      enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2, false, false);
 
     auto audio_sender = std::shared_ptr<IAStream>(raw_sender, [self = shared_from_this(), name](const IAStream *ptr) {
-        --(self->preemptive);
+        self->preemptive.fetch_sub(1, std::memory_order_release);
         std::lock_guard<std::mutex> grd(self->mtx);
         auto iter = self->sounds.find(name);
         if (iter != self->sounds.cend())
@@ -1123,6 +1123,7 @@ RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared
         delete ptr;
     });
 
+    preemptive.fetch_add(1, std::memory_order_release);
     sounds.emplace(name, audio_sender);
     auto ret = audio_sender->connect(sink);
     if (!ret)
