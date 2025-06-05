@@ -638,7 +638,8 @@ IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
     : token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(_ch), enable_denoise(denoise), enable_reset(auto_reset),
       spf_ch(_ch), imap(_ch == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP), usr_name(_name), ias_ready(false),
       exec_timer(BG_SERVICE), exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE),
-      reset_strand(asio::make_strand(BG_SERVICE)), volume(50), muted(false), usr_cb(nullptr), usr_ptr(nullptr)
+      reset_strand(asio::make_strand(BG_SERVICE)), volume(50), muted(false), usr_cb(nullptr), req_frames(0),
+      usr_ptr(nullptr)
 {
     auto ret = create_device(_name);
     if (ret)
@@ -658,7 +659,7 @@ IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
     : token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(2), enable_denoise(denoise), enable_reset(false),
       spf_ch(dev_ch), imap(_imap), usr_name(_name), ias_ready(false), exec_timer(BG_SERVICE),
       exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE), reset_strand(asio::make_strand(BG_SERVICE)),
-      volume(50), muted(false), usr_cb(nullptr), usr_ptr(nullptr)
+      volume(50), muted(false), usr_cb(nullptr), req_frames(0), usr_ptr(nullptr)
 {
     DBG_ASSERT_GE(dev_ch, 2);
     DBG_ASSERT_LT(imap[0], dev_ch);
@@ -862,10 +863,12 @@ AudioDeviceName IAStream::name() const
     return usr_name;
 }
 
-void IAStream::register_callback(AudioInputCallBack cb, void *ptr)
+void IAStream::register_callback(AudioInputCallBack cb, unsigned int required_frames, void *ptr)
 {
     usr_cb = cb;
     usr_ptr = ptr;
+    req_frames = required_frames;
+    session = std::make_unique<SessionData>(req_frames * ch * sizeof(PCM_TYPE), 2, ch);
 }
 
 void IAStream::report_conns(std::vector<InfoLabel> &result)
@@ -939,7 +942,11 @@ RetCode IAStream::process_data()
     // raw data
     if (usr_cb)
     {
-        usr_cb(reinterpret_cast<PCM_TYPE *>(dev_buf.get()), idevice->ch(), dev_fr, usr_ptr);
+        session->store(reinterpret_cast<const char *>(dev_buf.get()), dev_fr * idevice->ch() * sizeof(PCM_TYPE));
+        if (session->load_aside(req_frames * ch * sizeof(PCM_TYPE)))
+        {
+            usr_cb(reinterpret_cast<PCM_TYPE *>(session->data()), idevice->ch(), req_frames, usr_ptr);
+        }
     }
 
     InterleavedView<PCM_TYPE> iview(reinterpret_cast<PCM_TYPE *>(dev_buf.get()), dev_fr, idevice->ch());
