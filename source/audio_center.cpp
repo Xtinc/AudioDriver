@@ -637,10 +637,11 @@ RetCode AudioCenter::disconnect(IToken itoken, OToken otoken, const std::string 
 
 RetCode AudioCenter::register_callback(IToken token, AudioInputCallBack cb, unsigned int frames, void *ptr)
 {
-    if (center_state.load() != State::CONNECTING)
+    auto state = center_state.load();
+    if (state != State::CONNECTING && state != State::INIT)
     {
-        AUDIO_ERROR_PRINT("AudioCenter not in CONNECTING state");
-        return {RetCode::ESTATE, "AudioCenter not in CONNECTING state"};
+        AUDIO_ERROR_PRINT("AudioCenter not in CONNECTING or INIT state");
+        return {RetCode::ESTATE, "AudioCenter not in CONNECTING or INIT state"};
     }
 
     if (!token)

@@ -164,6 +164,7 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     RetCode create_device(const AudioDeviceName &_name, unsigned int _fs, unsigned int _ch);
     RetCode swap_device(idevice_ptr &new_device);
     void schedule_auto_reset();
+    void schedule_callback();
     void reset_self();
 
   public:
@@ -200,6 +201,8 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     AudioInputCallBack usr_cb;
     unsigned int req_frames;
     void *usr_ptr;
+    asio::steady_timer cb_timer;
+    asio_strand cb_strand;
 };
 
 class AudioPlayer : public std::enable_shared_from_this<AudioPlayer>

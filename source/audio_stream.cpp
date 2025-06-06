@@ -639,7 +639,7 @@ IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
       spf_ch(_ch), imap(_ch == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP), usr_name(_name), ias_ready(false),
       exec_timer(BG_SERVICE), exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE),
       reset_strand(asio::make_strand(BG_SERVICE)), volume(50), muted(false), usr_cb(nullptr), req_frames(0),
-      usr_ptr(nullptr)
+      usr_ptr(nullptr), cb_timer(BG_SERVICE), cb_strand(asio::make_strand(BG_SERVICE))
 {
     auto ret = create_device(_name);
     if (ret)
@@ -659,7 +659,8 @@ IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
     : token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(2), enable_denoise(denoise), enable_reset(false),
       spf_ch(dev_ch), imap(_imap), usr_name(_name), ias_ready(false), exec_timer(BG_SERVICE),
       exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE), reset_strand(asio::make_strand(BG_SERVICE)),
-      volume(50), muted(false), usr_cb(nullptr), req_frames(0), usr_ptr(nullptr)
+      volume(50), muted(false), usr_cb(nullptr), req_frames(0), usr_ptr(nullptr), cb_timer(BG_SERVICE),
+      cb_strand(asio::make_strand(BG_SERVICE))
 {
     DBG_ASSERT_GE(dev_ch, 2);
     DBG_ASSERT_LT(imap[0], dev_ch);
@@ -750,6 +751,11 @@ RetCode IAStream::start()
         schedule_auto_reset();
     }
 
+    if (usr_cb)
+    {
+        schedule_callback();
+    }
+
     return ret;
 }
 
@@ -766,6 +772,11 @@ RetCode IAStream::stop()
     if (enable_reset)
     {
         reset_timer.cancel();
+    }
+
+    if (usr_cb)
+    {
+        cb_timer.cancel();
     }
 
     return idevice->stop();
@@ -943,10 +954,6 @@ RetCode IAStream::process_data()
     if (usr_cb)
     {
         session->store(reinterpret_cast<const char *>(dev_buf.get()), dev_fr * idevice->ch() * sizeof(PCM_TYPE));
-        if (session->load_aside(req_frames * ch * sizeof(PCM_TYPE)))
-        {
-            usr_cb(reinterpret_cast<PCM_TYPE *>(session->data()), idevice->ch(), req_frames, usr_ptr);
-        }
     }
 
     InterleavedView<PCM_TYPE> iview(reinterpret_cast<PCM_TYPE *>(dev_buf.get()), dev_fr, idevice->ch());
@@ -1066,6 +1073,31 @@ void IAStream::schedule_auto_reset()
 
         AUDIO_INFO_PRINT("Performing scheduled reset for stream token %u", self->token);
         self->reset_self();
+    }));
+}
+
+void IAStream::schedule_callback()
+{
+    if (!ias_ready)
+    {
+        return;
+    }
+
+    auto req_ti = req_frames * 1000 / fs;
+    cb_timer.expires_from_now(std::chrono::microseconds(req_ti * 1000));
+    cb_timer.async_wait(asio::bind_executor(cb_strand, [self = shared_from_this()](const asio::error_code &ec) {
+        if (ec)
+        {
+            AUDIO_DEBUG_PRINT("Callback timer error: %s", ec.message().c_str());
+            return;
+        }
+
+        if (self->session->load_aside(self->req_frames * self->ch * sizeof(PCM_TYPE)))
+        {
+            self->usr_cb(reinterpret_cast<PCM_TYPE *>(self->session->data()), self->ch, self->req_frames,
+                         self->usr_ptr);
+        }
+        self->schedule_callback();
     }));
 }
 
