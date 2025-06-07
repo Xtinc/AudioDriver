@@ -879,7 +879,7 @@ void IAStream::register_callback(AudioInputCallBack cb, unsigned int required_fr
     usr_cb = cb;
     usr_ptr = ptr;
     req_frames = required_frames;
-    session = std::make_unique<SessionData>(req_frames * ch * sizeof(PCM_TYPE), 2, ch);
+    session = std::make_unique<SessionData>(req_frames * ch * sizeof(PCM_TYPE), 3, ch);
 }
 
 void IAStream::report_conns(std::vector<InfoLabel> &result)
@@ -1084,7 +1084,7 @@ void IAStream::schedule_callback()
     }
 
     auto req_ti = req_frames * 1000 / fs;
-    cb_timer.expires_from_now(std::chrono::microseconds(req_ti * 1000));
+    cb_timer.expires_from_now(std::chrono::microseconds(req_ti * 1000 - 500));
     cb_timer.async_wait(asio::bind_executor(cb_strand, [self = shared_from_this()](const asio::error_code &ec) {
         if (ec)
         {

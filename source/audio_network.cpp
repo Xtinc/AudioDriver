@@ -90,8 +90,32 @@ bool KFifo::store_aside(size_t write_length)
 
 bool KFifo::load_aside(size_t read_length)
 {
-    memset(buffer_addr, 0, buf_length);
-    return load(buffer_addr, read_length);
+    if (read_length == 0)
+    {
+        return false;
+    }
+    
+    std::lock_guard<std::mutex> lck(io_mtx);
+    if (read_length > length)
+    {
+        return false;
+    }
+
+    if (max_length - head >= read_length)
+    {
+        memcpy(buffer_addr, memory_addr + head, read_length);
+        head = (head + read_length == max_length) ? 0 : head + read_length;
+    }
+    else
+    {
+        size_t first_part = max_length - head;
+        memcpy(buffer_addr, memory_addr + head, first_part);
+        memcpy(buffer_addr + first_part, memory_addr, read_length - first_part);
+        head = read_length - first_part;
+    }
+
+    length -= read_length;
+    return true;
 }
 
 // NetState implementation
