@@ -879,7 +879,7 @@ void IAStream::register_callback(AudioInputCallBack cb, unsigned int required_fr
     usr_cb = cb;
     usr_ptr = ptr;
     req_frames = required_frames;
-    session = std::make_unique<SessionData>(req_frames * ch * sizeof(PCM_TYPE), 3, ch);
+    session = std::make_unique<SessionData>(req_frames * sizeof(PCM_TYPE), 3, spf_ch);
 }
 
 void IAStream::report_conns(std::vector<InfoLabel> &result)
@@ -1092,9 +1092,9 @@ void IAStream::schedule_callback()
             return;
         }
 
-        if (self->session->load_aside(self->req_frames * self->ch * sizeof(PCM_TYPE)))
+        if (self->session->load_aside(self->req_frames * self->idevice->ch() * sizeof(PCM_TYPE)))
         {
-            self->usr_cb(reinterpret_cast<PCM_TYPE *>(self->session->data()), self->ch, self->req_frames,
+            self->usr_cb(reinterpret_cast<PCM_TYPE *>(self->session->data()), self->idevice->ch(), self->req_frames,
                          self->usr_ptr);
         }
         self->schedule_callback();
