@@ -418,6 +418,11 @@ void DRCompressor::process(ChannelBuffer<float> *input, float gain)
     const auto frames = input->num_frames();
     DBG_ASSERT_EQ(channels, input->num_channels());
 
+    if (gain < 0.1f && gain > -0.1f)
+    {
+        return;
+    }
+
     for (unsigned int c = 0; c < channels; c++)
     {
         MonoView<float> channel = input->channels_view()[c];

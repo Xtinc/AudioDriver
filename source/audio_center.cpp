@@ -428,17 +428,23 @@ RetCode AudioCenter::create(IToken itoken, OToken otoken, bool enable_network)
         return RetCode::EPARAM;
     }
 
-    if (oas->second->omap != DEFAULT_MONO_MAP && oas->second->omap != DEFAULT_DUAL_MAP)
+    if (oas->second->omap == DEFAULT_MONO_MAP)
     {
         ias_map[itoken.tok] =
             std::make_shared<IAStream>(itoken.tok, AudioDeviceName("virt", 0), enum2val(AudioPeriodSize::INR_20MS),
-                                       enum2val(AudioBandWidth::Full), 99, oas->second->omap, false);
+                                       enum2val(AudioBandWidth::Full), 1, false, false);
+    }
+    else if (oas->second->omap == DEFAULT_DUAL_MAP)
+    {
+        ias_map[itoken.tok] =
+            std::make_shared<IAStream>(itoken.tok, AudioDeviceName("virt", 0), enum2val(AudioPeriodSize::INR_20MS),
+                                       enum2val(AudioBandWidth::Full), 2, false, false);
     }
     else
     {
         ias_map[itoken.tok] =
             std::make_shared<IAStream>(itoken.tok, AudioDeviceName("virt", 0), enum2val(AudioPeriodSize::INR_20MS),
-                                       enum2val(AudioBandWidth::Full), 2, false, false);
+                                       enum2val(AudioBandWidth::Full), 99, oas->second->omap, false);
     }
 
     if (enable_network && net_mgr)
