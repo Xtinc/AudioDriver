@@ -444,6 +444,8 @@ const int16_t *NetDecoder::decode(const uint8_t *adpcm_data, size_t adpcm_size, 
     const uint8_t *in = adpcm_data;
     for (unsigned int ch = 0; ch < channels; ch++)
     {
+        int16_t predictor_value = static_cast<int16_t>(in[0] | (in[1] << 8));
+        decode_states[ch].predictor = predictor_value;
         in += 2;
         decode_states[ch].step_index = *in++;
         in++; // Skip reserved byte
