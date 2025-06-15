@@ -132,6 +132,14 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     using idevice_ptr = std::unique_ptr<AudioDevice>;
     using destinations = std::vector<std::weak_ptr<OAStream>>;
 
+    struct UsrCallBack
+    {
+        AudioInputCallBack cb;
+        unsigned int req_frs;
+        bool raw;
+        void *ptr;
+    };
+
   public:
     IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs, unsigned int _ch,
              bool enable_denoise, bool auto_reset);
@@ -154,7 +162,7 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     unsigned int get_volume() const;
     AudioDeviceName name() const;
 
-    void register_callback(AudioInputCallBack cb, unsigned int required_frames, void *ptr);
+    void register_callback(AudioInputCallBack cb, unsigned int required_frames, bool get_raw_data, void *ptr);
     void report_conns(std::vector<InfoLabel> &result);
 
   private:
@@ -196,11 +204,9 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     destinations dests;
     network_ptr networker;
     std::atomic_bool muted;
-    
+
     session_ptr session;
-    AudioInputCallBack usr_cb;
-    unsigned int req_frames;
-    void *usr_ptr;
+    UsrCallBack usr_cb;
     asio::steady_timer cb_timer;
     asio_strand cb_strand;
 };

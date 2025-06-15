@@ -501,10 +501,12 @@ class AudioCenter
      * @param token Input token
      * @param cb Callback function
      * @param required_frames Number of frames required for the callback
+     * @param get_raw_data Whether to get raw PCM data (true) or processed data (false)
      * @param ptr User data pointer to be passed to the callback function
      * @return RetCode indicating success or failure
      */
-    RetCode register_callback(IToken token, AudioInputCallBack cb, unsigned int required_frames, void *ptr);
+    RetCode register_callback(IToken token, AudioInputCallBack cb, unsigned int required_frames, bool get_raw_data,
+                              void *ptr);
 
     /**
      * @brief Directly pushes PCM data to an output stream

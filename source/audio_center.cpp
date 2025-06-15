@@ -641,7 +641,8 @@ RetCode AudioCenter::disconnect(IToken itoken, OToken otoken, const std::string 
     return ret;
 }
 
-RetCode AudioCenter::register_callback(IToken token, AudioInputCallBack cb, unsigned int frames, void *ptr)
+RetCode AudioCenter::register_callback(IToken token, AudioInputCallBack cb, unsigned int frames, bool get_raw_data,
+                                       void *ptr)
 {
     auto state = center_state.load();
     if (state != State::CONNECTING && state != State::INIT)
@@ -664,8 +665,8 @@ RetCode AudioCenter::register_callback(IToken token, AudioInputCallBack cb, unsi
         return {RetCode::EPARAM, "Invalid input token"};
     }
 
-    it->second->register_callback(cb, frames, ptr);
-    AUDIO_DEBUG_PRINT("Callback registered for input stream %u", token.tok);
+    it->second->register_callback(cb, frames, get_raw_data, ptr);
+    AUDIO_DEBUG_PRINT("Callback registered for input stream %u, get raw data: %d", token.tok, get_raw_data);
     return RetCode::OK;
 }
 

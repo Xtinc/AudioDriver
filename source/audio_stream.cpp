@@ -638,8 +638,8 @@ IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
     : token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(_ch), enable_denoise(denoise), enable_reset(auto_reset),
       spf_ch(_ch), imap(_ch == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP), usr_name(_name), ias_ready(false),
       exec_timer(BG_SERVICE), exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE),
-      reset_strand(asio::make_strand(BG_SERVICE)), volume(50), muted(false), usr_cb(nullptr), req_frames(0),
-      usr_ptr(nullptr), cb_timer(BG_SERVICE), cb_strand(asio::make_strand(BG_SERVICE))
+      reset_strand(asio::make_strand(BG_SERVICE)), volume(50), muted(false), usr_cb{nullptr, 0, false, nullptr},
+      cb_timer(BG_SERVICE), cb_strand(asio::make_strand(BG_SERVICE))
 {
     auto ret = create_device(_name);
     if (ret)
@@ -659,7 +659,7 @@ IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
     : token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(2), enable_denoise(denoise), enable_reset(false),
       spf_ch(dev_ch), imap(_imap), usr_name(_name), ias_ready(false), exec_timer(BG_SERVICE),
       exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE), reset_strand(asio::make_strand(BG_SERVICE)),
-      volume(50), muted(false), usr_cb(nullptr), req_frames(0), usr_ptr(nullptr), cb_timer(BG_SERVICE),
+      volume(50), muted(false), usr_cb{nullptr, 0, false, nullptr}, cb_timer(BG_SERVICE),
       cb_strand(asio::make_strand(BG_SERVICE))
 {
     DBG_ASSERT_GE(dev_ch, 2);
@@ -751,7 +751,7 @@ RetCode IAStream::start()
         schedule_auto_reset();
     }
 
-    if (usr_cb)
+    if (usr_cb.cb)
     {
         schedule_callback();
     }
@@ -774,7 +774,7 @@ RetCode IAStream::stop()
         reset_timer.cancel();
     }
 
-    if (usr_cb)
+    if (usr_cb.cb)
     {
         cb_timer.cancel();
     }
@@ -874,12 +874,13 @@ AudioDeviceName IAStream::name() const
     return usr_name;
 }
 
-void IAStream::register_callback(AudioInputCallBack cb, unsigned int required_frames, void *ptr)
+void IAStream::register_callback(AudioInputCallBack cb, unsigned int required_frames, bool get_raw_data, void *ptr)
 {
-    usr_cb = cb;
-    usr_ptr = ptr;
-    req_frames = required_frames;
-    session = std::make_unique<SessionData>(req_frames * sizeof(PCM_TYPE), 3, spf_ch);
+    usr_cb.cb = cb;
+    usr_cb.req_frs = required_frames;
+    usr_cb.raw = get_raw_data;
+    usr_cb.ptr = ptr;
+    session = std::make_unique<SessionData>(required_frames * sizeof(PCM_TYPE), 3, spf_ch);
 }
 
 void IAStream::report_conns(std::vector<InfoLabel> &result)
@@ -951,7 +952,7 @@ RetCode IAStream::process_data()
     }
 
     // raw data
-    if (usr_cb)
+    if (usr_cb.cb && usr_cb.raw)
     {
         session->store(reinterpret_cast<const char *>(dev_buf.get()), dev_fr * idevice->ch() * sizeof(PCM_TYPE));
     }
@@ -969,6 +970,11 @@ RetCode IAStream::process_data()
     }
 
     PCM_TYPE *src = &oview.data()[0];
+
+    if (usr_cb.cb && !usr_cb.raw)
+    {
+        session->store(reinterpret_cast<const char *>(src), ps * ch * sizeof(PCM_TYPE));
+    }
 
     for (const auto &dest : dests)
     {
@@ -1083,8 +1089,8 @@ void IAStream::schedule_callback()
         return;
     }
 
-    auto req_ti = req_frames * 1000 / fs;
-    cb_timer.expires_from_now(std::chrono::microseconds(req_ti * 1000 - 500));
+    auto req_ti = usr_cb.req_frs * 1000 / fs;
+    cb_timer.expires_from_now(std::chrono::microseconds(req_ti * 1000 - 100));
     cb_timer.async_wait(asio::bind_executor(cb_strand, [self = shared_from_this()](const asio::error_code &ec) {
         if (ec)
         {
@@ -1092,10 +1098,11 @@ void IAStream::schedule_callback()
             return;
         }
 
-        if (self->session->load_aside(self->req_frames * self->idevice->ch() * sizeof(PCM_TYPE)))
+        auto req_ch = self->usr_cb.raw ? self->idevice->ch() : self->ch;
+        if (self->session->load_aside(self->usr_cb.req_frs * req_ch * sizeof(PCM_TYPE)))
         {
-            self->usr_cb(reinterpret_cast<PCM_TYPE *>(self->session->data()), self->idevice->ch(), self->req_frames,
-                         self->usr_ptr);
+            self->usr_cb.cb(reinterpret_cast<PCM_TYPE *>(self->session->data()), req_ch, self->usr_cb.req_frs,
+                                self->usr_cb.ptr);
         }
         self->schedule_callback();
     }));
