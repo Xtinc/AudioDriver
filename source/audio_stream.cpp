@@ -97,7 +97,7 @@ OAStream::OAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
       omap(_omap == AudioChannelMap{} ? (_ch == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP) : _omap), fs(_fs),
       ps(fs * ti / 1000), ch(_ch), usr_name(_name), oas_ready(false), exec_timer(BG_SERVICE),
       exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE), reset_strand(asio::make_strand(BG_SERVICE)),
-      volume(50), muted(false)
+      muted(false)
 {
     DBG_ASSERT_LT(omap[0], ch);
     DBG_ASSERT_LT(omap[1], ch);
@@ -252,6 +252,7 @@ RetCode OAStream::direct_push(unsigned char itoken, unsigned int chan, unsigned 
         }
 
         it = result.first;
+        it->second->volume = 50;
         AUDIO_INFO_PRINT("%u receiver New connection: %u (IP: 0x%08X)", token, itoken, source_ip);
     }
 
@@ -305,7 +306,7 @@ RetCode OAStream::mute(unsigned char itoken, const std::string &ip)
         asio::ip::address_v4 addr = asio::ip::make_address_v4(ip);
         ip_address = addr.to_uint();
 
-        uint64_t composite_key = (static_cast<uint64_t>(ip_address) << 32) | itoken;
+        uint64_t composite_key = InfoLabel::make_composite(ip_address, itoken);
 
         std::lock_guard<std::mutex> grd(session_mtx);
         auto it = sessions.find(composite_key);
@@ -362,7 +363,7 @@ RetCode OAStream::unmute(unsigned char itoken, const std::string &ip)
         asio::ip::address_v4 addr = asio::ip::make_address_v4(ip);
         ip_address = addr.to_uint();
 
-        uint64_t composite_key = (static_cast<uint64_t>(ip_address) << 32) | itoken;
+        uint64_t composite_key = InfoLabel::make_composite(ip_address, itoken);
 
         std::lock_guard<std::mutex> grd(session_mtx);
         auto it = sessions.find(composite_key);
@@ -392,14 +393,81 @@ RetCode OAStream::set_volume(unsigned int vol)
         AUDIO_ERROR_PRINT("Invalid volume value: %u", vol);
         return {RetCode::EPARAM, "Invalid volume value"};
     }
-    AUDIO_INFO_PRINT("Token %u volume set to %u, gain: %.2f db", token, vol, volume2gain(vol));
-    volume.store(vol);
+
+    AUDIO_INFO_PRINT("Token %u all volume set to %u, gain: %.2f db", token, vol, volume2gain(vol));
+
+    std::lock_guard<std::mutex> grd(session_mtx);
+    for (auto &session_pair : sessions)
+    {
+        session_pair.second->volume = vol;
+    }
+
     return RetCode::OK;
 }
 
-unsigned int OAStream::get_volume() const
+RetCode OAStream::set_session_volume(unsigned int vol, unsigned char itoken, const std::string &ip)
 {
-    return volume.load();
+    if (vol > 100)
+    {
+        AUDIO_ERROR_PRINT("Invalid volume value: %u", vol);
+        return {RetCode::EPARAM, "Invalid volume value"};
+    }
+
+    if (ip.empty())
+    {
+        std::lock_guard<std::mutex> grd(session_mtx);
+        int updated_count = 0;
+
+        for (auto &session_pair : sessions)
+        {
+            if ((session_pair.first & 0xFF) == itoken)
+            {
+                session_pair.second->volume = vol;
+                updated_count++;
+            }
+        }
+
+        if (updated_count > 0)
+        {
+            AUDIO_INFO_PRINT("Set volume to %u for %d sessions with token %u (all IPs), gain: %.2f db", vol,
+                             updated_count, itoken, volume2gain(vol));
+            return RetCode::OK;
+        }
+        else
+        {
+            AUDIO_INFO_PRINT("No sessions found with token %u to set volume", itoken);
+            return {RetCode::NOACTION, "Session not found"};
+        }
+    }
+
+    try
+    {
+        uint32_t ip_address = 0;
+        asio::ip::address_v4 addr = asio::ip::make_address_v4(ip);
+        ip_address = addr.to_uint();
+
+        uint64_t composite_key = InfoLabel::make_composite(ip_address, itoken);
+
+        std::lock_guard<std::mutex> grd(session_mtx);
+        auto it = sessions.find(composite_key);
+        if (it != sessions.end())
+        {
+            it->second->volume = vol;
+            AUDIO_INFO_PRINT("Set volume to %u for session from IP %s with token %u, gain: %.2f db", vol, ip.c_str(),
+                             itoken, volume2gain(vol));
+            return RetCode::OK;
+        }
+        else
+        {
+            AUDIO_ERROR_PRINT("Cannot find session from IP %s with token %u", ip.c_str(), itoken);
+            return {RetCode::NOACTION, "Session not found"};
+        }
+    }
+    catch (const std::exception &e)
+    {
+        AUDIO_ERROR_PRINT("Invalid IP address format: %s - %s", ip.c_str(), e.what());
+        return {RetCode::FAILED, "Invalid IP address format"};
+    }
 }
 
 AudioDeviceName OAStream::name() const
@@ -476,7 +544,6 @@ void OAStream::process_data()
         return;
     }
 
-    auto gain = volume2gain(volume.load());
     std::memset(databuf.get(), 0, ch * ps * sizeof(PCM_TYPE));
 
     {
@@ -514,7 +581,8 @@ void OAStream::process_data()
             InterleavedView<const PCM_TYPE> iview(session_source, session_frames, session_channels);
             InterleavedView<PCM_TYPE> oview(reinterpret_cast<PCM_TYPE *>(mix_buf.get()), ps, ch);
 
-            auto ret = context->sampler.process(iview, oview, gain);
+            float session_gain = volume2gain(context->volume);
+            auto ret = context->sampler.process(iview, oview, session_gain);
             if (ret != RetCode::OK)
             {
                 AUDIO_DEBUG_PRINT("Failed to process data: %s", ret.what());
@@ -960,8 +1028,8 @@ RetCode IAStream::process_data()
     InterleavedView<PCM_TYPE> iview(reinterpret_cast<PCM_TYPE *>(dev_buf.get()), dev_fr, idevice->ch());
     InterleavedView<PCM_TYPE> oview(reinterpret_cast<PCM_TYPE *>(usr_buf.get()), ps, ch);
 
-    auto gain = volume2gain(volume.load());
-    ret = sampler->process(iview, oview, gain);
+    auto volume_gain = volume2gain(volume.load());
+    ret = sampler->process(iview, oview, volume_gain);
 
     if (ret != RetCode::OK)
     {
@@ -1102,7 +1170,7 @@ void IAStream::schedule_callback()
         if (self->session->load_aside(self->usr_cb.req_frs * req_ch * sizeof(PCM_TYPE)))
         {
             self->usr_cb.cb(reinterpret_cast<PCM_TYPE *>(self->session->data()), req_ch, self->usr_cb.req_frs,
-                                self->usr_cb.ptr);
+                            self->usr_cb.ptr);
         }
         self->schedule_callback();
     }));

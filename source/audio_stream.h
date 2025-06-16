@@ -49,11 +49,12 @@ class OAStream : public std::enable_shared_from_this<OAStream>
         bool enabled;
         SessionData session;
         LocSampler sampler;
+        unsigned int volume; // 添加音量属性
 
         SessionContext(unsigned int src_fs, unsigned int src_ch, unsigned int dst_fs, unsigned int dst_ch,
                        unsigned int max_frames, const AudioChannelMap &imap, const AudioChannelMap &omap)
             : enabled(true), session(max_frames * sizeof(PCM_TYPE), 5, src_ch),
-              sampler(src_fs, src_ch, dst_fs, dst_ch, max_frames, imap, omap, false)
+              sampler(src_fs, src_ch, dst_fs, dst_ch, max_frames, imap, omap, false), volume(50)
         {
         }
     };
@@ -79,9 +80,8 @@ class OAStream : public std::enable_shared_from_this<OAStream>
     void unmute();
     RetCode mute(unsigned char token, const std::string &ip = "");
     RetCode unmute(unsigned char token, const std::string &ip = "");
-
     RetCode set_volume(unsigned int vol);
-    unsigned int get_volume() const;
+    RetCode set_session_volume(unsigned int vol, unsigned char itoken, const std::string &ip = "");
     AudioDeviceName name() const;
 
     void register_listener(const std::shared_ptr<IAStream> &ias);
@@ -116,7 +116,6 @@ class OAStream : public std::enable_shared_from_this<OAStream>
     obuffer_ptr mix_buf;
     obuffer_ptr databuf;
     odevice_ptr odevice;
-    std::atomic_uint volume;
 
     std::mutex session_mtx;
     std::map<uint64_t, context_ptr> sessions;

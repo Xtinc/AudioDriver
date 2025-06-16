@@ -550,6 +550,17 @@ class AudioCenter
     RetCode set_volume(AudioToken token, unsigned int vol);
 
     /**
+     * @brief Sets the volume for a specific session in an output stream
+     *
+     * @param otoken Output token
+     * @param itoken Input token of the session to adjust
+     * @param vol Volume level (0-100)
+     * @param ip IP address of the session (empty string for all IPs with the given input token)
+     * @return RetCode indicating success or failure
+     */
+    RetCode set_session_volume(OToken otoken, IToken itoken, unsigned int vol, const std::string &ip = "");
+
+    /**
      * @brief Mutes or unmutes a stream
      *
      * @param token Audio token (can be either input or output)

@@ -977,3 +977,27 @@ void AudioCenter::report_connections() const
 
     merge_label(ias_label, oas_label);
 }
+
+RetCode AudioCenter::set_session_volume(OToken otoken, IToken itoken, unsigned int vol, const std::string &ip)
+{
+    if (center_state.load() != State::READY)
+    {
+        AUDIO_ERROR_PRINT("AudioCenter not in READY state");
+        return {RetCode::ESTATE, "AudioCenter not in READY state"};
+    }
+
+    if (!otoken)
+    {
+        AUDIO_ERROR_PRINT("Invalid output token: %u", otoken.tok);
+        return {RetCode::EPARAM, "Invalid output token"};
+    }
+
+    auto oas = oas_map.find(otoken.tok);
+    if (oas == oas_map.end())
+    {
+        AUDIO_ERROR_PRINT("Output token not found: %u", otoken.tok);
+        return {RetCode::FAILED, "Output token not found"};
+    }
+
+    return oas->second->set_session_volume(vol, itoken.tok, ip);
+}
