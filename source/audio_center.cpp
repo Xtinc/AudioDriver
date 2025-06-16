@@ -192,7 +192,7 @@ static void merge_label(std::vector<InfoLabel> &ias_label, std::vector<InfoLabel
 AudioCenter::AudioCenter(bool enable_network, unsigned short port) : center_state(State::INIT)
 {
     monitor = std::make_unique<AudioMonitor>(BG_SERVICE);
-    player = std::make_shared<AudioPlayer>(USER_MAX_AUDIO_TOKEN);
+    player = std::make_shared<AudioPlayer>(WAVE_PLAYER_TOKEN.tok);
     if (enable_network)
     {
         net_mgr = std::make_shared<NetWorker>(BG_SERVICE, port);

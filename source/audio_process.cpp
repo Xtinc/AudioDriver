@@ -315,7 +315,7 @@ void LocSampler::deinterleave_s16_f16(const InterleavedView<const PCM_TYPE> &int
                                       ChannelBuffer<float> *deinterleaved) const
 {
     // Ensure input and output have same number of samples per channel
-    DBG_ASSERT_GE(SamplesPerChannel(interleaved), deinterleaved->num_frames());
+    DBG_ASSERT_LE(SamplesPerChannel(interleaved), deinterleaved->num_frames());
 
     // Scale factor to normalize 16-bit PCM to float [-1.0, 1.0]
     constexpr float kScaling = 1.f / 32768.f;
@@ -338,7 +338,7 @@ void LocSampler::interleave_f16_s16(ChannelBuffer<float> *deinterleaved,
                                     const InterleavedView<PCM_TYPE> &interleaved) const
 {
     // Ensure input and output have same number of samples per channel
-    DBG_ASSERT_EQ(interleaved.samples_per_channel(), deinterleaved->num_frames());
+    DBG_ASSERT_LE(interleaved.samples_per_channel(), deinterleaved->num_frames());
     const auto samples_per_channel = interleaved.samples_per_channel();
 
     // Convert each channel from float to 16-bit PCM and interleave based on channel map

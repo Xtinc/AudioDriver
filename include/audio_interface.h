@@ -303,6 +303,17 @@ struct IToken : public AudioToken
     constexpr explicit IToken(unsigned char t) noexcept : AudioToken(t <= USER_MAX_AUDIO_TOKEN / 2 ? t : INVALID_TOKEN)
     {
     }
+
+    /**
+     * @brief Construct an input token from an AudioToken
+     * @param t AudioToken to convert
+     * @note This constructor allows conversion from AudioToken to IToken
+     *       if the value is within the invalid range for input tokens.
+     */
+    constexpr explicit IToken(AudioToken t) noexcept : AudioToken(t)
+    {
+    }
+
     using AudioToken::operator==;
     using AudioToken::operator!=;
 };
@@ -328,6 +339,17 @@ struct OToken : public AudioToken
         : AudioToken(t < USER_MAX_AUDIO_TOKEN ? (t > USER_MAX_AUDIO_TOKEN / 2 ? t : INVALID_TOKEN) : INVALID_TOKEN)
     {
     }
+
+    /**
+     * @brief Construct an output token from an AudioToken
+     * @param t AudioToken to convert
+     * @note This constructor allows conversion from AudioToken to OToken
+     *       if the value is within the invalid range for input tokens.
+     */
+    constexpr explicit OToken(AudioToken t) noexcept : AudioToken(t)
+    {
+    }
+
     using AudioToken::operator==;
     using AudioToken::operator!=;
 };
@@ -361,6 +383,11 @@ constexpr auto USR_DUMMY_IN = 100_itk;
  * @brief Constant for dummy output token
  */
 constexpr auto USR_DUMMY_OUT = 200_otk;
+
+/**
+ * @brief Token for audio player
+ */
+constexpr auto WAVE_PLAYER_TOKEN = IToken(AudioToken(USER_MAX_AUDIO_TOKEN));
 
 // Forward declarations
 class IAStream;

@@ -45,14 +45,14 @@ constexpr uint8_t NET_PROBE_MAGIC = 0xBB;
 constexpr uint8_t NET_AUDIO_MAGIC = 0xBD;
 constexpr uint8_t NET_FEC_MAGIC = 0xBC;
 constexpr unsigned int NETWORK_MAX_FRAMES = enum2val(AudioPeriodSize::INR_40MS) * enum2val(AudioBandWidth::Full) / 1000;
-constexpr unsigned int NETWORK_MAX_BUFFER_SIZE = NETWORK_MAX_FRAMES + 128;
+constexpr unsigned int NETWORK_MAX_BUFFER_SIZE = NETWORK_MAX_FRAMES * 2 + 128;
 
 // Unified FEC processor for both encoding and recovery
 class FECProcessor
 {
   public:
     static constexpr size_t GROUP_SIZE = 3;
-    static constexpr size_t MAX_PACKET_SIZE = NETWORK_MAX_FRAMES + 128;
+    static constexpr size_t MAX_PACKET_SIZE = NETWORK_MAX_BUFFER_SIZE;
 
     FECProcessor();
     void reset();
