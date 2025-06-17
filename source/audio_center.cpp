@@ -944,7 +944,7 @@ RetCode AudioCenter::stop(const std::string &path)
 void AudioCenter::schedule_report_timer() const
 {
     auto timer = std::make_shared<asio::steady_timer>(BG_SERVICE, std::chrono::seconds(87));
-    timer->async_wait([this](const asio::error_code &error) {
+    timer->async_wait([this, timer](const asio::error_code &error) {
         if (!error && center_state.load() == State::READY)
         {
             report_connections();

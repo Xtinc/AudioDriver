@@ -1290,18 +1290,18 @@ RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared
         new IAStream(static_cast<unsigned char>(token + preemptive), AudioDeviceName(name, cycles),
                      enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2, false, false);
 
-    auto audio_sender = std::shared_ptr<IAStream>(raw_sender, [this, name](const IAStream *ptr) {
-        --preemptive;
-        std::lock_guard<std::mutex> grd(mtx);
-        auto iter = sounds.find(name);
-        if (iter != sounds.cend())
+    auto audio_sender = std::shared_ptr<IAStream>(raw_sender, [self = shared_from_this(), name](const IAStream *ptr) {
+        self->preemptive.fetch_sub(1, std::memory_order_relaxed);
+        std::lock_guard<std::mutex> grd(self->mtx);
+        auto iter = self->sounds.find(name);
+        if (iter != self->sounds.cend())
         {
-            sounds.erase(iter);
+            self->sounds.erase(iter);
         }
 
         delete ptr;
-        AUDIO_INFO_PRINT("Remote stream for file %s released", name.c_str());
     });
+    preemptive.fetch_add(1, std::memory_order_relaxed);
 
     auto init_result = audio_sender->initialize_network(networker);
     if (!init_result)
@@ -1318,12 +1318,10 @@ RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared
         return add_result;
     }
 
-    ++preemptive;
     {
         std::lock_guard<std::mutex> grd(mtx);
         if (sounds.find(name) != sounds.cend())
         {
-            --preemptive;
             networker->del_destination(audio_sender->token, remote_token, remote_ip, port);
             return {RetCode::FAILED, "Stream already exists"};
         }
@@ -1334,8 +1332,6 @@ RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared
     if (!start_result)
     {
         std::lock_guard<std::mutex> grd(mtx);
-        sounds.erase(name);
-        --preemptive;
         networker->del_destination(audio_sender->token, remote_token, remote_ip, port);
         AUDIO_ERROR_PRINT("Failed to start streaming: %s", start_result.what());
         return start_result;
