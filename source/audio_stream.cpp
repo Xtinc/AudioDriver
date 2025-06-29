@@ -1197,7 +1197,7 @@ void IAStream::reset_self()
 }
 
 // AudioPlayer
-AudioPlayer::AudioPlayer(unsigned char _token) : token(_token), preemptive(0)
+AudioPlayer::AudioPlayer(unsigned char _token) : token(_token), preemptive(0), volume(50)
 {
 }
 
@@ -1239,6 +1239,9 @@ RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared
 
     preemptive.fetch_add(1, std::memory_order_relaxed);
     sounds.emplace(name, audio_sender);
+    
+    audio_sender->set_volume(volume.load());
+    
     auto ret = audio_sender->connect(sink);
     if (!ret)
     {
@@ -1266,6 +1269,29 @@ RetCode AudioPlayer::stop(const std::string &name)
         }
     }
     return sender->stop();
+}
+
+RetCode AudioPlayer::set_volume(unsigned int vol)
+{
+    if (vol > 100)
+    {
+        AUDIO_ERROR_PRINT("Invalid volume value: %u", vol);
+        return {RetCode::EPARAM, "Invalid volume value"};
+    }
+
+    volume.store(vol);
+    AUDIO_INFO_PRINT("Player global volume set to %u, gain: %.2f db", vol, volume2gain(vol));
+
+    std::lock_guard<std::mutex> grd(mtx);
+    for (auto &sound_pair : sounds)
+    {
+        if (auto stream = sound_pair.second.lock())
+        {
+            stream->set_volume(vol);
+        }
+    }
+
+    return RetCode::OK;
 }
 
 RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared_ptr<NetWorker> &networker,
@@ -1327,6 +1353,8 @@ RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared
         }
         sounds.emplace(name, audio_sender);
     }
+
+    audio_sender->set_volume(volume.load());
 
     auto start_result = audio_sender->start();
     if (!start_result)

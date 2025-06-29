@@ -941,6 +941,29 @@ RetCode AudioCenter::stop(const std::string &path)
     return ret;
 }
 
+RetCode AudioCenter::set_player_volume(unsigned int vol)
+{
+    if (center_state.load() != State::READY)
+    {
+        AUDIO_ERROR_PRINT("AudioCenter not in READY state");
+        return {RetCode::ESTATE, "AudioCenter not in READY state"};
+    }
+
+    if (vol > 100)
+    {
+        AUDIO_ERROR_PRINT("Invalid volume level: %u, volume should be between 0 and 100", vol);
+        return {RetCode::EPARAM, "Invalid volume level"};
+    }
+
+    AUDIO_INFO_PRINT("Setting player global volume to %u", vol);
+    auto ret = player->set_volume(vol);
+    if (!ret)
+    {
+        AUDIO_ERROR_PRINT("Failed to set player volume: %s", ret.what());
+    }
+    return ret;
+}
+
 void AudioCenter::schedule_report_timer() const
 {
     auto timer = std::make_shared<asio::steady_timer>(BG_SERVICE, std::chrono::seconds(87));

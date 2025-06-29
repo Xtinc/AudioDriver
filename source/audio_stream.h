@@ -220,11 +220,13 @@ class AudioPlayer : public std::enable_shared_from_this<AudioPlayer>
     RetCode play(const std::string &name, int cycles, const std::shared_ptr<NetWorker> &networker, uint8_t remote_token,
                  const std::string &remote_ip, uint16_t port);
     RetCode stop(const std::string &name);
+    RetCode set_volume(unsigned int vol);
 
   private:
     const unsigned char token;
     std::mutex mtx;
     std::atomic_int preemptive;
+    std::atomic_uint volume;
     std::map<std::string, std::weak_ptr<IAStream>> sounds;
 };
 

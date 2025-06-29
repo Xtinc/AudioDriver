@@ -628,6 +628,16 @@ class AudioCenter
      */
     RetCode stop(const std::string &path);
 
+    /**
+     * @brief Sets the global volume for audio file playback
+     *
+     * This affects all currently playing and future audio files.
+     *
+     * @param vol Volume level (0-100)
+     * @return RetCode indicating success or failure
+     */
+    RetCode set_player_volume(unsigned int vol);
+
   private:
     /**
      * @brief Schedules the regular connection report timer
