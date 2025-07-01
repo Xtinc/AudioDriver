@@ -625,9 +625,9 @@ static RetCode resolve_endpoint(const std::string &ip, uint16_t port, asio::ip::
     }
 }
 
-NetWorker::NetWorker(asio::io_context &io_context, uint16_t port)
-    : retry_count(0), io_context(io_context), running(false), receive_buffer(new char[NETWORK_MAX_BUFFER_SIZE]),
-      stats_timer(io_context)
+NetWorker::NetWorker(asio::io_context &io_context, uint16_t port, const std::string &local_ip)
+    : retry_count(0), io_context(io_context), running(false), local_session_id(0),
+      receive_buffer(new char[NETWORK_MAX_BUFFER_SIZE]), stats_timer(io_context)
 {
     try
     {
@@ -645,6 +645,13 @@ NetWorker::NetWorker(asio::io_context &io_context, uint16_t port)
         if (ec)
         {
             AUDIO_ERROR_PRINT("Failed to bind socket on port %d: %s", port, ec.message().c_str());
+        }
+
+        asio::error_code addr_ec;
+        auto addr = asio::ip::make_address_v4(local_ip, addr_ec);
+        if (!addr_ec)
+        {
+            local_session_id = addr.to_uint();
         }
 
         AUDIO_INFO_PRINT("NetWorker initialized on port %d", socket->local_endpoint().port());
@@ -1097,8 +1104,7 @@ void NetWorker::handle_receive(const asio::error_code &error, std::size_t bytes_
             auto data_header = reinterpret_cast<const DataPacket *>(receive_buffer.get());
             const auto *payload = reinterpret_cast<const uint8_t *>(receive_buffer.get() + sizeof(DataPacket));
             size_t payload_size = bytes_transferred - sizeof(DataPacket);
-            uint32_t source_ip = sender_endpoint.address().is_v4() ? sender_endpoint.address().to_v4().to_uint() : 0;
-            process_data_packet(data_header, payload, payload_size, source_ip);
+            process_data_packet(data_header, payload, payload_size);
         }
     }
 
@@ -1124,11 +1130,11 @@ void NetWorker::retry_receive_with_backoff()
     });
 }
 
-NetWorker::DecoderContext &NetWorker::get_decoder(uint8_t sender_id, uint32_t source_ip, unsigned int channels)
+NetWorker::DecoderContext &NetWorker::get_decoder(uint8_t sender_id, uint32_t session_id, unsigned int channels)
 {
     std::lock_guard<std::mutex> lock(decoders_mutex);
 
-    uint64_t composite_key = InfoLabel::make_composite(source_ip, sender_id);
+    uint64_t composite_key = InfoLabel::make_composite(session_id, sender_id);
     auto it = decoders.find(composite_key);
     if (it == decoders.end())
     {
@@ -1140,8 +1146,7 @@ NetWorker::DecoderContext &NetWorker::get_decoder(uint8_t sender_id, uint32_t so
 }
 
 // Unified packet processing methods
-void NetWorker::process_data_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size,
-                                    uint32_t source_ip)
+void NetWorker::process_data_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size)
 {
     if (!validate_packet(header, payload, payload_size))
     {
@@ -1150,11 +1155,11 @@ void NetWorker::process_data_packet(const DataPacket *header, const uint8_t *pay
 
     if (header->is_fec)
     {
-        handle_fec_packet(header, payload, payload_size, source_ip);
+        handle_fec_packet(header, payload, payload_size);
     }
     else
     {
-        handle_audio_packet(header, payload, payload_size, source_ip);
+        handle_audio_packet(header, payload, payload_size);
     }
 }
 
@@ -1164,8 +1169,7 @@ bool NetWorker::validate_packet(const DataPacket *header, const uint8_t *payload
            payload_size <= FECProcessor::MAX_PACKET_SIZE;
 }
 
-void NetWorker::handle_audio_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size,
-                                    uint32_t source_ip)
+void NetWorker::handle_audio_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size)
 {
     AudioBandWidth sample_enum = byte_to_bandwidth(header->sample_rate);
     if (sample_enum == AudioBandWidth::Unknown)
@@ -1173,18 +1177,17 @@ void NetWorker::handle_audio_packet(const DataPacket *header, const uint8_t *pay
         return;
     }
 
-    auto &decoder_context = get_decoder(header->sender_id, source_ip, header->channels);
+    auto &decoder_context = get_decoder(header->sender_id, header->session_id, header->channels);
 
     // Add to FEC recovery group
     decoder_context.fec_processor->add_received_packet(payload, payload_size, header->sequence);
 
     // Process and deliver audio immediately
     process_and_deliver_audio(header->sender_id, header->receiver_id, header->channels, header->sequence,
-                              header->timestamp, payload, payload_size, source_ip, sample_enum);
+                              header->timestamp, payload, payload_size, header->session_id, sample_enum);
 }
 
-void NetWorker::handle_fec_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size,
-                                  uint32_t source_ip)
+void NetWorker::handle_fec_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size)
 {
     AudioBandWidth sample_enum = byte_to_bandwidth(header->sample_rate);
     if (sample_enum == AudioBandWidth::Unknown)
@@ -1192,7 +1195,7 @@ void NetWorker::handle_fec_packet(const DataPacket *header, const uint8_t *paylo
         return;
     }
 
-    auto &decoder_context = get_decoder(header->sender_id, source_ip, header->channels);
+    auto &decoder_context = get_decoder(header->sender_id, header->session_id, header->channels);
 
     // Add FEC data and try recovery
     if (decoder_context.fec_processor->add_fec_packet(payload, payload_size))
@@ -1213,7 +1216,7 @@ void NetWorker::handle_fec_packet(const DataPacket *header, const uint8_t *paylo
                     {
                         uint32_t missing_seq = group_base + i;
                         process_and_deliver_audio(header->sender_id, header->receiver_id, header->channels, missing_seq,
-                                                  header->timestamp, recovered_data, recovered_size, source_ip,
+                                                  header->timestamp, recovered_data, recovered_size, header->session_id,
                                                   sample_enum);
                         break; // Only recover one missing packet
                     }
@@ -1225,28 +1228,28 @@ void NetWorker::handle_fec_packet(const DataPacket *header, const uint8_t *paylo
 
 void NetWorker::process_and_deliver_audio(uint8_t sender_id, uint8_t receiver_id, uint8_t channels, uint32_t sequence,
                                           uint64_t timestamp, const uint8_t *adpcm_data, size_t adpcm_size,
-                                          uint32_t source_ip, AudioBandWidth sample_enum)
+                                          uint32_t session_id, AudioBandWidth sample_enum)
 {
     if (!adpcm_data || adpcm_size == 0)
     {
         return;
     }
 
-    auto &decoder_context = get_decoder(sender_id, source_ip, channels);
+    auto &decoder_context = get_decoder(sender_id, session_id, channels);
     decoder_context.update_stats(sequence, timestamp);
 
     unsigned int frames = 0;
     const int16_t *decoded_pcm = decoder_context.decoder->decode(adpcm_data, adpcm_size, frames);
     if (!decoded_pcm || frames == 0)
     {
-        AUDIO_ERROR_PRINT("Failed to decode audio data from sender %u", sender_id);
+        AUDIO_ERROR_PRINT("Failed to decode audio data from sender %u (session 0x%08X)", sender_id, session_id);
         return;
     }
 
     auto receiver_it = receivers.find(receiver_id);
     if (receiver_it != receivers.end())
     {
-        receiver_it->second(sender_id, channels, frames, enum2val(sample_enum), decoded_pcm, source_ip);
+        receiver_it->second(sender_id, channels, frames, enum2val(sample_enum), decoded_pcm, session_id);
     }
     else
     {
@@ -1268,10 +1271,11 @@ void NetWorker::send_data_packet(const Destination &dest, uint8_t sender_id, uin
     header.sender_id = sender_id;
     header.receiver_id = receiver_id;
     header.is_fec = is_fec ? 1 : 0;
-    header.sequence = sequence;
-    header.timestamp = timestamp;
     header.channels = channels;
     header.sample_rate = sample_rate;
+    header.sequence = sequence;
+    header.session_id = local_session_id;
+    header.timestamp = timestamp;
 
     std::array<asio::const_buffer, 2> buffers = {asio::buffer(&header, sizeof(header)), asio::buffer(data, size)};
 

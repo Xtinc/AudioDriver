@@ -475,32 +475,33 @@ class NetDecoder
 
 struct ProbePacket
 {
-    uint8_t magic_num;
-    uint8_t sender_id;
-    uint8_t receiver_id;
-    uint8_t is_response;
-    uint32_t sequence;
-    uint64_t timestamp;
+    uint8_t magic_num;   // 1 byte  - offset 0
+    uint8_t sender_id;   // 1 byte  - offset 1
+    uint8_t receiver_id; // 1 byte  - offset 2
+    uint8_t is_response; // 1 byte  - offset 3
+    uint32_t sequence;   // 4 bytes - offset 4 (aligned)
+    uint64_t timestamp;  // 8 bytes - offset 8 (aligned)
 };
 
 struct DataPacket
 {
-    uint8_t magic_num;
-    uint8_t sender_id;
-    uint8_t receiver_id;
-    uint8_t is_fec;
-    uint32_t sequence;
-    uint64_t timestamp;
-    uint8_t channels;
-    uint8_t sample_rate;
-    uint8_t padding[2];
+    uint8_t magic_num;   // 1 byte  - offset 0
+    uint8_t sender_id;   // 1 byte  - offset 1
+    uint8_t receiver_id; // 1 byte  - offset 2
+    uint8_t is_fec;      // 1 byte  - offset 3
+    uint8_t channels;    // 1 byte  - offset 4
+    uint8_t sample_rate; // 1 byte  - offset 5
+    uint8_t padding[2];  // 2 bytes - offset 6 (for 8-byte alignment)
+    uint32_t sequence;   // 4 bytes - offset 8 (aligned)
+    uint32_t session_id; // 4 bytes - offset 12 (aligned)
+    uint64_t timestamp;  // 8 bytes - offset 16 (aligned)
 };
 
 class NetWorker : public std::enable_shared_from_this<NetWorker>
 {
   public:
     using ReceiveCallback = std::function<void(uint8_t sender_id, unsigned int channels, unsigned int frames,
-                                               unsigned int sample_rate, const int16_t *data, uint32_t source_ip)>;
+                                               unsigned int sample_rate, const int16_t *data, uint32_t session_id)>;
     using ReceiverContext = ReceiveCallback;
 
   private:
@@ -567,7 +568,7 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     };
 
   public:
-    explicit NetWorker(asio::io_context &io_context, uint16_t port);
+    explicit NetWorker(asio::io_context &io_context, uint16_t port, const std::string &local_ip);
     ~NetWorker();
 
     RetCode start();
@@ -591,16 +592,16 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     void process_probe_packet(const ProbePacket *probe, const asio::ip::udp::endpoint &endpoint);
     void handle_receive(const asio::error_code &error, std::size_t bytes);
     void retry_receive_with_backoff();
-    DecoderContext &get_decoder(uint8_t sender_id, uint32_t source_ip, unsigned int channels);
+    DecoderContext &get_decoder(uint8_t sender_id, uint32_t session_id, unsigned int channels);
     void process_and_deliver_audio(uint8_t sender_id, uint8_t receiver_id, uint8_t channels, uint32_t sequence,
-                                   uint64_t timestamp, const uint8_t *adpcm_data, size_t adpcm_size, uint32_t source_ip,
-                                   AudioBandWidth sample_enum);
+                                   uint64_t timestamp, const uint8_t *adpcm_data, size_t adpcm_size,
+                                   uint32_t session_id, AudioBandWidth sample_enum);
 
     // Unified packet processing
-    void process_data_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size, uint32_t source_ip);
+    void process_data_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size);
     bool validate_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size);
-    void handle_audio_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size, uint32_t source_ip);
-    void handle_fec_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size, uint32_t source_ip);
+    void handle_audio_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size);
+    void handle_fec_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size);
 
     // FEC related methods
     void send_data_packet(const Destination &dest, uint8_t sender_id, uint8_t receiver_id, uint32_t sequence,
@@ -617,6 +618,7 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
 
     asio::io_context &io_context;
     std::atomic<bool> running;
+    uint32_t local_session_id;
 
     std::unique_ptr<asio::ip::udp::socket> socket;
     std::unique_ptr<char[]> receive_buffer;

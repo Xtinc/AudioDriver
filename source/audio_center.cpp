@@ -189,13 +189,13 @@ static void merge_label(std::vector<InfoLabel> &ias_label, std::vector<InfoLabel
 }
 
 // AudioCenter
-AudioCenter::AudioCenter(bool enable_network, unsigned short port) : center_state(State::INIT)
+AudioCenter::AudioCenter(bool enable_network, unsigned short port, const std::string &local_ip) : center_state(State::INIT)
 {
     monitor = std::make_unique<AudioMonitor>(BG_SERVICE);
     player = std::make_shared<AudioPlayer>(WAVE_PLAYER_TOKEN.tok);
     if (enable_network)
     {
-        net_mgr = std::make_shared<NetWorker>(BG_SERVICE, port);
+        net_mgr = std::make_shared<NetWorker>(BG_SERVICE, port, local_ip);
     }
 }
 
@@ -471,6 +471,9 @@ RetCode AudioCenter::prepare()
         AUDIO_ERROR_PRINT("AudioCenter not in INIT state");
         return {RetCode::ESTATE, "AudioCenter not in INIT state"};
     }
+
+    AUDIO_INFO_PRINT("AudioDriver compiled on %s at %s", __DATE__, __TIME__);
+
     ias_map.emplace(USR_DUMMY_IN.tok, std::make_shared<IAStream>(USR_DUMMY_IN.tok, AudioDeviceName("virt", 0),
                                                                  enum2val(AudioPeriodSize::INR_20MS),
                                                                  enum2val(AudioBandWidth::Full), 2, false, false));
