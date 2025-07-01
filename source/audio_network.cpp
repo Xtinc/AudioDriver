@@ -94,7 +94,7 @@ bool KFifo::load_aside(size_t read_length)
     {
         return false;
     }
-    
+
     std::lock_guard<std::mutex> lck(io_mtx);
     if (read_length > length)
     {
@@ -713,16 +713,17 @@ RetCode NetWorker::stop()
 
 void NetWorker::report()
 {
+    std::lock_guard<std::mutex> lock(decoders_mutex);
     for (auto &pair : decoders)
     {
         auto stats = pair.second.get_period_stats();
-        auto token = pair.first;
+        auto composite_key = pair.first;
 
         if (stats.packets_received > 0)
         {
             AUDIO_INFO_PRINT(
                 "NETSTATS(0x%08X:%u) : [loss] %.2f%%, [jitter] %.2fms, [received] %u, [lost] %u, [out-of-order] %u",
-                InfoLabel::extract_ip(token), InfoLabel::extract_token(token), stats.packet_loss_rate,
+                InfoLabel::extract_ip(composite_key), InfoLabel::extract_token(composite_key), stats.packet_loss_rate,
                 stats.average_jitter, stats.packets_received, stats.packets_lost, stats.packets_out_of_order);
         }
     }
@@ -1127,11 +1128,11 @@ NetWorker::DecoderContext &NetWorker::get_decoder(uint8_t sender_id, uint32_t so
 {
     std::lock_guard<std::mutex> lock(decoders_mutex);
 
-    auto it = decoders.find(sender_id);
+    uint64_t composite_key = InfoLabel::make_composite(source_ip, sender_id);
+    auto it = decoders.find(composite_key);
     if (it == decoders.end())
     {
-        auto result = decoders.emplace(InfoLabel::make_composite(source_ip, sender_id),
-                                       DecoderContext(channels, NETWORK_MAX_FRAMES));
+        auto result = decoders.emplace(composite_key, DecoderContext(channels, NETWORK_MAX_FRAMES));
         return result.first->second;
     }
 
@@ -1203,8 +1204,8 @@ void NetWorker::handle_fec_packet(const DataPacket *header, const uint8_t *paylo
             if (decoder_context.fec_processor->recover_missing(recovered_data, recovered_size))
             {
                 // Find which packet was missing - FEC sequence is GROUP_SIZE positions after the base
-                uint32_t group_base =
-                    (header->sequence - FECProcessor::GROUP_SIZE) / FECProcessor::GROUP_SIZE * FECProcessor::GROUP_SIZE;
+                uint32_t group_base = decoder_context.fec_processor->get_base_sequence();
+
                 // Find the missing packet index and recover it
                 for (uint32_t i = 0; i < FECProcessor::GROUP_SIZE; ++i)
                 {
