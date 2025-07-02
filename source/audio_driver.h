@@ -39,7 +39,7 @@ struct TimerCounter
             counter = 0;
         }
 
-        if (sample_count >= 100 && 5 * diff > 8 * avg_interval)
+        if (sample_count >= 100 && 5 * diff > 7 * avg_interval)
         {
             counter++;
             return true;

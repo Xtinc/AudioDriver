@@ -598,10 +598,10 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
                                    uint32_t session_id, AudioBandWidth sample_enum);
 
     // Unified packet processing
-    void process_data_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size);
+    void process_data_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size, uint32_t sender_ip);
     bool validate_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size);
-    void handle_audio_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size);
-    void handle_fec_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size);
+    void handle_audio_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size, uint32_t combined_session_id);
+    void handle_fec_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size, uint32_t combined_session_id);
 
     // FEC related methods
     void send_data_packet(const Destination &dest, uint8_t sender_id, uint8_t receiver_id, uint32_t sequence,

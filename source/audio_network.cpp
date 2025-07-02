@@ -1104,7 +1104,8 @@ void NetWorker::handle_receive(const asio::error_code &error, std::size_t bytes_
             auto data_header = reinterpret_cast<const DataPacket *>(receive_buffer.get());
             const auto *payload = reinterpret_cast<const uint8_t *>(receive_buffer.get() + sizeof(DataPacket));
             size_t payload_size = bytes_transferred - sizeof(DataPacket);
-            process_data_packet(data_header, payload, payload_size);
+            auto sender_id = sender_endpoint.address().is_v4() ? sender_endpoint.address().to_v4().to_uint() : 0;
+            process_data_packet(data_header, payload, payload_size, sender_id);
         }
     }
 
@@ -1146,20 +1147,22 @@ NetWorker::DecoderContext &NetWorker::get_decoder(uint8_t sender_id, uint32_t se
 }
 
 // Unified packet processing methods
-void NetWorker::process_data_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size)
+void NetWorker::process_data_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size, uint32_t sender_ip)
 {
     if (!validate_packet(header, payload, payload_size))
     {
         return;
     }
 
+    uint32_t combined_session_id = (sender_ip & 0xFFFF0000) | (header->session_id & 0x0000FFFF);
+
     if (header->is_fec)
     {
-        handle_fec_packet(header, payload, payload_size);
+        handle_fec_packet(header, payload, payload_size, combined_session_id);
     }
     else
     {
-        handle_audio_packet(header, payload, payload_size);
+        handle_audio_packet(header, payload, payload_size, combined_session_id);
     }
 }
 
@@ -1169,7 +1172,7 @@ bool NetWorker::validate_packet(const DataPacket *header, const uint8_t *payload
            payload_size <= FECProcessor::MAX_PACKET_SIZE;
 }
 
-void NetWorker::handle_audio_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size)
+void NetWorker::handle_audio_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size, uint32_t combined_session_id)
 {
     AudioBandWidth sample_enum = byte_to_bandwidth(header->sample_rate);
     if (sample_enum == AudioBandWidth::Unknown)
@@ -1177,17 +1180,17 @@ void NetWorker::handle_audio_packet(const DataPacket *header, const uint8_t *pay
         return;
     }
 
-    auto &decoder_context = get_decoder(header->sender_id, header->session_id, header->channels);
+    auto &decoder_context = get_decoder(header->sender_id, combined_session_id, header->channels);
 
     // Add to FEC recovery group
     decoder_context.fec_processor->add_received_packet(payload, payload_size, header->sequence);
 
     // Process and deliver audio immediately
     process_and_deliver_audio(header->sender_id, header->receiver_id, header->channels, header->sequence,
-                              header->timestamp, payload, payload_size, header->session_id, sample_enum);
+                              header->timestamp, payload, payload_size, combined_session_id, sample_enum);
 }
 
-void NetWorker::handle_fec_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size)
+void NetWorker::handle_fec_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size, uint32_t combined_session_id)
 {
     AudioBandWidth sample_enum = byte_to_bandwidth(header->sample_rate);
     if (sample_enum == AudioBandWidth::Unknown)
@@ -1195,7 +1198,7 @@ void NetWorker::handle_fec_packet(const DataPacket *header, const uint8_t *paylo
         return;
     }
 
-    auto &decoder_context = get_decoder(header->sender_id, header->session_id, header->channels);
+    auto &decoder_context = get_decoder(header->sender_id, combined_session_id, header->channels);
 
     // Add FEC data and try recovery
     if (decoder_context.fec_processor->add_fec_packet(payload, payload_size))
@@ -1216,7 +1219,7 @@ void NetWorker::handle_fec_packet(const DataPacket *header, const uint8_t *paylo
                     {
                         uint32_t missing_seq = group_base + i;
                         process_and_deliver_audio(header->sender_id, header->receiver_id, header->channels, missing_seq,
-                                                  header->timestamp, recovered_data, recovered_size, header->session_id,
+                                                  header->timestamp, recovered_data, recovered_size, combined_session_id,
                                                   sample_enum);
                         break; // Only recover one missing packet
                     }
