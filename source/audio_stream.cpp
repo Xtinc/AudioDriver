@@ -12,7 +12,26 @@ constexpr unsigned int SESSION_IDLE_TIMEOUT = 1000;
 
 inline float volume2gain(unsigned int vol)
 {
-    return vol < 50 ? 0.68f * static_cast<float>(vol) - 34.0f : 0.12f * static_cast<float>(vol) - 6.0f;
+    // 0% -> -80dB(mute), 1% -> -40dB, 100% -> +6dB
+    if (vol == 0)
+    {
+        return -80.0f;
+    }
+
+    // gain_db = 20 * log10(vol/100)
+    float normalized_vol = static_cast<float>(vol) / 100.0f;
+
+    if (vol <= 10)
+    {
+        // Low volume range: 1%-10% maps to -40dB to -20dB
+        return -40.0f + 20.0f * (normalized_vol * 10.0f - 1.0f) / 9.0f;
+    }
+    else
+    {
+        // High volume range: 11%-100% maps to -20dB to +6dB using logarithmic curve with offset
+        // Base logarithmic curve + offset to make 100% correspond to +6dB
+        return 20.0f * std::log10(normalized_vol) + 6.0f;
+    }
 }
 
 static bool check_wave_file_name(const std::string &dev_name)
@@ -1239,9 +1258,9 @@ RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared
 
     preemptive.fetch_add(1, std::memory_order_relaxed);
     sounds.emplace(name, audio_sender);
-    
+
     audio_sender->set_volume(volume.load());
-    
+
     auto ret = audio_sender->connect(sink);
     if (!ret)
     {
