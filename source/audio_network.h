@@ -590,7 +590,8 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     void start_stats_loop();
     void send_rtt_probes();
     void process_probe_packet(const ProbePacket *probe, const asio::ip::udp::endpoint &endpoint);
-    void handle_receive(const asio::error_code &error, std::size_t bytes);
+    void handle_receive(const asio::error_code &error, std::size_t bytes_transferred,
+                        const asio::ip::udp::endpoint &sender_endpoint);
     void retry_receive_with_backoff();
     DecoderContext &get_decoder(uint8_t sender_id, uint32_t session_id, unsigned int channels);
     void process_and_deliver_audio(uint8_t sender_id, uint8_t receiver_id, uint8_t channels, uint32_t sequence,
@@ -600,8 +601,10 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     // Unified packet processing
     void process_data_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size, uint32_t sender_ip);
     bool validate_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size);
-    void handle_audio_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size, uint32_t combined_session_id);
-    void handle_fec_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size, uint32_t combined_session_id);
+    void handle_audio_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size,
+                             uint32_t combined_session_id);
+    void handle_fec_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size,
+                           uint32_t combined_session_id);
 
     // FEC related methods
     void send_data_packet(const Destination &dest, uint8_t sender_id, uint8_t receiver_id, uint32_t sequence,

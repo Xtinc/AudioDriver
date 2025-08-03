@@ -959,9 +959,10 @@ void NetWorker::start_receive_loop()
         return;
     }
     auto self = shared_from_this();
-    socket->async_receive_from(asio::buffer(receive_buffer.get(), NETWORK_MAX_BUFFER_SIZE), sender_endpoint,
-                               [self](const asio::error_code &error, std::size_t bytes_transferred) {
-                                   self->handle_receive(error, bytes_transferred);
+    auto endpoint = std::make_shared<asio::ip::udp::endpoint>();
+    socket->async_receive_from(asio::buffer(receive_buffer.get(), NETWORK_MAX_BUFFER_SIZE), *endpoint,
+                               [self, endpoint](const asio::error_code &error, std::size_t bytes_transferred) {
+                                   self->handle_receive(error, bytes_transferred, *endpoint);
                                });
 }
 
@@ -1078,7 +1079,8 @@ void NetWorker::process_probe_packet(const ProbePacket *probe, const asio::ip::u
     }
 }
 
-void NetWorker::handle_receive(const asio::error_code &error, std::size_t bytes_transferred)
+void NetWorker::handle_receive(const asio::error_code &error, std::size_t bytes_transferred,
+                               const asio::ip::udp::endpoint &sender_endpoint)
 {
     if (error)
     {
@@ -1147,7 +1149,8 @@ NetWorker::DecoderContext &NetWorker::get_decoder(uint8_t sender_id, uint32_t se
 }
 
 // Unified packet processing methods
-void NetWorker::process_data_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size, uint32_t sender_ip)
+void NetWorker::process_data_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size,
+                                    uint32_t sender_ip)
 {
     if (!validate_packet(header, payload, payload_size))
     {
@@ -1172,7 +1175,8 @@ bool NetWorker::validate_packet(const DataPacket *header, const uint8_t *payload
            payload_size <= FECProcessor::MAX_PACKET_SIZE;
 }
 
-void NetWorker::handle_audio_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size, uint32_t combined_session_id)
+void NetWorker::handle_audio_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size,
+                                    uint32_t combined_session_id)
 {
     AudioBandWidth sample_enum = byte_to_bandwidth(header->sample_rate);
     if (sample_enum == AudioBandWidth::Unknown)
@@ -1190,7 +1194,8 @@ void NetWorker::handle_audio_packet(const DataPacket *header, const uint8_t *pay
                               header->timestamp, payload, payload_size, combined_session_id, sample_enum);
 }
 
-void NetWorker::handle_fec_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size, uint32_t combined_session_id)
+void NetWorker::handle_fec_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size,
+                                  uint32_t combined_session_id)
 {
     AudioBandWidth sample_enum = byte_to_bandwidth(header->sample_rate);
     if (sample_enum == AudioBandWidth::Unknown)
@@ -1219,8 +1224,8 @@ void NetWorker::handle_fec_packet(const DataPacket *header, const uint8_t *paylo
                     {
                         uint32_t missing_seq = group_base + i;
                         process_and_deliver_audio(header->sender_id, header->receiver_id, header->channels, missing_seq,
-                                                  header->timestamp, recovered_data, recovered_size, combined_session_id,
-                                                  sample_enum);
+                                                  header->timestamp, recovered_data, recovered_size,
+                                                  combined_session_id, sample_enum);
                         break; // Only recover one missing packet
                     }
                 }
