@@ -625,7 +625,6 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
 
     std::unique_ptr<asio::ip::udp::socket> socket;
     std::unique_ptr<char[]> receive_buffer;
-    asio::ip::udp::endpoint sender_endpoint;
     std::map<uint8_t, SenderContext> senders;
     std::mutex senders_mutex;
 
