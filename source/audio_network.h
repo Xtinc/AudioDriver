@@ -613,7 +613,7 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
 
     bool is_ready() const
     {
-        return running && socket && socket->is_open();
+        return running && receive_socket && receive_socket->is_open() && send_socket && send_socket->is_open();
     }
 
   private:
@@ -623,7 +623,8 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     std::atomic<bool> running;
     uint32_t local_session_id;
 
-    std::unique_ptr<asio::ip::udp::socket> socket;
+    std::unique_ptr<asio::ip::udp::socket> receive_socket;
+    std::unique_ptr<asio::ip::udp::socket> send_socket;
     std::unique_ptr<char[]> receive_buffer;
     std::map<uint8_t, SenderContext> senders;
     std::mutex senders_mutex;

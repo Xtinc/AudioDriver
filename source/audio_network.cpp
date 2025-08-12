@@ -631,21 +631,28 @@ NetWorker::NetWorker(asio::io_context &io_context, uint16_t port, const std::str
 {
     try
     {
-        socket = std::make_unique<udp::socket>(io_context);
-        socket->open(udp::v4());
+        // Create receive socket and bind to specific port
+        receive_socket = std::make_unique<udp::socket>(io_context);
+        receive_socket->open(udp::v4());
 
-        asio::socket_base::send_buffer_size option_send(262144);    // 256KB
         asio::socket_base::receive_buffer_size option_recv(262144); // 256KB
         asio::error_code ec;
-        socket->set_option(option_send, ec);
-        socket->set_option(option_recv, ec);
-        socket->set_option(asio::socket_base::reuse_address(true), ec);
+        receive_socket->set_option(option_recv, ec);
+        receive_socket->set_option(asio::socket_base::reuse_address(true), ec);
 
-        socket->bind(udp::endpoint(udp::v4(), port), ec);
+        receive_socket->bind(udp::endpoint(udp::v4(), port), ec);
         if (ec)
         {
-            AUDIO_ERROR_PRINT("Failed to bind socket on port %d: %s", port, ec.message().c_str());
+            AUDIO_ERROR_PRINT("Failed to bind receive socket on port %d: %s", port, ec.message().c_str());
         }
+
+        // Create send socket without binding to specific port
+        send_socket = std::make_unique<udp::socket>(io_context);
+        send_socket->open(udp::v4());
+
+        asio::socket_base::send_buffer_size option_send(262144); // 256KB
+        send_socket->set_option(option_send, ec);
+        send_socket->set_option(asio::socket_base::reuse_address(true), ec);
 
         asio::error_code addr_ec;
         auto addr = asio::ip::make_address_v4(local_ip, addr_ec);
@@ -654,11 +661,12 @@ NetWorker::NetWorker(asio::io_context &io_context, uint16_t port, const std::str
             local_session_id = addr.to_uint();
         }
 
-        AUDIO_INFO_PRINT("NetWorker initialized on port %d", socket->local_endpoint().port());
+        AUDIO_INFO_PRINT("NetWorker initialized - receive port: %d, send port: %d",
+                         receive_socket->local_endpoint().port(), send_socket->local_endpoint().port());
     }
     catch (const std::exception &e)
     {
-        AUDIO_ERROR_PRINT("Failed to create socket: %s", e.what());
+        AUDIO_ERROR_PRINT("Failed to create sockets: %s", e.what());
     }
 }
 
@@ -674,9 +682,9 @@ RetCode NetWorker::start()
         return {RetCode::NOACTION, "Already running"};
     }
 
-    if (!socket || !socket->is_open())
+    if (!receive_socket || !receive_socket->is_open() || !send_socket || !send_socket->is_open())
     {
-        return {RetCode::FAILED, "Socket not available"};
+        return {RetCode::FAILED, "Sockets not available"};
     }
 
     running = true;
@@ -695,10 +703,16 @@ RetCode NetWorker::stop()
 
     running = false;
 
-    if (socket && socket->is_open())
+    if (receive_socket && receive_socket->is_open())
     {
         asio::error_code ec;
-        socket->cancel(ec);
+        receive_socket->cancel(ec);
+    }
+
+    if (send_socket && send_socket->is_open())
+    {
+        asio::error_code ec;
+        send_socket->cancel(ec);
     }
 
     stats_timer.cancel();
@@ -743,7 +757,7 @@ RetCode NetWorker::register_receiver(uint8_t token, ReceiveCallback callback)
         return {RetCode::FAILED, "Invalid callback"};
     }
 
-    if (!socket || !socket->is_open())
+    if (!receive_socket || !receive_socket->is_open())
     {
         return {RetCode::FAILED, "NetWorker not ready"};
     }
@@ -791,9 +805,9 @@ void NetWorker::report_conns(std::vector<InfoLabel> &result)
 
 RetCode NetWorker::register_sender(uint8_t sender_id, unsigned int channels, unsigned int sample_rate)
 {
-    if (!socket || !socket->is_open())
+    if (!send_socket || !send_socket->is_open())
     {
-        return {RetCode::FAILED, "Socket not available"};
+        return {RetCode::FAILED, "Send socket not available"};
     }
 
     std::lock_guard<std::mutex> lock(senders_mutex);
@@ -960,10 +974,10 @@ void NetWorker::start_receive_loop()
     }
     auto self = shared_from_this();
     auto endpoint = std::make_shared<asio::ip::udp::endpoint>();
-    socket->async_receive_from(asio::buffer(receive_buffer.get(), NETWORK_MAX_BUFFER_SIZE), *endpoint,
-                               [self, endpoint](const asio::error_code &error, std::size_t bytes_transferred) {
-                                   self->handle_receive(error, bytes_transferred, *endpoint);
-                               });
+    receive_socket->async_receive_from(asio::buffer(receive_buffer.get(), NETWORK_MAX_BUFFER_SIZE), *endpoint,
+                                       [self, endpoint](const asio::error_code &error, std::size_t bytes_transferred) {
+                                           self->handle_receive(error, bytes_transferred, *endpoint);
+                                       });
 }
 
 void NetWorker::start_stats_loop()
@@ -1011,15 +1025,15 @@ void NetWorker::send_rtt_probes()
         probe.sequence = probe_sequence++;
         probe.timestamp = current_time;
 
-        socket->async_send_to(asio::buffer(&probe, sizeof(probe)), endpoint,
-                              [endpoint](const asio::error_code &error, std::size_t /*bytes*/) {
-                                  if (error)
-                                  {
-                                      AUDIO_DEBUG_PRINT("RTT probe send error to %s:%d: %s",
-                                                        endpoint.address().to_string().c_str(), endpoint.port(),
-                                                        error.message().c_str());
-                                  }
-                              });
+        send_socket->async_send_to(asio::buffer(&probe, sizeof(probe)), endpoint,
+                                   [endpoint](const asio::error_code &error, std::size_t /*bytes*/) {
+                                       if (error)
+                                       {
+                                           AUDIO_DEBUG_PRINT("RTT probe send error to %s:%d: %s",
+                                                             endpoint.address().to_string().c_str(), endpoint.port(),
+                                                             error.message().c_str());
+                                       }
+                                   });
     }
 }
 
@@ -1045,13 +1059,13 @@ void NetWorker::process_probe_packet(const ProbePacket *probe, const asio::ip::u
         response.sequence = probe->sequence;
         response.timestamp = probe->timestamp;
 
-        socket->async_send_to(asio::buffer(&response, sizeof(response)), endpoint,
-                              [](const asio::error_code &error, std::size_t /*bytes*/) {
-                                  if (error)
-                                  {
-                                      AUDIO_DEBUG_PRINT("RTT probe response error: %s", error.message().c_str());
-                                  }
-                              });
+        send_socket->async_send_to(asio::buffer(&response, sizeof(response)), endpoint,
+                                   [](const asio::error_code &error, std::size_t /*bytes*/) {
+                                       if (error)
+                                       {
+                                           AUDIO_DEBUG_PRINT("RTT probe response error: %s", error.message().c_str());
+                                       }
+                                   });
     }
     else
     {
@@ -1287,7 +1301,7 @@ void NetWorker::send_data_packet(const Destination &dest, uint8_t sender_id, uin
 
     std::array<asio::const_buffer, 2> buffers = {asio::buffer(&header, sizeof(header)), asio::buffer(data, size)};
 
-    socket->async_send_to(
+    send_socket->async_send_to(
         buffers, dest.endpoint, [dest, sequence, is_fec](const asio::error_code &error, std::size_t /*bytes_sent*/) {
             if (error)
             {
