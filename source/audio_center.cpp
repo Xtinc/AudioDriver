@@ -189,7 +189,8 @@ static void merge_label(std::vector<InfoLabel> &ias_label, std::vector<InfoLabel
 }
 
 // AudioCenter
-AudioCenter::AudioCenter(bool enable_network, unsigned short port, const std::string &local_ip) : center_state(State::INIT)
+AudioCenter::AudioCenter(bool enable_network, unsigned short port, const std::string &local_ip)
+    : center_state(State::INIT)
 {
     monitor = std::make_unique<AudioMonitor>(BG_SERVICE);
     player = std::make_shared<AudioPlayer>(WAVE_PLAYER_TOKEN.tok);
@@ -463,7 +464,7 @@ RetCode AudioCenter::create(IToken itoken, OToken otoken, bool enable_network)
     return RetCode::OK;
 }
 
-RetCode AudioCenter::prepare()
+RetCode AudioCenter::prepare(bool enable_usb_detection)
 {
     State expected = State::INIT;
     if (!center_state.compare_exchange_strong(expected, State::CONNECTING))
@@ -473,6 +474,13 @@ RetCode AudioCenter::prepare()
     }
 
     AUDIO_INFO_PRINT("AudioDriver compiled on %s at %s", __DATE__, __TIME__);
+
+    if (!enable_usb_detection)
+    {
+        AUDIO_INFO_PRINT(
+            "AudioCenter successfully prepared - transitioning from INIT to CONNECTING, disabling USB detection");
+        return RetCode::OK;
+    }
 
     ias_map.emplace(USR_DUMMY_IN.tok, std::make_shared<IAStream>(USR_DUMMY_IN.tok, AudioDeviceName("virt", 0),
                                                                  enum2val(AudioPeriodSize::INR_20MS),
@@ -534,7 +542,8 @@ RetCode AudioCenter::prepare()
             break;
         }
     });
-    AUDIO_DEBUG_PRINT("AudioCenter successfully prepared - transitioning from INIT to CONNECTING");
+    AUDIO_DEBUG_PRINT(
+        "AudioCenter successfully prepared - transitioning from INIT to CONNECTING, enabling USB detection");
     return RetCode::OK;
 }
 

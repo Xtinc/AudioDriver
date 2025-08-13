@@ -413,7 +413,8 @@ class AudioCenter
      * @param port Network port to use (ignored if enable_network is false)
      * @param local_ip Local IP address to use for network identification (empty for default)
      */
-    AudioCenter(bool enable_network = false, unsigned short port = NETWORK_AUDIO_TRANS_PORT, const std::string &local_ip = "");
+    AudioCenter(bool enable_network = false, unsigned short port = NETWORK_AUDIO_TRANS_PORT,
+                const std::string &local_ip = "");
 
     /**
      * @brief Destructor for AudioCenter
@@ -492,10 +493,10 @@ class AudioCenter
      *
      * Must be called after creating streams and before connecting them.
      * This initializes internal components and transitions the AudioCenter to the CONNECTING state.
-     *
+     * @param enable_usb_detection Whether to enable USB detection
      * @return RetCode indicating success or failure
      */
-    RetCode prepare();
+    RetCode prepare(bool enable_usb_detection = true);
 
     /**
      * @brief Connects an input stream to an output stream
