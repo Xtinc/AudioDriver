@@ -16,9 +16,10 @@
 
 struct TimerCounter
 {
-    TimerCounter(const std::string &_name)
-        : counter(0), avg_interval(0), name(_name), last_print_time(std::chrono::steady_clock::now()),
-          last_cycle_time(std::chrono::steady_clock::now()), sample_count(0)
+    TimerCounter(const std::string &_name, unsigned int _threshold)
+        : counter(0), avg_interval(0), name(_name), threshold(_threshold),
+          last_print_time(std::chrono::steady_clock::now()), last_cycle_time(std::chrono::steady_clock::now()),
+          sample_count(0)
     {
     }
 
@@ -39,11 +40,19 @@ struct TimerCounter
             counter = 0;
         }
 
-        if (sample_count >= 100 && 5 * diff > 7 * avg_interval)
+        if (sample_count < 100)
+        {
+            // Skip the first 100 samples to stabilize the average
+            last_cycle_time = now;
+            return false;
+        }
+
+        if (5 * diff > 7 * threshold || 5 * diff > 7 * avg_interval)
         {
             counter++;
             return true;
         }
+
         return false;
     }
 
@@ -69,6 +78,7 @@ struct TimerCounter
     unsigned int counter;
     unsigned int avg_interval;
     const std::string &name;
+    unsigned int threshold;
     std::chrono::steady_clock::time_point last_print_time;
     std::chrono::steady_clock::time_point last_cycle_time;
     unsigned int sample_count;

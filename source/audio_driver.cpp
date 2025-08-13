@@ -186,7 +186,7 @@ RetCode AlsaDriver::open()
     AUDIO_INFO_PRINT("ALSA device [%s] opened. fs = %u, ps = %u, chan = %u, min_chan = %u, max_chan = %u",
                      hw_name.c_str(), dev_fs, dev_ps, dev_ch, min_ch, max_ch);
 
-    timer_cnt = std::make_unique<TimerCounter>(hw_name);
+    timer_cnt = std::make_unique<TimerCounter>(hw_name, dev_ti);
     return RetCode::OK;
 }
 
@@ -701,7 +701,7 @@ RetCode WasapiDriver::open()
     io_buffer = std::make_unique<KFifo>(dev_ps * sizeof(PCM_TYPE), 4, dev_ch);
     AUDIO_INFO_PRINT("WASAPI %s device [%s] opened. fs = %u, ps = %u, chan = %u, min_chan = %u, max_chan = %u",
                      capture ? "capture" : "playback", hw_name.c_str(), dev_fs, dev_ps, dev_ch, min_ch, max_ch);
-    timer_cnt = std::make_unique<TimerCounter>(hw_name);
+    timer_cnt = std::make_unique<TimerCounter>(hw_name, 0xffff);
 
 SAFE_EXIT:
     SafeRelease(&enumerator);
