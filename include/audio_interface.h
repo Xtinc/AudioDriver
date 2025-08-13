@@ -53,6 +53,20 @@ typedef std::array<unsigned int, 2> AudioChannelMap;
 typedef void (*AudioInputCallBack)(const int16_t *data, unsigned int chan_num, unsigned int frame_num, void *user_ptr);
 
 /**
+ * @enum UsrCallBackMode
+ * @brief Callback modes for audio input processing
+ * RAW: Raw data from real device
+ * PROCESSED: Processed audio data from real device
+ * OBSERVER: Raw Audio data from listener
+ */
+enum class UsrCallBackMode
+{
+    RAW,
+    PROCESSED,
+    OBSERVER
+};
+
+/**
  * @struct RetCode
  * @brief Return code for audio operations with error information
  */
@@ -530,11 +544,11 @@ class AudioCenter
      * @param token Input token
      * @param cb Callback function
      * @param required_frames Number of frames required for the callback
-     * @param get_raw_data Whether to get raw PCM data (true) or processed data (false)
+     * @param mode decide callback mode, 0: raw, 1: processed, 2: from listener
      * @param ptr User data pointer to be passed to the callback function
      * @return RetCode indicating success or failure
      */
-    RetCode register_callback(IToken token, AudioInputCallBack cb, unsigned int required_frames, bool get_raw_data,
+    RetCode register_callback(IToken token, AudioInputCallBack cb, unsigned int required_frames, UsrCallBackMode mode,
                               void *ptr);
 
     /**

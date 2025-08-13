@@ -1090,11 +1090,11 @@ RetCode WaveDevice::read(char *data, size_t len)
 }
 
 // Echo device
-class EchoDevice final : public AudioDevice
+class SimuDevice final : public AudioDevice
 {
   public:
-    EchoDevice(const std::string &name, unsigned int fs, unsigned int ps, unsigned int ch);
-    ~EchoDevice() override;
+    SimuDevice(const std::string &name, bool capture, unsigned int fs, unsigned int ps, unsigned int ch);
+    ~SimuDevice() override;
 
     RetCode open() override;
     RetCode start() override;
@@ -1103,25 +1103,25 @@ class EchoDevice final : public AudioDevice
     RetCode read(char *data, size_t len) override;
 };
 
-EchoDevice::EchoDevice(const std::string &name, unsigned int fs, unsigned int ps, unsigned int ch)
-    : AudioDevice("echo_" + name, true, fs, ps, ch, false)
+SimuDevice::SimuDevice(const std::string &name, bool capture, unsigned int fs, unsigned int ps, unsigned int ch)
+    : AudioDevice(name, capture, fs, ps, ch, false)
 {
 }
 
-EchoDevice::~EchoDevice()
+SimuDevice::~SimuDevice()
 {
     (void)stop();
 }
 
-RetCode EchoDevice::open()
+RetCode SimuDevice::open()
 {
     hstate = STREAM_OPENED;
     io_buffer = std::make_unique<KFifo>(dev_ps * sizeof(PCM_TYPE), 4, dev_ch);
-    AUDIO_INFO_PRINT("Echo device [%s] opened. fs = %u, ps = %u, chan = %u", hw_name.c_str(), dev_fs, dev_ps, dev_ch);
+    AUDIO_INFO_PRINT("Simu device [%s] opened. fs = %u, ps = %u, chan = %u", hw_name.c_str(), dev_fs, dev_ps, dev_ch);
     return {RetCode::OK, "Success"};
 }
 
-RetCode EchoDevice::start()
+RetCode SimuDevice::start()
 {
     Mode expected = STREAM_OPENED;
     if (!hstate.compare_exchange_strong(expected, STREAM_RUNNING) &&
@@ -1130,11 +1130,11 @@ RetCode EchoDevice::start()
         return {RetCode::FAILED, "stream not opened or stopped"};
     }
 
-    AUDIO_INFO_PRINT("Echo device [%s] started", hw_name.c_str());
+    AUDIO_INFO_PRINT("Simu device [%s] started", hw_name.c_str());
     return {RetCode::OK, "Success"};
 }
 
-RetCode EchoDevice::stop()
+RetCode SimuDevice::stop()
 {
     Mode expected = STREAM_RUNNING;
     if (!hstate.compare_exchange_strong(expected, STREAM_STOPPED))
@@ -1142,17 +1142,27 @@ RetCode EchoDevice::stop()
         return {RetCode::OK, "Not running"};
     }
 
-    AUDIO_INFO_PRINT("Echo device [%s] stopped", hw_name.c_str());
+    AUDIO_INFO_PRINT("Simu device [%s] stopped", hw_name.c_str());
     return {RetCode::OK, "Success"};
 }
 
-RetCode EchoDevice::write(const char *data, size_t len)
+RetCode SimuDevice::write(const char *data, size_t len)
 {
+    if (hstate != STREAM_RUNNING)
+    {
+        return {RetCode::FAILED, "Device not running"};
+    }
+
     return io_buffer->store(data, len) ? RetCode::OK : RetCode::NOACTION;
 }
 
-RetCode EchoDevice::read(char *data, size_t len)
+RetCode SimuDevice::read(char *data, size_t len)
 {
+    if (hstate != STREAM_RUNNING)
+    {
+        return {RetCode::FAILED, "Device not running"};
+    }
+
     return io_buffer->load(data, len) ? RetCode::OK : RetCode::NOACTION;
 }
 
@@ -1160,69 +1170,77 @@ RetCode EchoDevice::read(char *data, size_t len)
 class NullDevice final : public AudioDevice
 {
   public:
-    NullDevice(const std::string &name, bool capture, unsigned int fs, unsigned int ps, unsigned int ch)
-        : AudioDevice(name, capture, fs, ps, ch, false)
-    {
-    }
+    NullDevice(const std::string &name, bool capture, unsigned int fs, unsigned int ps, unsigned int ch);
+    ~NullDevice() override;
 
-    ~NullDevice() override
-    {
-        (void)stop();
-    }
-
-    RetCode open() override
-    {
-        hstate = STREAM_OPENED;
-        AUDIO_INFO_PRINT("Null device [%s] opened. fs = %u, ps = %u, chan = %u", hw_name.c_str(), dev_fs, dev_ps,
-                         dev_ch);
-        return {RetCode::OK, "Success"};
-    }
-
-    RetCode start() override
-    {
-        Mode expected = STREAM_OPENED;
-        if (!hstate.compare_exchange_strong(expected, STREAM_RUNNING) &&
-            !(expected = STREAM_STOPPED, hstate.compare_exchange_strong(expected, STREAM_RUNNING)))
-        {
-            return {RetCode::FAILED, "stream not opened or stopped"};
-        }
-
-        AUDIO_DEBUG_PRINT("Null device [%s] started", hw_name.c_str());
-        return {RetCode::OK, "Success"};
-    }
-
-    RetCode stop() override
-    {
-        Mode expected = STREAM_RUNNING;
-        if (!hstate.compare_exchange_strong(expected, STREAM_STOPPED))
-        {
-            return {RetCode::OK, "Not running"};
-        }
-
-        AUDIO_DEBUG_PRINT("Null device [%s] stopped", hw_name.c_str());
-        return {RetCode::OK, "Success"};
-    }
-
-    RetCode write(const char * /*data*/, size_t /*len*/) override
-    {
-        if (hstate != STREAM_RUNNING)
-        {
-            return {RetCode::FAILED, "Device not running"};
-        }
-
-        return {RetCode::OK, "Success"};
-    }
-
-    RetCode read(char * /*data*/, size_t /*len*/) override
-    {
-        if (hstate != STREAM_RUNNING)
-        {
-            return {RetCode::FAILED, "Device not running"};
-        }
-
-        return {RetCode::OK, "Success"};
-    }
+    RetCode open() override;
+    RetCode start() override;
+    RetCode stop() override;
+    RetCode write(const char *data, size_t len) override;
+    RetCode read(char *data, size_t len) override;
 };
+
+NullDevice::NullDevice(const std::string &name, bool capture, unsigned int fs, unsigned int ps, unsigned int ch)
+    : AudioDevice(name, capture, fs, ps, ch, false)
+{
+}
+
+NullDevice::~NullDevice()
+{
+    (void)stop();
+}
+
+RetCode NullDevice::open()
+{
+    hstate = STREAM_OPENED;
+    AUDIO_INFO_PRINT("Null device [%s] opened. fs = %u, ps = %u, chan = %u", hw_name.c_str(), dev_fs, dev_ps, dev_ch);
+    return {RetCode::OK, "Success"};
+}
+
+RetCode NullDevice::start()
+{
+    Mode expected = STREAM_OPENED;
+    if (!hstate.compare_exchange_strong(expected, STREAM_RUNNING) &&
+        !(expected = STREAM_STOPPED, hstate.compare_exchange_strong(expected, STREAM_RUNNING)))
+    {
+        return {RetCode::FAILED, "stream not opened or stopped"};
+    }
+
+    AUDIO_DEBUG_PRINT("Null device [%s] started", hw_name.c_str());
+    return {RetCode::OK, "Success"};
+}
+
+RetCode NullDevice::stop()
+{
+    Mode expected = STREAM_RUNNING;
+    if (!hstate.compare_exchange_strong(expected, STREAM_STOPPED))
+    {
+        return {RetCode::OK, "Not running"};
+    }
+
+    AUDIO_DEBUG_PRINT("Null device [%s] stopped", hw_name.c_str());
+    return {RetCode::OK, "Success"};
+}
+
+RetCode NullDevice::write(const char * /*data*/, size_t /*len*/)
+{
+    if (hstate != STREAM_RUNNING)
+    {
+        return {RetCode::FAILED, "Device not running"};
+    }
+
+    return {RetCode::OK, "Success"};
+}
+
+RetCode NullDevice::read(char * /*data*/, size_t /*len*/)
+{
+    if (hstate != STREAM_RUNNING)
+    {
+        return {RetCode::FAILED, "Device not running"};
+    }
+
+    return {RetCode::OK, "Success"};
+}
 
 std::unique_ptr<AudioDevice> make_audio_driver(int type, const AudioDeviceName &name, unsigned int fs, unsigned int ps,
                                                unsigned int ch, bool enable_strict_recover)
@@ -1257,7 +1275,7 @@ std::unique_ptr<AudioDevice> make_audio_driver(int type, const AudioDeviceName &
     }
     else if (type == ECHO_IAS)
     {
-        return std::make_unique<EchoDevice>(name.first, fs, ps, ch);
+        return std::make_unique<SimuDevice>(name.first + "_echo", true, fs, ps, ch);
     }
     else if (type == NULL_IAS)
     {

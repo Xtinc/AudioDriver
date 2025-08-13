@@ -80,6 +80,8 @@ BackgroundService::BackgroundService() : work_guard(asio::make_work_guard(io_con
 #endif
         });
     }
+
+    AUDIO_INFO_PRINT("AudioDriver compiled on %s at %s", __DATE__, __TIME__);
 }
 
 BackgroundService::~BackgroundService()
@@ -636,7 +638,7 @@ void OAStream::process_data()
 RetCode OAStream::create_device(const AudioDeviceName &_name)
 {
     std::unique_ptr<AudioDevice> new_device;
-    if (_name.first == "null" || _name.first == "virt")
+    if (_name.first == "null")
     {
         new_device = make_audio_driver(NULL_OAS, _name, fs, ps, ch, false);
     }
@@ -725,8 +727,9 @@ IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
     : token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(_ch), enable_denoise(denoise), enable_reset(auto_reset),
       spf_ch(_ch), imap(_ch == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP), usr_name(_name), ias_ready(false),
       exec_timer(BG_SERVICE), exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE),
-      reset_strand(asio::make_strand(BG_SERVICE)), volume(50), muted(false), usr_cb{nullptr, 0, false, nullptr},
-      cb_timer(BG_SERVICE), cb_strand(asio::make_strand(BG_SERVICE))
+      reset_strand(asio::make_strand(BG_SERVICE)), volume(50), muted(false),
+      usr_cb{nullptr, 0, UsrCallBackMode::PROCESSED, nullptr}, cb_timer(BG_SERVICE),
+      cb_strand(asio::make_strand(BG_SERVICE))
 {
     auto ret = create_device(_name);
     if (ret)
@@ -746,7 +749,7 @@ IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
     : token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(2), enable_denoise(denoise), enable_reset(false),
       spf_ch(dev_ch), imap(_imap), usr_name(_name), ias_ready(false), exec_timer(BG_SERVICE),
       exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE), reset_strand(asio::make_strand(BG_SERVICE)),
-      volume(50), muted(false), usr_cb{nullptr, 0, false, nullptr}, cb_timer(BG_SERVICE),
+      volume(50), muted(false), usr_cb{nullptr, 0, UsrCallBackMode::PROCESSED, nullptr}, cb_timer(BG_SERVICE),
       cb_strand(asio::make_strand(BG_SERVICE))
 {
     DBG_ASSERT_GE(dev_ch, 2);
@@ -924,6 +927,12 @@ RetCode IAStream::disconnect(const std::shared_ptr<OAStream> &oas)
 
 RetCode IAStream::direct_push(const char *data, size_t len) const
 {
+    if (usr_cb.cb && usr_cb.mode == UsrCallBackMode::OBSERVER)
+    {
+        auto dev_ch = idevice->ch();
+        usr_cb.cb(reinterpret_cast<const PCM_TYPE *>(data), dev_ch, (unsigned int)len / (sizeof(PCM_TYPE) * dev_ch),
+                  usr_cb.ptr);
+    }
     return idevice->write(data, len);
 }
 
@@ -961,11 +970,11 @@ AudioDeviceName IAStream::name() const
     return usr_name;
 }
 
-void IAStream::register_callback(AudioInputCallBack cb, unsigned int required_frames, bool get_raw_data, void *ptr)
+void IAStream::register_callback(AudioInputCallBack cb, unsigned int required_frames, UsrCallBackMode mode, void *ptr)
 {
     usr_cb.cb = cb;
     usr_cb.req_frs = required_frames;
-    usr_cb.raw = get_raw_data;
+    usr_cb.mode = mode;
     usr_cb.ptr = ptr;
     session = std::make_unique<SessionData>(required_frames * sizeof(PCM_TYPE), 3, spf_ch);
 }
@@ -1033,15 +1042,15 @@ RetCode IAStream::process_data()
         return ret;
     }
 
+    // raw data from device
+    if (usr_cb.cb && usr_cb.mode == UsrCallBackMode::RAW)
+    {
+        session->store(reinterpret_cast<const char *>(dev_buf.get()), dev_fr * idevice->ch() * sizeof(PCM_TYPE));
+    }
+
     if (muted)
     {
         return RetCode::OK;
-    }
-
-    // raw data
-    if (usr_cb.cb && usr_cb.raw)
-    {
-        session->store(reinterpret_cast<const char *>(dev_buf.get()), dev_fr * idevice->ch() * sizeof(PCM_TYPE));
     }
 
     InterleavedView<PCM_TYPE> iview(reinterpret_cast<PCM_TYPE *>(dev_buf.get()), dev_fr, idevice->ch());
@@ -1058,7 +1067,8 @@ RetCode IAStream::process_data()
 
     PCM_TYPE *src = &oview.data()[0];
 
-    if (usr_cb.cb && !usr_cb.raw)
+    // processed data from device
+    if (usr_cb.cb && usr_cb.mode == UsrCallBackMode::PROCESSED)
     {
         session->store(reinterpret_cast<const char *>(src), ps * ch * sizeof(PCM_TYPE));
     }
@@ -1086,7 +1096,7 @@ RetCode IAStream::create_device(const AudioDeviceName &_name)
     {
         new_device = make_audio_driver(ECHO_IAS, _name, fs, ps, spf_ch, false);
     }
-    else if (_name.first == "null" || _name.first == "virt")
+    else if (_name.first == "null")
     {
         new_device = make_audio_driver(NULL_IAS, _name, fs, ps, spf_ch, false);
     }
@@ -1185,7 +1195,7 @@ void IAStream::schedule_callback()
             return;
         }
 
-        auto req_ch = self->usr_cb.raw ? self->idevice->ch() : self->ch;
+        auto req_ch = self->usr_cb.mode == UsrCallBackMode::RAW ? self->idevice->ch() : self->ch;
         if (self->session->load_aside(self->usr_cb.req_frs * req_ch * sizeof(PCM_TYPE)))
         {
             self->usr_cb.cb(reinterpret_cast<PCM_TYPE *>(self->session->data()), req_ch, self->usr_cb.req_frs,
@@ -1216,7 +1226,7 @@ void IAStream::reset_self()
 }
 
 // AudioPlayer
-AudioPlayer::AudioPlayer(unsigned char _token) : token(_token), preemptive(0), volume(50)
+AudioPlayer::AudioPlayer(unsigned char _token) : token(_token), preemptive(0), volume(80)
 {
 }
 
@@ -1299,7 +1309,6 @@ RetCode AudioPlayer::set_volume(unsigned int vol)
     }
 
     volume.store(vol);
-    AUDIO_INFO_PRINT("Player global volume set to %u, gain: %.2f db", vol, volume2gain(vol));
 
     std::lock_guard<std::mutex> grd(mtx);
     for (auto &sound_pair : sounds)

@@ -1,6 +1,6 @@
 #include "audio_stream.h"
 
-int main(int argc, char **argv)
+int main(int, char **)
 {
     AudioCenter center(false);
     // center.create(10_itk, AudioDeviceName("default.wav", 0), AudioBandWidth::CDQuality, AudioPeriodSize::INR_20MS, 8,

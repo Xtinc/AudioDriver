@@ -4,36 +4,24 @@
 #include <iostream>
 #include <thread>
 
-static std::ofstream audio_file("record.pcm", std::ios::binary);
-static void record_audio(const int16_t *data, unsigned int chan_num, unsigned int frame_num, void *user_ptr)
+static void test_callback(const int16_t *data, unsigned int chan_num, unsigned int frame_num, void *user_ptr)
 {
-    if (!audio_file.is_open())
-    {
-        audio_file.open("record.wav", std::ios::binary);
-        if (!audio_file)
-        {
-            std::cerr << "Failed to open audio file for recording." << std::endl;
-            return;
-        }
-    }
-
-    audio_file.write(reinterpret_cast<const char *>(data), chan_num * frame_num * sizeof(int16_t));
-    if (!audio_file)
-    {
-        std::cerr << "Failed to write audio data to file." << std::endl;
-    }
+    auto center = static_cast<AudioCenter *>(user_ptr);
+    center->direct_push_pcm(33_itk, 130_otk, chan_num, frame_num, 48000, data);
 }
 
 int main()
 {
-    AudioCenter center(true);
-
-    // center.create(IToken(20), {"leopard.wav", 10}, AudioBandWidth::Full, AudioPeriodSize::INR_10MS, 1);
-    // center.register_callback(IToken(20), record_audio, 1024, false, nullptr);
-    center.create(OToken(120), {"default", 0}, AudioBandWidth::Full, AudioPeriodSize::INR_20MS, 1, true);
-    center.prepare();
+    AudioCenter center(false);
+    center.create(120_otk, AudioDeviceName{"null", 0}, AudioBandWidth::Full, AudioPeriodSize::INR_20MS, 2);
+    center.create(130_otk, AudioDeviceName{"default", 0}, AudioBandWidth::Full, AudioPeriodSize::INR_20MS, 2);
+    center.create(20_itk, 120_otk);
+    center.register_callback(20_itk, test_callback, 960, UsrCallBackMode::OBSERVER, &center);
+    center.prepare(false);
+    // center.connect(20_itk, 130_otk);
     center.start();
-    center.play("output.wav", 10, 120_otk);
+    center.play("dukou.wav", 1, 120_otk);
+    // center.set_player_volume(20);
     // center.connect(20_itk, 120_otk, "127.0.0.1");
     std::this_thread::sleep_for(std::chrono::minutes(300));
     return 0;

@@ -432,19 +432,19 @@ RetCode AudioCenter::create(IToken itoken, OToken otoken, bool enable_network)
     if (oas->second->omap == DEFAULT_MONO_MAP)
     {
         ias_map[itoken.tok] =
-            std::make_shared<IAStream>(itoken.tok, AudioDeviceName("virt", 0), enum2val(AudioPeriodSize::INR_20MS),
+            std::make_shared<IAStream>(itoken.tok, AudioDeviceName("null", 0), enum2val(AudioPeriodSize::INR_20MS),
                                        enum2val(AudioBandWidth::Full), 1, false, false);
     }
     else if (oas->second->omap == DEFAULT_DUAL_MAP)
     {
         ias_map[itoken.tok] =
-            std::make_shared<IAStream>(itoken.tok, AudioDeviceName("virt", 0), enum2val(AudioPeriodSize::INR_20MS),
+            std::make_shared<IAStream>(itoken.tok, AudioDeviceName("null", 0), enum2val(AudioPeriodSize::INR_20MS),
                                        enum2val(AudioBandWidth::Full), 2, false, false);
     }
     else
     {
         ias_map[itoken.tok] =
-            std::make_shared<IAStream>(itoken.tok, AudioDeviceName("virt", 0), enum2val(AudioPeriodSize::INR_20MS),
+            std::make_shared<IAStream>(itoken.tok, AudioDeviceName("null", 0), enum2val(AudioPeriodSize::INR_20MS),
                                        enum2val(AudioBandWidth::Full), 99, oas->second->omap, false);
     }
 
@@ -473,8 +473,6 @@ RetCode AudioCenter::prepare(bool enable_usb_detection)
         return {RetCode::ESTATE, "AudioCenter not in INIT state"};
     }
 
-    AUDIO_INFO_PRINT("AudioDriver compiled on %s at %s", __DATE__, __TIME__);
-
     if (!enable_usb_detection)
     {
         AUDIO_INFO_PRINT(
@@ -482,11 +480,11 @@ RetCode AudioCenter::prepare(bool enable_usb_detection)
         return RetCode::OK;
     }
 
-    ias_map.emplace(USR_DUMMY_IN.tok, std::make_shared<IAStream>(USR_DUMMY_IN.tok, AudioDeviceName("virt", 0),
+    ias_map.emplace(USR_DUMMY_IN.tok, std::make_shared<IAStream>(USR_DUMMY_IN.tok, AudioDeviceName("null", 0),
                                                                  enum2val(AudioPeriodSize::INR_20MS),
                                                                  enum2val(AudioBandWidth::Full), 2, false, false));
     oas_map.emplace(USR_DUMMY_OUT.tok,
-                    std::make_shared<OAStream>(USR_DUMMY_OUT.tok, AudioDeviceName("virt", 0),
+                    std::make_shared<OAStream>(USR_DUMMY_OUT.tok, AudioDeviceName("null", 0),
                                                enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2));
     if (net_mgr)
     {
@@ -531,11 +529,11 @@ RetCode AudioCenter::prepare(bool enable_usb_detection)
             AUDIO_INFO_PRINT("Del device: %s", info.name.c_str());
             if (ias->second->name().first == info.id)
             {
-                ias->second->restart({"virt", 0});
+                ias->second->restart({"null", 0});
             }
             if (oas->second->name().first == info.id)
             {
-                oas->second->restart({"virt", 0});
+                oas->second->restart({"null", 0});
             }
             break;
         default:
@@ -653,7 +651,7 @@ RetCode AudioCenter::disconnect(IToken itoken, OToken otoken, const std::string 
     return ret;
 }
 
-RetCode AudioCenter::register_callback(IToken token, AudioInputCallBack cb, unsigned int frames, bool get_raw_data,
+RetCode AudioCenter::register_callback(IToken token, AudioInputCallBack cb, unsigned int frames, UsrCallBackMode mode,
                                        void *ptr)
 {
     auto state = center_state.load();
@@ -677,8 +675,8 @@ RetCode AudioCenter::register_callback(IToken token, AudioInputCallBack cb, unsi
         return {RetCode::EPARAM, "Invalid input token"};
     }
 
-    it->second->register_callback(cb, frames, get_raw_data, ptr);
-    AUDIO_DEBUG_PRINT("Callback registered for input stream %u, get raw data: %d", token.tok, get_raw_data);
+    it->second->register_callback(cb, frames, mode, ptr);
+    AUDIO_DEBUG_PRINT("Callback registered for input stream %u, mode: %d", token.tok, mode);
     return RetCode::OK;
 }
 

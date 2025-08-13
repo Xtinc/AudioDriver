@@ -135,7 +135,7 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     {
         AudioInputCallBack cb;
         unsigned int req_frs;
-        bool raw;
+        UsrCallBackMode mode;
         void *ptr;
     };
 
@@ -161,7 +161,7 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     unsigned int get_volume() const;
     AudioDeviceName name() const;
 
-    void register_callback(AudioInputCallBack cb, unsigned int required_frames, bool get_raw_data, void *ptr);
+    void register_callback(AudioInputCallBack cb, unsigned int required_frames, UsrCallBackMode mode, void *ptr);
     void report_conns(std::vector<InfoLabel> &result);
 
   private:
