@@ -7,11 +7,6 @@
 #include <memory>
 #include <vector>
 
-// Forward declarations
-class NoiseSuppressor;
-class AnalysisBuffer;
-class SplittingFilter;
-
 /**
  * @brief Mixes audio channels together
  *
@@ -168,11 +163,9 @@ class LocSampler
     bool enable_denoise;
     std::unique_ptr<SincInterpolator> resampler;
     std::unique_ptr<DRCompressor> compressor;
-    std::unique_ptr<NoiseSuppressor> denoiser;
     std::unique_ptr<ChannelBuffer<float>> analysis_ibuffer;
     std::unique_ptr<ChannelBuffer<float>> analysis_obuffer;
     std::unique_ptr<ChannelBuffer<float>> split_data;
-    std::unique_ptr<SplittingFilter> splitting_filter;
     /**
      * @brief Converts interleaved 16-bit PCM to deinterleaved float samples
      *

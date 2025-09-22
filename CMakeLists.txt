@@ -27,10 +27,9 @@ target_compile_definitions(asio INTERFACE $<$<CXX_COMPILER_ID:MSVC>:_WIN32_WINNT
 
 # Collect source files
 aux_source_directory(${CMAKE_SOURCE_DIR}/source TRANS_FILES)
-aux_source_directory(${CMAKE_SOURCE_DIR}/source/ns ANS_FILES)
 
 # Main library
-add_library(bettyaudio STATIC ${TRANS_FILES} ${ANS_FILES})
+add_library(bettyaudio STATIC ${TRANS_FILES})
 target_include_directories(bettyaudio 
     PRIVATE "${CMAKE_SOURCE_DIR}/source"
     PUBLIC "${CMAKE_SOURCE_DIR}/include"

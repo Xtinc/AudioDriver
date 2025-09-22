@@ -1,6 +1,5 @@
 #include "audio_process.h"
 #include "audio_filterbanks.h"
-#include "ns/noise_supression.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -205,27 +204,6 @@ LocSampler::LocSampler(unsigned int src_fs, unsigned int src_ch, unsigned int ds
     analysis_obuffer = std::make_unique<ChannelBuffer<float>>(dst_fr, real_ochan);
     compressor = std::make_unique<DRCompressor>(static_cast<float>(dst_fs), real_ochan);
 
-    if (enable_denoise)
-    {
-        if (ti != 10 || dst_fs % DENOISE_SAMPLE_RATE)
-        {
-            AUDIO_ERROR_PRINT("Cannot enable denoise, ti = %u, dst_fs = %u", ti, dst_fs);
-            enable_denoise = false;
-        }
-        else
-        {
-            AUDIO_DEBUG_PRINT("Enable NoiseSuppressor");
-            denoiser = std::make_unique<NoiseSuppressor>(1, real_ochan);
-            if (dst_fs > DENOISE_SAMPLE_RATE)
-            {
-                split_data =
-                    std::make_unique<ChannelBuffer<float>>(dst_fr, real_ochan, dst_fr * 100 / DENOISE_SAMPLE_RATE);
-                splitting_filter =
-                    std::make_unique<SplittingFilter>(real_ochan, dst_fr * 100 / DENOISE_SAMPLE_RATE, dst_fr);
-            }
-        }
-    }
-
     // Create resampler if needed
     if (src_fs != dst_fs)
     {
@@ -283,23 +261,6 @@ RetCode LocSampler::process(const InterleavedView<const PCM_TYPE> &input, const 
     {
         convert_sample_rate(ibuffer, obuffer);
         buf_ptr = analysis_obuffer.get();
-    }
-
-    // Step 4: Apply noise suppression if enabled
-    if (enable_denoise)
-    {
-        if (dst_fs > DENOISE_SAMPLE_RATE)
-        {
-            splitting_filter->Analysis(buf_ptr, split_data.get());
-            denoiser->Analyze(*split_data);
-            denoiser->Process(*split_data);
-            splitting_filter->Synthesis(split_data.get(), buf_ptr);
-        }
-        else
-        {
-            denoiser->Analyze(*buf_ptr);
-            denoiser->Process(*buf_ptr);
-        }
     }
 
     // Step 5: Apply dynamic range compression
