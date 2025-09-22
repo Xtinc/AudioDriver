@@ -49,12 +49,11 @@ class OAStream : public std::enable_shared_from_this<OAStream>
         bool enabled;
         SessionData session;
         LocSampler sampler;
-        unsigned int volume; // 添加音量属性
 
         SessionContext(unsigned int src_fs, unsigned int src_ch, unsigned int dst_fs, unsigned int dst_ch,
                        unsigned int max_frames, const AudioChannelMap &imap, const AudioChannelMap &omap)
             : enabled(true), session(max_frames * sizeof(PCM_TYPE), 5, src_ch),
-              sampler(src_fs, src_ch, dst_fs, dst_ch, max_frames, imap, omap, false), volume(50)
+              sampler(src_fs, src_ch, dst_fs, dst_ch, max_frames, imap, omap, false)
         {
         }
     };
@@ -81,12 +80,10 @@ class OAStream : public std::enable_shared_from_this<OAStream>
     RetCode mute(unsigned char token, const std::string &ip = "");
     RetCode unmute(unsigned char token, const std::string &ip = "");
     RetCode set_volume(unsigned int vol);
-    RetCode set_session_volume(unsigned int vol, unsigned char itoken, const std::string &ip = "");
     AudioDeviceName name() const;
 
     void register_listener(const std::shared_ptr<IAStream> &ias);
     void unregister_listener();
-    void report_conns(std::vector<InfoLabel> &result);
 
   private:
     void execute_loop(TimePointer tp, unsigned int cnt);
@@ -116,6 +113,7 @@ class OAStream : public std::enable_shared_from_this<OAStream>
     obuffer_ptr mix_buf;
     obuffer_ptr databuf;
     odevice_ptr odevice;
+    std::atomic_uint volume;
 
     std::mutex session_mtx;
     std::map<uint64_t, context_ptr> sessions;
@@ -162,7 +160,6 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     AudioDeviceName name() const;
 
     void register_callback(AudioInputCallBack cb, unsigned int required_frames, UsrCallBackMode mode, void *ptr);
-    void report_conns(std::vector<InfoLabel> &result);
 
   private:
     void execute_loop(TimePointer tp, unsigned int cnt);

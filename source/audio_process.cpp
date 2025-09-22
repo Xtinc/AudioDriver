@@ -1,5 +1,4 @@
 #include "audio_process.h"
-#include "audio_filterbanks.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>

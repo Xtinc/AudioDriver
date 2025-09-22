@@ -118,7 +118,7 @@ OAStream::OAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
       omap(_omap == AudioChannelMap{} ? (_ch == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP) : _omap), fs(_fs),
       ps(fs * ti / 1000), ch(_ch), usr_name(_name), oas_ready(false), exec_timer(BG_SERVICE),
       exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE), reset_strand(asio::make_strand(BG_SERVICE)),
-      muted(false)
+      muted(false), volume(50)
 {
     DBG_ASSERT_LT(omap[0], ch);
     DBG_ASSERT_LT(omap[1], ch);
@@ -273,7 +273,6 @@ RetCode OAStream::direct_push(unsigned char itoken, unsigned int chan, unsigned 
         }
 
         it = result.first;
-        it->second->volume = 50;
         AUDIO_INFO_PRINT("%u receiver New connection: %u (IP: 0x%08X)", token, itoken, source_ip);
     }
 
@@ -414,81 +413,9 @@ RetCode OAStream::set_volume(unsigned int vol)
         AUDIO_ERROR_PRINT("Invalid volume value: %u", vol);
         return {RetCode::EPARAM, "Invalid volume value"};
     }
-
+    volume.store(vol);
     AUDIO_INFO_PRINT("Token %u all volume set to %u, gain: %.2f db", token, vol, volume2gain(vol));
-
-    std::lock_guard<std::mutex> grd(session_mtx);
-    for (auto &session_pair : sessions)
-    {
-        session_pair.second->volume = vol;
-    }
-
     return RetCode::OK;
-}
-
-RetCode OAStream::set_session_volume(unsigned int vol, unsigned char itoken, const std::string &ip)
-{
-    if (vol > 100)
-    {
-        AUDIO_ERROR_PRINT("Invalid volume value: %u", vol);
-        return {RetCode::EPARAM, "Invalid volume value"};
-    }
-
-    if (ip.empty())
-    {
-        std::lock_guard<std::mutex> grd(session_mtx);
-        int updated_count = 0;
-
-        for (auto &session_pair : sessions)
-        {
-            if ((session_pair.first & 0xFF) == itoken)
-            {
-                session_pair.second->volume = vol;
-                updated_count++;
-            }
-        }
-
-        if (updated_count > 0)
-        {
-            AUDIO_INFO_PRINT("Set volume to %u for %d sessions with token %u (all IPs), gain: %.2f db", vol,
-                             updated_count, itoken, volume2gain(vol));
-            return RetCode::OK;
-        }
-        else
-        {
-            AUDIO_INFO_PRINT("No sessions found with token %u to set volume", itoken);
-            return {RetCode::NOACTION, "Session not found"};
-        }
-    }
-
-    try
-    {
-        uint32_t ip_address = 0;
-        asio::ip::address_v4 addr = asio::ip::make_address_v4(ip);
-        ip_address = addr.to_uint();
-
-        uint64_t composite_key = InfoLabel::make_composite(ip_address, itoken);
-
-        std::lock_guard<std::mutex> grd(session_mtx);
-        auto it = sessions.find(composite_key);
-        if (it != sessions.end())
-        {
-            it->second->volume = vol;
-            AUDIO_INFO_PRINT("Set volume to %u for session from IP %s with token %u, gain: %.2f db", vol, ip.c_str(),
-                             itoken, volume2gain(vol));
-            return RetCode::OK;
-        }
-        else
-        {
-            AUDIO_ERROR_PRINT("Cannot find session from IP %s with token %u", ip.c_str(), itoken);
-            return {RetCode::NOACTION, "Session not found"};
-        }
-    }
-    catch (const std::exception &e)
-    {
-        AUDIO_ERROR_PRINT("Invalid IP address format: %s - %s", ip.c_str(), e.what());
-        return {RetCode::FAILED, "Invalid IP address format"};
-    }
 }
 
 AudioDeviceName OAStream::name() const
@@ -520,17 +447,6 @@ void OAStream::unregister_listener()
 {
     std::lock_guard<std::mutex> grd(listener_mtx);
     listener.reset();
-}
-
-void OAStream::report_conns(std::vector<InfoLabel> &result)
-{
-    auto oas_muted = muted.load();
-    std::lock_guard<std::mutex> grd(session_mtx);
-    for (const auto &session_pair : sessions)
-    {
-        result.emplace_back(session_pair.first, InfoLabel::make_composite(0, token), session_pair.second->enabled,
-                            false, oas_muted);
-    }
 }
 
 void OAStream::execute_loop(TimePointer tp, unsigned int cnt)
@@ -602,7 +518,7 @@ void OAStream::process_data()
             InterleavedView<const PCM_TYPE> iview(session_source, session_frames, session_channels);
             InterleavedView<PCM_TYPE> oview(reinterpret_cast<PCM_TYPE *>(mix_buf.get()), ps, ch);
 
-            float session_gain = volume2gain(context->volume);
+            float session_gain = volume2gain(volume.load());
             auto ret = context->sampler.process(iview, oview, session_gain);
             if (ret != RetCode::OK)
             {
@@ -977,19 +893,6 @@ void IAStream::register_callback(AudioInputCallBack cb, unsigned int required_fr
     usr_cb.mode = mode;
     usr_cb.ptr = ptr;
     session = std::make_unique<SessionData>(required_frames * sizeof(PCM_TYPE), 3, spf_ch);
-}
-
-void IAStream::report_conns(std::vector<InfoLabel> &result)
-{
-    auto ias_muted = muted.load();
-    std::lock_guard<std::mutex> grd(dest_mtx);
-    for (auto &iter : dests)
-    {
-        if (auto np = iter.lock())
-        {
-            result.emplace_back(0, token, 0, np->token, false, ias_muted, false);
-        }
-    }
 }
 
 void IAStream::execute_loop(TimePointer tp, unsigned int cnt)
