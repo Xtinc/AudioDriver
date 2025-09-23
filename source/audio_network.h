@@ -3,10 +3,11 @@
 
 #include "asio.hpp"
 #include "audio_interface.h"
+#include "opus.h"
 #include <array>
-#include <bitset>
 #include <chrono>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <utility>
 #include <vector>
@@ -22,84 +23,11 @@ template <typename E> constexpr E val2enum(std::underlying_type_t<E> val)
     return static_cast<E>(val);
 }
 
-inline AudioBandWidth byte_to_bandwidth(uint8_t byte)
-{
-    switch (byte)
-    {
-    case 8:
-        return AudioBandWidth::Narrow;
-    case 16:
-        return AudioBandWidth::Wide;
-    case 24:
-        return AudioBandWidth::SemiSuperWide;
-    case 44:
-        return AudioBandWidth::CDQuality;
-    case 48:
-        return AudioBandWidth::Full;
-    default:
-        return AudioBandWidth::Unknown;
-    }
-}
-
 constexpr uint8_t NET_PROBE_MAGIC = 0xBB;
 constexpr uint8_t NET_AUDIO_MAGIC = 0xBD;
-constexpr uint8_t NET_FEC_MAGIC = 0xBC;
 constexpr unsigned int NETWORK_MAX_FRAMES = enum2val(AudioPeriodSize::INR_40MS) * enum2val(AudioBandWidth::Full) / 1000;
 constexpr unsigned int NETWORK_MAX_BUFFER_SIZE = NETWORK_MAX_FRAMES * 2 + 128;
-
-// Unified FEC processor for both encoding and recovery
-class FECProcessor
-{
-  public:
-    static constexpr size_t GROUP_SIZE = 3;
-    static constexpr size_t MAX_PACKET_SIZE = NETWORK_MAX_BUFFER_SIZE;
-
-    FECProcessor();
-    void reset();
-
-    // For encoding (sender side)
-    bool add_packet(const uint8_t *data, size_t size, uint32_t sequence);
-
-    bool is_complete() const
-    {
-        return packet_count == GROUP_SIZE;
-    }
-
-    const uint8_t *get_fec_data() const
-    {
-        return fec_data;
-    }
-
-    size_t get_fec_size() const
-    {
-        return fec_size;
-    }
-
-    uint32_t get_base_sequence() const
-    {
-        return base_sequence;
-    }
-
-    // For recovery (receiver side)
-    bool add_received_packet(const uint8_t *data, size_t size, uint32_t sequence);
-    bool add_fec_packet(const uint8_t *fec, size_t size);
-    bool can_recover() const;
-    bool recover_missing(uint8_t *output, size_t &size);
-    bool is_packet_received(size_t index) const
-    {
-        return index < GROUP_SIZE ? received[index] : false;
-    }
-
-  private:
-    uint8_t packets[GROUP_SIZE][MAX_PACKET_SIZE];
-    size_t packet_sizes[GROUP_SIZE];
-    bool received[GROUP_SIZE];
-    uint8_t fec_data[MAX_PACKET_SIZE];
-    size_t fec_size;
-    bool has_fec;
-    uint32_t base_sequence;
-    size_t packet_count;
-};
+constexpr size_t OPUS_MAX_PACKET_SIZE = 4000;
 
 struct NetStatInfos
 {
@@ -197,59 +125,6 @@ struct KFifo
     }
 };
 
-class NetEncoder
-{
-  private:
-    struct State
-    {
-        int32_t predictor{0};
-        int step_index{0};
-    };
-
-  public:
-    NetEncoder(unsigned int channels, unsigned int max_frames);
-    const uint8_t *encode(const int16_t *pcm_data, unsigned int frames, size_t &out_size);
-    void reset() noexcept;
-
-  public:
-    const unsigned int channels;
-    const unsigned int max_frames;
-
-  private:
-    uint8_t encode_sample(int16_t sample, State &state);
-    size_t calculate_encoded_size(unsigned int frames) const noexcept;
-
-    std::vector<State> encode_states;
-    std::unique_ptr<uint8_t[]> encode_buffer;
-};
-
-class NetDecoder
-{
-  private:
-    struct State
-    {
-        int32_t predictor{0};
-        int step_index{0};
-    };
-
-  public:
-    NetDecoder(unsigned int channels, unsigned int max_frames);
-
-    const int16_t *decode(const uint8_t *adpcm_data, size_t adpcm_size, unsigned int &out_frames);
-
-    void reset() noexcept;
-
-  public:
-    const unsigned int channels;
-    const unsigned int max_frames;
-
-  private:
-    int16_t decode_sample(uint8_t code, State &state);
-
-    std::vector<State> decode_states;
-    std::unique_ptr<int16_t[]> decode_buffer;
-};
-
 struct ProbePacket
 {
     uint8_t magic_num;   // 1 byte  - offset 0
@@ -262,16 +137,14 @@ struct ProbePacket
 
 struct DataPacket
 {
-    uint8_t magic_num;   // 1 byte  - offset 0
-    uint8_t sender_id;   // 1 byte  - offset 1
-    uint8_t receiver_id; // 1 byte  - offset 2
-    uint8_t is_fec;      // 1 byte  - offset 3
-    uint8_t channels;    // 1 byte  - offset 4
-    uint8_t sample_rate; // 1 byte  - offset 5
-    uint8_t padding[2];  // 2 bytes - offset 6 (for 8-byte alignment)
-    uint32_t sequence;   // 4 bytes - offset 8 (aligned)
-    uint32_t session_id; // 4 bytes - offset 12 (aligned)
-    uint64_t timestamp;  // 8 bytes - offset 16 (aligned)
+    uint8_t magic_num;    // 1 byte  - offset 0
+    uint8_t sender_id;    // 1 byte  - offset 1
+    uint8_t receiver_id;  // 1 byte  - offset 2
+    uint8_t channels;     // 1 byte  - offset 3
+    uint32_t sample_rate; // 4 bytes - offset 4 (aligned)
+    uint32_t sequence;    // 4 bytes - offset 8 (aligned)
+    uint32_t session_id;  // 4 bytes - offset 12 (aligned)
+    uint64_t timestamp;   // 8 bytes - offset 16 (aligned)
 };
 
 class NetWorker : public std::enable_shared_from_this<NetWorker>
@@ -308,30 +181,73 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
 
     struct SenderContext
     {
-        std::unique_ptr<NetEncoder> encoder;
+        ::OpusEncoder *encoder;
+        std::unique_ptr<uint8_t[]> encode_buffer;
         std::vector<Destination> destinations;
         unsigned int channels;
         unsigned int sample_rate;
         unsigned int isequence;
-        std::unique_ptr<FECProcessor> fec_processor;
 
-        SenderContext(unsigned int ch, unsigned int sr)
-            : encoder(std::make_unique<NetEncoder>(ch, NETWORK_MAX_FRAMES)), channels(ch), sample_rate(sr),
-              isequence(0), fec_processor(std::make_unique<FECProcessor>())
+        SenderContext(unsigned int ch, unsigned int sr) : encoder(nullptr), channels(ch), sample_rate(sr), isequence(0)
         {
+            int error;
+            encoder = opus_encoder_create(sr, ch, OPUS_APPLICATION_VOIP, &error);
+            if (error == OPUS_OK && encoder)
+            {
+                opus_encoder_ctl(encoder, OPUS_SET_BITRATE(64000));
+                opus_encoder_ctl(encoder, OPUS_SET_COMPLEXITY(8));
+                opus_encoder_ctl(encoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_VOICE));
+
+                // 开启FEC功能
+                opus_encoder_ctl(encoder, OPUS_SET_INBAND_FEC(1));
+                opus_encoder_ctl(encoder, OPUS_SET_PACKET_LOSS_PERC(5)); // 假设5%的丢包率
+
+                encode_buffer = std::make_unique<uint8_t[]>(OPUS_MAX_PACKET_SIZE);
+            }
         }
+
+        ~SenderContext()
+        {
+            if (encoder)
+            {
+                opus_encoder_destroy(encoder);
+            }
+        }
+
+        SenderContext(const SenderContext &) = delete;
+        SenderContext &operator=(const SenderContext &) = delete;
+        SenderContext(SenderContext &&) = default;
+        SenderContext &operator=(SenderContext &&) = default;
     };
 
     struct DecoderContext
     {
-        std::unique_ptr<NetDecoder> decoder;
+        ::OpusDecoder *decoder;
+        std::unique_ptr<int16_t[]> decode_buffer;
         NetState stats;
-        std::unique_ptr<FECProcessor> fec_processor;
 
-        DecoderContext(unsigned int ch, unsigned int max_frames)
-            : decoder(std::make_unique<NetDecoder>(ch, max_frames)), fec_processor(std::make_unique<FECProcessor>())
+        DecoderContext(unsigned int ch, unsigned int sr) : decoder(nullptr)
         {
+            int error;
+            decoder = opus_decoder_create(sr, ch, &error);
+            if (error == OPUS_OK && decoder)
+            {
+                decode_buffer = std::make_unique<int16_t[]>(NETWORK_MAX_FRAMES * ch);
+            }
         }
+
+        ~DecoderContext()
+        {
+            if (decoder)
+            {
+                opus_decoder_destroy(decoder);
+            }
+        }
+
+        DecoderContext(const DecoderContext &) = delete;
+        DecoderContext &operator=(const DecoderContext &) = delete;
+        DecoderContext(DecoderContext &&) = default;
+        DecoderContext &operator=(DecoderContext &&) = default;
 
         void update_stats(uint32_t sequence, uint64_t timestamp)
         {
@@ -368,23 +284,17 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     void handle_receive(const asio::error_code &error, std::size_t bytes_transferred,
                         const asio::ip::udp::endpoint &sender_endpoint);
     void retry_receive_with_backoff();
-    DecoderContext &get_decoder(uint8_t sender_id, uint32_t session_id, unsigned int channels);
-    void process_and_deliver_audio(uint8_t sender_id, uint8_t receiver_id, uint8_t channels, uint32_t sequence,
-                                   uint64_t timestamp, const uint8_t *adpcm_data, size_t adpcm_size,
-                                   uint32_t session_id, AudioBandWidth sample_enum);
+    DecoderContext &get_decoder(uint8_t sender_id, uint32_t session_id, unsigned int channels,
+                                unsigned int sample_rate);
 
-    // Unified packet processing
     void process_data_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size, uint32_t sender_ip);
     bool validate_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size);
-    void handle_audio_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size,
-                             uint32_t combined_session_id);
-    void handle_fec_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size,
-                           uint32_t combined_session_id);
+    void process_and_deliver_audio(uint8_t sender_id, uint8_t receiver_id, uint8_t channels, uint32_t sequence,
+                                   uint64_t timestamp, const uint8_t *opus_data, size_t opus_size, uint32_t session_id,
+                                   unsigned int sample_rate);
 
-    // FEC related methods
     void send_data_packet(const Destination &dest, uint8_t sender_id, uint8_t receiver_id, uint32_t sequence,
-                          uint64_t timestamp, const uint8_t *data, size_t size, uint8_t channels, uint8_t sample_rate,
-                          bool is_fec);
+                          uint64_t timestamp, const uint8_t *data, size_t size, uint8_t channels, uint32_t sample_rate);
 
     bool is_ready() const
     {

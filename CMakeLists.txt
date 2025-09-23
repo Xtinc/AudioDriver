@@ -25,6 +25,9 @@ add_library(asio INTERFACE)
 target_include_directories(asio INTERFACE "${CMAKE_SOURCE_DIR}/asio-1.30.2/include")
 target_compile_definitions(asio INTERFACE $<$<CXX_COMPILER_ID:MSVC>:_WIN32_WINNT=0x0601>)
 
+#opus
+add_subdirectory(opus-1.5.2)
+
 # Collect source files
 aux_source_directory(${CMAKE_SOURCE_DIR}/source TRANS_FILES)
 
@@ -36,6 +39,7 @@ target_include_directories(bettyaudio
 )
 target_link_libraries(bettyaudio 
     asio
+    opus
     $<$<PLATFORM_ID:Windows>:${WINDOWS_LIBS}>
     $<$<PLATFORM_ID:Linux>:${LINUX_LIBS}>
 )
