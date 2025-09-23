@@ -17,7 +17,7 @@
 struct TimerCounter
 {
     TimerCounter(const std::string &_name, unsigned int _threshold)
-        : counter(0), avg_interval(0), name(_name), threshold(_threshold),
+        : counter(0), avg_interval(0), name(_name), threshold(1000 * _threshold),
           last_print_time(std::chrono::steady_clock::now()), last_cycle_time(std::chrono::steady_clock::now()),
           sample_count(0)
     {
