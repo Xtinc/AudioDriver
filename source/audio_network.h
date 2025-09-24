@@ -155,15 +155,6 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     using ReceiverContext = ReceiveCallback;
 
   private:
-    struct RttMetrics
-    {
-        double avg_rtt{0.0};
-        double last_rtt{0.0};
-        uint32_t sample_count{0};
-        std::chrono::steady_clock::time_point last_update_time{std::chrono::steady_clock::now()};
-        static constexpr double alpha = 0.2;
-    };
-
     struct Destination
     {
         asio::ip::udp::endpoint endpoint;
@@ -216,8 +207,30 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
 
         SenderContext(const SenderContext &) = delete;
         SenderContext &operator=(const SenderContext &) = delete;
-        SenderContext(SenderContext &&) = default;
-        SenderContext &operator=(SenderContext &&) = default;
+
+        SenderContext(SenderContext &&other) noexcept
+            : encoder(other.encoder), encode_buffer(std::move(other.encode_buffer)),
+              destinations(std::move(other.destinations)), channels(other.channels), sample_rate(other.sample_rate),
+              isequence(other.isequence)
+        {
+            other.encoder = nullptr;
+        }
+
+        SenderContext &operator=(SenderContext &&other) noexcept
+        {
+            if (this != &other)
+            {
+                encoder = other.encoder;
+                encode_buffer = std::move(other.encode_buffer);
+                destinations = std::move(other.destinations);
+                channels = other.channels;
+                sample_rate = other.sample_rate;
+                isequence = other.isequence;
+
+                other.encoder = nullptr;
+            }
+            return *this;
+        }
     };
 
     struct DecoderContext
@@ -246,8 +259,24 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
 
         DecoderContext(const DecoderContext &) = delete;
         DecoderContext &operator=(const DecoderContext &) = delete;
-        DecoderContext(DecoderContext &&) = default;
-        DecoderContext &operator=(DecoderContext &&) = default;
+
+        DecoderContext(DecoderContext &&other) noexcept
+            : decoder(other.decoder), decode_buffer(std::move(other.decode_buffer)), stats(std::move(other.stats))
+        {
+            other.decoder = nullptr;
+        }
+
+        DecoderContext &operator=(DecoderContext &&other) noexcept
+        {
+            if (this != &other)
+            {
+                decoder = other.decoder;
+                decode_buffer = std::move(other.decode_buffer);
+                stats = std::move(other.stats);
+                other.decoder = nullptr;
+            }
+            return *this;
+        }
 
         void update_stats(uint32_t sequence, uint64_t timestamp)
         {
@@ -279,8 +308,6 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     void report();
     void start_receive_loop();
     void start_stats_loop();
-    void send_rtt_probes();
-    void process_probe_packet(const ProbePacket *probe, const asio::ip::udp::endpoint &endpoint);
     void handle_receive(const asio::error_code &error, std::size_t bytes_transferred,
                         const asio::ip::udp::endpoint &sender_endpoint);
     void retry_receive_with_backoff();
@@ -318,9 +345,6 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     std::mutex decoders_mutex;
     std::map<uint8_t, ReceiverContext> receivers;
     asio::steady_timer stats_timer;
-
-    std::map<uint32_t, RttMetrics> rtt_data;
-    uint32_t probe_sequence{0};
 };
 
 #endif

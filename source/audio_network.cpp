@@ -287,8 +287,7 @@ NetWorker::NetWorker(asio::io_context &io_context, uint16_t port, const std::str
             local_session_id = addr.to_uint();
         }
 
-        AUDIO_INFO_PRINT("NetWorker initialized - receive port: %d, send port: %d",
-                         receive_socket->local_endpoint().port(), send_socket->local_endpoint().port());
+        AUDIO_INFO_PRINT("NetWorker initialized - receive port: %d", port);
     }
     catch (const std::exception &e)
     {
@@ -428,7 +427,7 @@ RetCode NetWorker::register_sender(uint8_t sender_id, unsigned int channels, uns
         return {RetCode::FAILED, "Sender ID already exists"};
     }
 
-    auto result = senders.try_emplace(sender_id, channels, sample_rate);
+    auto result = senders.emplace(sender_id, SenderContext(channels, sample_rate));
     if (!result.second || !result.first->second.encoder)
     {
         senders.erase(sender_id);
@@ -595,109 +594,9 @@ void NetWorker::start_stats_loop()
         if (!ec && self->running)
         {
             self->report();
-            self->send_rtt_probes();
             self->start_stats_loop();
         }
     });
-}
-
-void NetWorker::send_rtt_probes()
-{
-    if (!is_ready())
-    {
-        return;
-    }
-
-    std::lock_guard<std::mutex> lock(senders_mutex);
-
-    uint64_t current_time =
-        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch())
-            .count();
-    std::set<asio::ip::udp::endpoint> unique_endpoints;
-    for (const auto &sender_pair : senders)
-    {
-        for (const auto &dest : sender_pair.second.destinations)
-        {
-            unique_endpoints.insert(dest.endpoint);
-        }
-    }
-
-    for (const auto &endpoint : unique_endpoints)
-    {
-        ProbePacket probe{};
-        probe.magic_num = NET_PROBE_MAGIC;
-        probe.sender_id = 0;
-        probe.receiver_id = 0;
-        probe.is_response = 0;
-        probe.sequence = probe_sequence++;
-        probe.timestamp = current_time;
-
-        send_socket->async_send_to(asio::buffer(&probe, sizeof(probe)), endpoint,
-                                   [endpoint](const asio::error_code &error, std::size_t /*bytes*/) {
-                                       if (error)
-                                       {
-                                           AUDIO_DEBUG_PRINT("RTT probe send error to %s:%d: %s",
-                                                             endpoint.address().to_string().c_str(), endpoint.port(),
-                                                             error.message().c_str());
-                                       }
-                                   });
-    }
-}
-
-void NetWorker::process_probe_packet(const ProbePacket *probe, const asio::ip::udp::endpoint &endpoint)
-{
-    if (!probe || !is_ready())
-    {
-        return;
-    }
-
-    if (probe->magic_num != NET_PROBE_MAGIC)
-    {
-        return;
-    }
-
-    if (probe->is_response == 0)
-    {
-        ProbePacket response{};
-        response.magic_num = NET_PROBE_MAGIC;
-        response.sender_id = probe->receiver_id;
-        response.receiver_id = probe->sender_id;
-        response.is_response = 1;
-        response.sequence = probe->sequence;
-        response.timestamp = probe->timestamp;
-
-        send_socket->async_send_to(asio::buffer(&response, sizeof(response)), endpoint,
-                                   [](const asio::error_code &error, std::size_t /*bytes*/) {
-                                       if (error)
-                                       {
-                                           AUDIO_DEBUG_PRINT("RTT probe response error: %s", error.message().c_str());
-                                       }
-                                   });
-    }
-    else
-    {
-        auto now = std::chrono::steady_clock::now();
-        uint64_t current_time = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-        uint64_t send_time = probe->timestamp;
-        auto rtt = static_cast<double>(current_time - send_time);
-        uint32_t endpoint_ip = endpoint.address().is_v4() ? endpoint.address().to_v4().to_uint() : 0;
-        auto &metrics = rtt_data[endpoint_ip];
-
-        metrics.last_rtt = rtt;
-        metrics.sample_count++;
-        metrics.last_update_time = now;
-
-        if (metrics.sample_count == 1)
-        {
-            metrics.avg_rtt = rtt;
-        }
-        else
-        {
-            metrics.avg_rtt = RttMetrics::alpha * rtt + (1.0 - RttMetrics::alpha) * metrics.avg_rtt;
-        }
-
-        AUDIO_INFO_PRINT("RTT to 0x%08X: %.2f ms (avg: %.2f ms)", endpoint_ip, rtt, metrics.avg_rtt);
-    }
 }
 
 void NetWorker::handle_receive(const asio::error_code &error, std::size_t bytes_transferred,
@@ -713,23 +612,15 @@ void NetWorker::handle_receive(const asio::error_code &error, std::size_t bytes_
         return;
     }
 
-    if (bytes_transferred >= sizeof(uint8_t))
+    auto magic_num = static_cast<uint8_t>(receive_buffer.get()[0]);
+    if (bytes_transferred >= sizeof(DataPacket) && magic_num == NET_AUDIO_MAGIC)
     {
-        auto magic_num = static_cast<uint8_t>(receive_buffer.get()[0]);
 
-        if (magic_num == NET_PROBE_MAGIC && bytes_transferred >= sizeof(ProbePacket))
-        {
-            auto probe = reinterpret_cast<const ProbePacket *>(receive_buffer.get());
-            process_probe_packet(probe, sender_endpoint);
-        }
-        else if (magic_num == NET_AUDIO_MAGIC && bytes_transferred >= sizeof(DataPacket))
-        {
-            auto data_header = reinterpret_cast<const DataPacket *>(receive_buffer.get());
-            const auto *payload = reinterpret_cast<const uint8_t *>(receive_buffer.get() + sizeof(DataPacket));
-            size_t payload_size = bytes_transferred - sizeof(DataPacket);
-            auto sender_id = sender_endpoint.address().is_v4() ? sender_endpoint.address().to_v4().to_uint() : 0;
-            process_data_packet(data_header, payload, payload_size, sender_id);
-        }
+        auto data_header = reinterpret_cast<const DataPacket *>(receive_buffer.get());
+        const auto *payload = reinterpret_cast<const uint8_t *>(receive_buffer.get() + sizeof(DataPacket));
+        size_t payload_size = bytes_transferred - sizeof(DataPacket);
+        auto sender_id = sender_endpoint.address().is_v4() ? sender_endpoint.address().to_v4().to_uint() : 0;
+        process_data_packet(data_header, payload, payload_size, sender_id);
     }
 
     if (running)
@@ -763,7 +654,8 @@ NetWorker::DecoderContext &NetWorker::get_decoder(uint8_t sender_id, uint32_t se
     auto it = decoders.find(composite_key);
     if (it == decoders.end())
     {
-        auto result = decoders.try_emplace(composite_key, channels, sample_rate);
+        // 使用C++14兼容的方式替换try_emplace
+        auto result = decoders.emplace(composite_key, DecoderContext(channels, sample_rate));
         return result.first->second;
     }
 
@@ -808,21 +700,19 @@ void NetWorker::process_and_deliver_audio(uint8_t sender_id, uint8_t receiver_id
         AUDIO_ERROR_PRINT("Decoder not available for sender %u (session 0x%08X)", sender_id, session_id);
         return;
     }
-
-    // 使用FEC解码 - 第5个参数设为1表示使用带内FEC
-    int decoded_frames = opus_decode(decoder_context.decoder, opus_data, static_cast<opus_int32>(opus_size),
-                                     decoder_context.decode_buffer.get(), NETWORK_MAX_FRAMES, 1);
-    if (decoded_frames < 0)
+    int decoded_frames_sz = opus_decode(decoder_context.decoder, opus_data, static_cast<opus_int32>(opus_size),
+                                        decoder_context.decode_buffer.get(), NETWORK_MAX_FRAMES, 1);
+    if (decoded_frames_sz < 0)
     {
         AUDIO_ERROR_PRINT("Failed to decode Opus data from sender %u (session 0x%08X): %s", sender_id, session_id,
-                          opus_strerror(decoded_frames));
+                          opus_strerror(decoded_frames_sz));
         return;
     }
 
     auto receiver_it = receivers.find(receiver_id);
     if (receiver_it != receivers.end())
     {
-        receiver_it->second(sender_id, channels, static_cast<unsigned int>(decoded_frames), sample_rate,
+        receiver_it->second(sender_id, channels, static_cast<unsigned int>(decoded_frames_sz / channels), sample_rate,
                             decoder_context.decode_buffer.get(), session_id);
     }
     else
