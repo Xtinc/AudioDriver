@@ -50,8 +50,7 @@ RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBand
         return RetCode::NOACTION;
     }
 
-    ias_map[token.tok] =
-        std::make_shared<IAStream>(token.tok, name, enum2val(ps), enum2val(bw), ch, true, enable_reset);
+    ias_map[token.tok] = std::make_shared<IAStream>(token.tok, name, enum2val(ps), enum2val(bw), ch, enable_reset);
 
     if (enable_network && net_mgr)
     {
@@ -103,7 +102,7 @@ RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBand
         return RetCode::NOACTION;
     }
 
-    ias_map[token.tok] = std::make_shared<IAStream>(token.tok, name, enum2val(ps), enum2val(bw), dev_ch, imap, true);
+    ias_map[token.tok] = std::make_shared<IAStream>(token.tok, name, enum2val(ps), enum2val(bw), dev_ch, imap);
 
     if (enable_network && net_mgr)
     {
@@ -249,19 +248,19 @@ RetCode AudioCenter::create(IToken itoken, OToken otoken, bool enable_network)
     {
         ias_map[itoken.tok] =
             std::make_shared<IAStream>(itoken.tok, AudioDeviceName("null", 0), enum2val(AudioPeriodSize::INR_20MS),
-                                       enum2val(AudioBandWidth::Full), 1, false, false);
+                                       enum2val(AudioBandWidth::Full), 1, false);
     }
     else if (oas->second->omap == DEFAULT_DUAL_MAP)
     {
         ias_map[itoken.tok] =
             std::make_shared<IAStream>(itoken.tok, AudioDeviceName("null", 0), enum2val(AudioPeriodSize::INR_20MS),
-                                       enum2val(AudioBandWidth::Full), 2, false, false);
+                                       enum2val(AudioBandWidth::Full), 2, false);
     }
     else
     {
         ias_map[itoken.tok] =
             std::make_shared<IAStream>(itoken.tok, AudioDeviceName("null", 0), enum2val(AudioPeriodSize::INR_20MS),
-                                       enum2val(AudioBandWidth::Full), 99, oas->second->omap, false);
+                                       enum2val(AudioBandWidth::Full), 99, oas->second->omap);
     }
 
     if (enable_network && net_mgr)
@@ -298,7 +297,7 @@ RetCode AudioCenter::prepare(bool enable_usb_detection)
 
     ias_map.emplace(USR_DUMMY_IN.tok, std::make_shared<IAStream>(USR_DUMMY_IN.tok, AudioDeviceName("null", 0),
                                                                  enum2val(AudioPeriodSize::INR_20MS),
-                                                                 enum2val(AudioBandWidth::Full), 2, false, false));
+                                                                 enum2val(AudioBandWidth::Full), 2, false));
     oas_map.emplace(USR_DUMMY_OUT.tok,
                     std::make_shared<OAStream>(USR_DUMMY_OUT.tok, AudioDeviceName("null", 0),
                                                enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2));

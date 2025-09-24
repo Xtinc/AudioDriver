@@ -53,7 +53,7 @@ class OAStream : public std::enable_shared_from_this<OAStream>
         SessionContext(unsigned int src_fs, unsigned int src_ch, unsigned int dst_fs, unsigned int dst_ch,
                        unsigned int max_frames, const AudioChannelMap &imap, const AudioChannelMap &omap)
             : enabled(true), session(max_frames * sizeof(PCM_TYPE), 3, src_ch),
-              sampler(src_fs, src_ch, dst_fs, dst_ch, max_frames, imap, omap, false)
+              sampler(src_fs, src_ch, dst_fs, dst_ch, max_frames, imap, omap)
         {
         }
     };
@@ -139,9 +139,9 @@ class IAStream : public std::enable_shared_from_this<IAStream>
 
   public:
     IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs, unsigned int _ch,
-             bool enable_denoise, bool auto_reset);
+             bool auto_reset);
     IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs,
-             unsigned int dev_ch, AudioChannelMap _imap, bool enable_denoise);
+             unsigned int dev_ch, AudioChannelMap _imap);
     ~IAStream();
 
     RetCode start();
@@ -177,7 +177,6 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     const unsigned int fs;
     const unsigned int ps;
     const unsigned int ch;
-    const bool enable_denoise;
     const bool enable_reset;
     const unsigned int spf_ch;
     const AudioChannelMap imap;

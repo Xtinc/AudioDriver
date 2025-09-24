@@ -23,11 +23,9 @@ template <typename E> constexpr E val2enum(std::underlying_type_t<E> val)
     return static_cast<E>(val);
 }
 
-constexpr uint8_t NET_PROBE_MAGIC = 0xBB;
 constexpr uint8_t NET_AUDIO_MAGIC = 0xBD;
 constexpr unsigned int NETWORK_MAX_FRAMES = enum2val(AudioPeriodSize::INR_40MS) * enum2val(AudioBandWidth::Full) / 1000;
-constexpr unsigned int NETWORK_MAX_BUFFER_SIZE = NETWORK_MAX_FRAMES * 2 + 128;
-constexpr size_t OPUS_MAX_PACKET_SIZE = 4000;
+constexpr unsigned int NETWORK_MAX_BUFFER_SIZE = NETWORK_MAX_FRAMES * 4 + 320;
 
 struct NetStatInfos
 {
@@ -125,16 +123,6 @@ struct KFifo
     }
 };
 
-struct ProbePacket
-{
-    uint8_t magic_num;   // 1 byte  - offset 0
-    uint8_t sender_id;   // 1 byte  - offset 1
-    uint8_t receiver_id; // 1 byte  - offset 2
-    uint8_t is_response; // 1 byte  - offset 3
-    uint32_t sequence;   // 4 bytes - offset 4 (aligned)
-    uint64_t timestamp;  // 8 bytes - offset 8 (aligned)
-};
-
 struct DataPacket
 {
     uint8_t magic_num;    // 1 byte  - offset 0
@@ -182,18 +170,13 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
         SenderContext(unsigned int ch, unsigned int sr) : encoder(nullptr), channels(ch), sample_rate(sr), isequence(0)
         {
             int error;
-            encoder = opus_encoder_create(sr, ch, OPUS_APPLICATION_VOIP, &error);
+            encoder = opus_encoder_create(sr, ch, OPUS_APPLICATION_AUDIO, &error);
             if (error == OPUS_OK && encoder)
             {
-                opus_encoder_ctl(encoder, OPUS_SET_BITRATE(64000));
-                opus_encoder_ctl(encoder, OPUS_SET_COMPLEXITY(8));
-                opus_encoder_ctl(encoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_VOICE));
-
-                // 开启FEC功能
                 opus_encoder_ctl(encoder, OPUS_SET_INBAND_FEC(1));
-                opus_encoder_ctl(encoder, OPUS_SET_PACKET_LOSS_PERC(5)); // 假设5%的丢包率
+                opus_encoder_ctl(encoder, OPUS_SET_PACKET_LOSS_PERC(3));
 
-                encode_buffer = std::make_unique<uint8_t[]>(OPUS_MAX_PACKET_SIZE);
+                encode_buffer = std::make_unique<uint8_t[]>(NETWORK_MAX_BUFFER_SIZE);
             }
         }
 

@@ -126,10 +126,9 @@ class LocSampler
      * @param max_frames Maximum number of input frames to process
      * @param imap Input channel mapping configuration
      * @param omap Output channel mapping configuration
-     * @param denoise Whether to apply noise suppression
      */
     LocSampler(unsigned int src_fs, unsigned int src_ch, unsigned int dst_fs, unsigned int dst_ch,
-               unsigned int max_frames, const AudioChannelMap &imap, const AudioChannelMap &omap, bool denoise);
+               unsigned int max_frames, const AudioChannelMap &imap, const AudioChannelMap &omap);
 
     ~LocSampler();
 

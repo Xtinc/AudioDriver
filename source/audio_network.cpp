@@ -549,7 +549,7 @@ RetCode NetWorker::send_audio(uint8_t sender_id, const int16_t *data, unsigned i
     }
 
     // Encode using raw Opus API
-    int encoded_size = opus_encode(context.encoder, data, frames, context.encode_buffer.get(), OPUS_MAX_PACKET_SIZE);
+    int encoded_size = opus_encode(context.encoder, data, frames, context.encode_buffer.get(), NETWORK_MAX_BUFFER_SIZE);
     if (encoded_size < 0)
     {
         AUDIO_ERROR_PRINT("Opus encoding failed: %s", opus_strerror(encoded_size));
@@ -654,7 +654,6 @@ NetWorker::DecoderContext &NetWorker::get_decoder(uint8_t sender_id, uint32_t se
     auto it = decoders.find(composite_key);
     if (it == decoders.end())
     {
-        // 使用C++14兼容的方式替换try_emplace
         auto result = decoders.emplace(composite_key, DecoderContext(channels, sample_rate));
         return result.first->second;
     }
@@ -679,8 +678,7 @@ void NetWorker::process_data_packet(const DataPacket *header, const uint8_t *pay
 
 bool NetWorker::validate_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size)
 {
-    return header && payload && payload_size > 0 && header->channels > 0 && header->channels <= 2 &&
-           payload_size <= OPUS_MAX_PACKET_SIZE;
+    return header && payload && payload_size > 0 && header->channels > 0 && header->channels <= 2;
 }
 
 void NetWorker::process_and_deliver_audio(uint8_t sender_id, uint8_t receiver_id, uint8_t channels, uint32_t sequence,
@@ -700,19 +698,19 @@ void NetWorker::process_and_deliver_audio(uint8_t sender_id, uint8_t receiver_id
         AUDIO_ERROR_PRINT("Decoder not available for sender %u (session 0x%08X)", sender_id, session_id);
         return;
     }
-    int decoded_frames_sz = opus_decode(decoder_context.decoder, opus_data, static_cast<opus_int32>(opus_size),
+    int decoded_frames = opus_decode(decoder_context.decoder, opus_data, static_cast<opus_int32>(opus_size),
                                         decoder_context.decode_buffer.get(), NETWORK_MAX_FRAMES, 1);
-    if (decoded_frames_sz < 0)
+    if (decoded_frames < 0)
     {
         AUDIO_ERROR_PRINT("Failed to decode Opus data from sender %u (session 0x%08X): %s", sender_id, session_id,
-                          opus_strerror(decoded_frames_sz));
+                          opus_strerror(decoded_frames));
         return;
     }
 
     auto receiver_it = receivers.find(receiver_id);
     if (receiver_it != receivers.end())
     {
-        receiver_it->second(sender_id, channels, static_cast<unsigned int>(decoded_frames_sz / channels), sample_rate,
+        receiver_it->second(sender_id, channels, static_cast<unsigned int>(decoded_frames), sample_rate,
                             decoder_context.decode_buffer.get(), session_id);
     }
     else
