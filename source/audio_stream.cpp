@@ -118,7 +118,7 @@ OAStream::OAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
       omap(_omap == AudioChannelMap{} ? (_ch == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP) : _omap), fs(_fs),
       ps(fs * ti / 1000), ch(_ch), usr_name(_name), oas_ready(false), exec_timer(BG_SERVICE),
       exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE), reset_strand(asio::make_strand(BG_SERVICE)),
-      muted(false), volume(50)
+      volume(50), muted(false)
 {
     DBG_ASSERT_LT(omap[0], ch);
     DBG_ASSERT_LT(omap[1], ch);
@@ -812,8 +812,8 @@ RetCode IAStream::direct_push(const char *data, size_t len) const
     if (usr_cb.cb && usr_cb.mode == UsrCallBackMode::OBSERVER)
     {
         auto dev_ch = idevice->ch();
-        usr_cb.cb(reinterpret_cast<const PCM_TYPE *>(data), dev_ch, (unsigned int)len / (sizeof(PCM_TYPE) * dev_ch),
-                  usr_cb.ptr);
+        usr_cb.cb(reinterpret_cast<const PCM_TYPE *>(data), dev_ch,
+                  static_cast<unsigned int>(len) / (sizeof(PCM_TYPE) * dev_ch), usr_cb.ptr);
     }
     return idevice->write(data, len);
 }

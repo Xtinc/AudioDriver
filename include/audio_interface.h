@@ -404,6 +404,7 @@ constexpr auto USR_DUMMY_OUT = 200_otk;
 constexpr auto WAVE_PLAYER_TOKEN = IToken(AudioToken(USER_MAX_AUDIO_TOKEN));
 
 // Forward declarations
+class INIReader;
 class IAStream;
 class OAStream;
 class NetWorker;
@@ -659,6 +660,7 @@ class AudioCenter
     std::map<unsigned char, std::shared_ptr<IAStream>> ias_map; /**< Map of input streams */
     std::map<unsigned char, std::shared_ptr<OAStream>> oas_map; /**< Map of output streams */
 
+    std::unique_ptr<INIReader> config;      /**< Configuration manager */
     std::shared_ptr<NetWorker> net_mgr;    /**< Network manager */
     std::unique_ptr<AudioMonitor> monitor; /**< Audio device monitor */
     std::shared_ptr<AudioPlayer> player;   /**< Audio player */

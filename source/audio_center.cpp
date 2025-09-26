@@ -1,3 +1,4 @@
+#include "audio_config.h"
 #include "audio_interface.h"
 #include "audio_monitor.h"
 #include "audio_network.h"
@@ -8,6 +9,7 @@
 AudioCenter::AudioCenter(bool enable_network, unsigned short port, const std::string &local_ip)
     : center_state(State::INIT)
 {
+    config = std::make_unique<INIReader>("audiocenter.ini");
     monitor = std::make_unique<AudioMonitor>(BG_SERVICE);
     player = std::make_shared<AudioPlayer>(WAVE_PLAYER_TOKEN.tok);
     if (enable_network)
@@ -295,11 +297,15 @@ RetCode AudioCenter::prepare(bool enable_usb_detection)
         return RetCode::OK;
     }
 
-    ias_map.emplace(USR_DUMMY_IN.tok, std::make_shared<IAStream>(USR_DUMMY_IN.tok, AudioDeviceName("null", 0),
+    auto usr_cfg = config->LoadDeviceConfig();
+    auto default_usb_in = usr_cfg.input_device_id.empty() ? "null" : usr_cfg.input_device_id;
+    auto default_usb_out = usr_cfg.output_device_id.empty() ? "null" : usr_cfg.output_device_id;
+
+    ias_map.emplace(USR_DUMMY_IN.tok, std::make_shared<IAStream>(USR_DUMMY_IN.tok, AudioDeviceName(default_usb_in, 0),
                                                                  enum2val(AudioPeriodSize::INR_20MS),
                                                                  enum2val(AudioBandWidth::Full), 2, false));
     oas_map.emplace(USR_DUMMY_OUT.tok,
-                    std::make_shared<OAStream>(USR_DUMMY_OUT.tok, AudioDeviceName("null", 0),
+                    std::make_shared<OAStream>(USR_DUMMY_OUT.tok, AudioDeviceName(default_usb_out, 0),
                                                enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2));
     if (net_mgr)
     {
@@ -322,6 +328,8 @@ RetCode AudioCenter::prepare(bool enable_usb_detection)
             return;
         }
 
+        DeviceConfig usr_cfg = config->LoadDeviceConfig();
+
         switch (event)
         {
         case AudioDeviceEvent::Added:
@@ -329,15 +337,26 @@ RetCode AudioCenter::prepare(bool enable_usb_detection)
             if (info.type == AudioDeviceType::Capture)
             {
                 ias->second->restart({info.id, 0});
+                usr_cfg.input_device_id = info.id;
+                usr_cfg.input_device_name = info.name;
+                config->SaveDeviceConfig(usr_cfg);
             }
             else if (info.type == AudioDeviceType::Playback)
             {
                 oas->second->restart({info.id, 0});
+                usr_cfg.output_device_id = info.id;
+                usr_cfg.output_device_name = info.name;
+                config->SaveDeviceConfig(usr_cfg);
             }
             else
             {
                 ias->second->restart({info.id, 0});
                 oas->second->restart({info.id, 0});
+                usr_cfg.input_device_id = info.id;
+                usr_cfg.input_device_name = info.name;
+                usr_cfg.output_device_id = info.id;
+                usr_cfg.output_device_name = info.name;
+                config->SaveDeviceConfig(usr_cfg);
             }
             break;
         case AudioDeviceEvent::Removed:
@@ -345,10 +364,16 @@ RetCode AudioCenter::prepare(bool enable_usb_detection)
             if (ias->second->name().first == info.id)
             {
                 ias->second->restart({"null", 0});
+                usr_cfg.input_device_id = "null";
+                usr_cfg.input_device_name = "null";
+                config->SaveDeviceConfig(usr_cfg);
             }
             if (oas->second->name().first == info.id)
             {
                 oas->second->restart({"null", 0});
+                usr_cfg.output_device_id = "null";
+                usr_cfg.output_device_name = "null";
+                config->SaveDeviceConfig(usr_cfg);
             }
             break;
         default:
