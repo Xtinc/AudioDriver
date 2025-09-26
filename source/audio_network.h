@@ -59,8 +59,7 @@ class NetState
 {
   public:
     NetState();
-    void update(uint32_t sequence, uint64_t timestamp);
-    NetStatInfos get_period_stats();
+    bool update(uint32_t sequence, uint64_t timestamp, NetStatInfos &stats);
     void reset();
 
   private:
@@ -83,24 +82,6 @@ class NetState
     uint32_t highest_sequence_seen{0};
     bool first_packet{true};
     std::chrono::steady_clock::time_point last_report_time;
-};
-
-struct InfoLabel
-{
-    static uint32_t extract_ip(uint64_t composite)
-    {
-        return static_cast<uint32_t>(composite >> 32);
-    }
-
-    static uint8_t extract_token(uint64_t composite)
-    {
-        return static_cast<uint8_t>(composite & 0xFF);
-    }
-
-    static uint64_t make_composite(uint32_t ip, uint8_t token)
-    {
-        return (static_cast<uint64_t>(ip) << 32) | token;
-    }
 };
 
 struct KFifo
@@ -276,14 +257,9 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
             return *this;
         }
 
-        void update_stats(uint32_t sequence, uint64_t timestamp)
+        bool update_stats(uint32_t sequence, uint64_t timestamp, NetStatInfos &stats_info)
         {
-            stats.update(sequence, timestamp);
-        }
-
-        NetStatInfos get_period_stats()
-        {
-            return stats.get_period_stats();
+            return stats.update(sequence, timestamp, stats_info);
         }
     };
 
@@ -303,9 +279,7 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     RetCode unregister_receiver(uint8_t token);
 
   private:
-    void report();
     void start_receive_loop();
-    void start_stats_loop();
     void handle_receive(const asio::error_code &error, std::size_t bytes_transferred,
                         const asio::ip::udp::endpoint &sender_endpoint);
     void retry_receive_with_backoff();
@@ -332,13 +306,11 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     std::unique_ptr<asio::ip::udp::socket> receive_socket;
     std::unique_ptr<asio::ip::udp::socket> send_socket;
     std::unique_ptr<char[]> receive_buffer;
-    std::map<uint8_t, ReceiverContext> receivers;
     std::map<uint8_t, SenderContext> senders;
     std::mutex senders_mutex;
 
+    std::map<uint8_t, ReceiverContext> receivers;
     std::map<SourceUUID, DecoderContext> decoders;
-    std::mutex decoders_mutex;
-    asio::steady_timer stats_timer;
 };
 
 #endif

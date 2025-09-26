@@ -143,7 +143,7 @@ void NetState::reset()
     last_report_time = std::chrono::steady_clock::now();
 }
 
-void NetState::update(uint32_t sequence, uint64_t timestamp)
+bool NetState::update(uint32_t sequence, uint64_t timestamp, NetStatInfos &stats)
 {
     auto now = std::chrono::steady_clock::now();
     uint64_t arrival_time = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
@@ -158,7 +158,7 @@ void NetState::update(uint32_t sequence, uint64_t timestamp)
         highest_sequence_seen = sequence;
         last_timestamp = timestamp;
         last_arrival_time = arrival_time;
-        return;
+        return false;
     }
 
     if (sequence < highest_sequence_seen)
@@ -193,11 +193,11 @@ void NetState::update(uint32_t sequence, uint64_t timestamp)
     last_sequence = sequence;
     last_timestamp = timestamp;
     last_arrival_time = arrival_time;
-}
 
-NetStatInfos NetState::get_period_stats()
-{
-    NetStatInfos stats{};
+    if (now - last_report_time < std::chrono::minutes(1))
+    {
+        return false;
+    }
 
     if (period_packets_received + period_packets_lost > 0)
     {
@@ -219,9 +219,9 @@ NetStatInfos NetState::get_period_stats()
     period_packets_lost = 0;
     period_packets_out_of_order = 0;
     period_total_jitter = 0.0;
-    last_report_time = std::chrono::steady_clock::now();
+    last_report_time = now;
 
-    return stats;
+    return true;
 }
 
 // NetWorker
@@ -253,7 +253,7 @@ static RetCode resolve_endpoint(const std::string &ip, uint16_t port, asio::ip::
 
 NetWorker::NetWorker(asio::io_context &io_context, uint16_t port, const std::string &local_ip)
     : retry_count(0), io_context(io_context), running(false), local_session_id(0),
-      receive_buffer(new char[NETWORK_MAX_BUFFER_SIZE]), stats_timer(io_context)
+      receive_buffer(new char[NETWORK_MAX_BUFFER_SIZE])
 {
     try
     {
@@ -314,7 +314,6 @@ RetCode NetWorker::start()
 
     running = true;
     start_receive_loop();
-    start_stats_loop();
 
     return {RetCode::OK, "Started"};
 }
@@ -340,40 +339,16 @@ RetCode NetWorker::stop()
         send_socket->cancel(ec);
     }
 
-    stats_timer.cancel();
-    receivers.clear();
-
     {
         std::lock_guard<std::mutex> lock(senders_mutex);
         senders.clear();
     }
 
-    {
-        std::lock_guard<std::mutex> lock(decoders_mutex);
-        decoders.clear();
-    }
+    receivers.clear();
+    decoders.clear();
 
     AUDIO_INFO_PRINT("NetWorker stopped");
     return {RetCode::OK, "Stopped"};
-}
-
-void NetWorker::report()
-{
-    std::lock_guard<std::mutex> lock(decoders_mutex);
-    for (auto &pair : decoders)
-    {
-        auto stats = pair.second.get_period_stats();
-        auto source_id = pair.first;
-
-        if (stats.packets_received > 0)
-        {
-            AUDIO_INFO_PRINT("NETSTATS(0x%08X|0x%08X:%u) : [loss] %.2f%%, [jitter] %.2fms, [received] %u, [lost] %u, "
-                             "[out-of-order] %u",
-                             source_id.sender_ip, source_id.gateway_ip, source_id.sender_token, stats.packet_loss_rate,
-                             stats.average_jitter, stats.packets_received, stats.packets_lost,
-                             stats.packets_out_of_order);
-        }
-    }
 }
 
 RetCode NetWorker::register_receiver(uint8_t token, ReceiveCallback callback)
@@ -587,19 +562,6 @@ void NetWorker::start_receive_loop()
                                        });
 }
 
-void NetWorker::start_stats_loop()
-{
-    auto self = shared_from_this();
-    stats_timer.expires_after(std::chrono::minutes(1));
-    stats_timer.async_wait([self](const asio::error_code &ec) {
-        if (!ec && self->running)
-        {
-            self->report();
-            self->start_stats_loop();
-        }
-    });
-}
-
 void NetWorker::handle_receive(const asio::error_code &error, std::size_t bytes_transferred,
                                const asio::ip::udp::endpoint &sender_endpoint)
 {
@@ -649,7 +611,6 @@ void NetWorker::retry_receive_with_backoff()
 
 NetWorker::DecoderContext &NetWorker::get_decoder(SourceUUID sid, unsigned int channels, unsigned int sample_rate)
 {
-    std::lock_guard<std::mutex> lock(decoders_mutex);
     auto it = decoders.find(sid);
     if (it == decoders.end())
     {
@@ -675,7 +636,14 @@ void NetWorker::process_and_deliver_audio(const DataPacket *header, const uint8_
     auto timestamp = header->timestamp;
 
     auto &decoder_context = get_decoder(source_id, channels, sample_rate);
-    decoder_context.update_stats(sequence, timestamp);
+    NetStatInfos stats{};
+    if (decoder_context.update_stats(sequence, timestamp, stats) && stats.packets_received > 0)
+    {
+        AUDIO_INFO_PRINT("NETSTATS(0x%08X|0x%08X:%u) : [loss] %.2f%%, [jitter] %.2fms, [received] %u, [lost] %u, "
+                         "[out-of-order] %u",
+                         source_id.sender_ip, source_id.gateway_ip, source_id.sender_token, stats.packet_loss_rate,
+                         stats.average_jitter, stats.packets_received, stats.packets_lost, stats.packets_out_of_order);
+    }
 
     if (!decoder_context.decoder || !decoder_context.decode_buffer)
     {
