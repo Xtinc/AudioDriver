@@ -252,7 +252,7 @@ static RetCode resolve_endpoint(const std::string &ip, uint16_t port, asio::ip::
 }
 
 NetWorker::NetWorker(asio::io_context &io_context, uint16_t port, const std::string &local_ip)
-    : retry_count(0), io_context(io_context), running(false), local_session_id(0),
+    : retry_count(0), io_context(io_context), running(false), local_session_ip(0),
       receive_buffer(new char[NETWORK_MAX_BUFFER_SIZE])
 {
     try
@@ -284,7 +284,7 @@ NetWorker::NetWorker(asio::io_context &io_context, uint16_t port, const std::str
         auto addr = asio::ip::make_address_v4(local_ip, addr_ec);
         if (!addr_ec)
         {
-            local_session_id = addr.to_uint();
+            local_session_ip = addr.to_uint();
         }
 
         AUDIO_INFO_PRINT("NetWorker initialized - receive port: %d", port);
@@ -506,7 +506,7 @@ RetCode NetWorker::send_audio(uint8_t sender_id, const int16_t *data, unsigned i
         return {RetCode::FAILED, "Invalid input parameters"};
     }
 
-    if (!is_ready())
+    if (!running)
     {
         return {RetCode::FAILED, "NetWorker not running"};
     }
@@ -550,10 +550,6 @@ RetCode NetWorker::send_audio(uint8_t sender_id, const int16_t *data, unsigned i
 
 void NetWorker::start_receive_loop()
 {
-    if (!is_ready())
-    {
-        return;
-    }
     auto self = shared_from_this();
     auto endpoint = std::make_shared<asio::ip::udp::endpoint>();
     receive_socket->async_receive_from(asio::buffer(receive_buffer.get(), NETWORK_MAX_BUFFER_SIZE), *endpoint,
@@ -677,7 +673,7 @@ void NetWorker::send_data_packet(const Destination &dest, uint8_t sender_id, uin
                                  uint64_t timestamp, const uint8_t *data, size_t size, uint8_t channels,
                                  uint32_t sample_rate)
 {
-    if (!is_ready() || !data || size == 0)
+    if (!running || !data || size == 0)
     {
         return;
     }
@@ -689,7 +685,7 @@ void NetWorker::send_data_packet(const Destination &dest, uint8_t sender_id, uin
     header.channels = channels;
     header.sample_rate = sample_rate;
     header.sequence = sequence;
-    header.session_id = local_session_id;
+    header.session_id = local_session_ip;
     header.timestamp = timestamp;
 
     std::array<asio::const_buffer, 2> buffers = {asio::buffer(&header, sizeof(header)), asio::buffer(data, size)};

@@ -858,7 +858,7 @@ void IAStream::register_callback(AudioInputCallBack cb, unsigned int required_fr
     usr_cb.req_frs = required_frames;
     usr_cb.mode = mode;
     usr_cb.ptr = ptr;
-    session = std::make_unique<SessionData>(required_frames * sizeof(PCM_TYPE), 3, spf_ch);
+    session = std::make_unique<SessionData>(required_frames * sizeof(PCM_TYPE), 2, spf_ch);
 }
 
 void IAStream::execute_loop(TimePointer tp, unsigned int cnt)

@@ -182,7 +182,7 @@ RetCode AlsaDriver::open()
         return RetCode::EPARAM;
     }
 
-    io_buffer = std::make_unique<KFifo>(dev_ps * sizeof(PCM_TYPE), 4, dev_ch);
+    io_buffer = std::make_unique<KFifo>(dev_ps * sizeof(PCM_TYPE), 3, dev_ch);
     AUDIO_INFO_PRINT("ALSA device [%s] opened. fs = %u, ps = %u, chan = %u, min_chan = %u, max_chan = %u",
                      hw_name.c_str(), dev_fs, dev_ps, dev_ch, min_ch, max_ch);
 

@@ -291,17 +291,12 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     void send_data_packet(const Destination &dest, uint8_t sender_id, uint8_t receiver_id, uint32_t sequence,
                           uint64_t timestamp, const uint8_t *data, size_t size, uint8_t channels, uint32_t sample_rate);
 
-    bool is_ready() const
-    {
-        return running && receive_socket && receive_socket->is_open() && send_socket && send_socket->is_open();
-    }
-
   private:
     int retry_count;
 
     asio::io_context &io_context;
     std::atomic<bool> running;
-    uint32_t local_session_id;
+    uint32_t local_session_ip;
 
     std::unique_ptr<asio::ip::udp::socket> receive_socket;
     std::unique_ptr<asio::ip::udp::socket> send_socket;
