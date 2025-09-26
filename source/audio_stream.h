@@ -72,8 +72,8 @@ class OAStream : public std::enable_shared_from_this<OAStream>
     RetCode stop();
     RetCode initialize_network(const std::shared_ptr<NetWorker> &nw);
     RetCode restart(const AudioDeviceName &_name);
-    RetCode direct_push(unsigned char token, unsigned int chan, unsigned int frames, unsigned int sample_rate,
-                        const int16_t *data, uint32_t source_ip = 0);
+    RetCode direct_push(unsigned int chan, unsigned int frames, unsigned int sample_rate, const int16_t *data,
+                        SourceUUID source_id);
 
     void mute();
     void unmute();
@@ -116,7 +116,7 @@ class OAStream : public std::enable_shared_from_this<OAStream>
     std::atomic_uint volume;
 
     std::mutex session_mtx;
-    std::map<uint64_t, context_ptr> sessions;
+    std::map<SourceUUID, context_ptr> sessions;
     network_ptr networker;
     std::mutex listener_mtx;
     istream_ptr listener;

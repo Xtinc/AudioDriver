@@ -23,6 +23,24 @@ template <typename E> constexpr E val2enum(std::underlying_type_t<E> val)
     return static_cast<E>(val);
 }
 
+struct SourceUUID
+{
+    uint32_t sender_ip;
+    uint32_t gateway_ip;
+    uint8_t sender_token;
+
+    bool operator==(const SourceUUID &other) const
+    {
+        return sender_ip == other.sender_ip && gateway_ip == other.gateway_ip && sender_token == other.sender_token;
+    }
+
+    bool operator<(const SourceUUID &other) const
+    {
+        return std::tie(sender_ip, gateway_ip, sender_token) <
+               std::tie(other.sender_ip, other.gateway_ip, other.sender_token);
+    }
+};
+
 constexpr uint8_t NET_AUDIO_MAGIC = 0xBD;
 constexpr unsigned int NETWORK_MAX_FRAMES = enum2val(AudioPeriodSize::INR_40MS) * enum2val(AudioBandWidth::Full) / 1000;
 constexpr unsigned int NETWORK_MAX_BUFFER_SIZE = NETWORK_MAX_FRAMES * 4 + 320;
@@ -138,8 +156,8 @@ struct DataPacket
 class NetWorker : public std::enable_shared_from_this<NetWorker>
 {
   public:
-    using ReceiveCallback = std::function<void(uint8_t sender_id, unsigned int channels, unsigned int frames,
-                                               unsigned int sample_rate, const int16_t *data, uint32_t session_id)>;
+    using ReceiveCallback = std::function<void(unsigned int channels, unsigned int frames, unsigned int sample_rate,
+                                               const int16_t *data, SourceUUID session_id)>;
     using ReceiverContext = ReceiveCallback;
 
   private:
@@ -173,9 +191,6 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
             encoder = opus_encoder_create(sr, ch, OPUS_APPLICATION_AUDIO, &error);
             if (error == OPUS_OK && encoder)
             {
-                opus_encoder_ctl(encoder, OPUS_SET_INBAND_FEC(1));
-                opus_encoder_ctl(encoder, OPUS_SET_PACKET_LOSS_PERC(3));
-
                 encode_buffer = std::make_unique<uint8_t[]>(NETWORK_MAX_BUFFER_SIZE);
             }
         }
@@ -294,14 +309,10 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     void handle_receive(const asio::error_code &error, std::size_t bytes_transferred,
                         const asio::ip::udp::endpoint &sender_endpoint);
     void retry_receive_with_backoff();
-    DecoderContext &get_decoder(uint8_t sender_id, uint32_t session_id, unsigned int channels,
-                                unsigned int sample_rate);
+    DecoderContext &get_decoder(SourceUUID sid, unsigned int channels, unsigned int sample_rate);
 
-    void process_data_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size, uint32_t sender_ip);
-    bool validate_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size);
-    void process_and_deliver_audio(uint8_t sender_id, uint8_t receiver_id, uint8_t channels, uint32_t sequence,
-                                   uint64_t timestamp, const uint8_t *opus_data, size_t opus_size, uint32_t session_id,
-                                   unsigned int sample_rate);
+    void process_and_deliver_audio(const DataPacket *header, const uint8_t *opus_data, size_t opus_size,
+                                   SourceUUID source_id);
 
     void send_data_packet(const Destination &dest, uint8_t sender_id, uint8_t receiver_id, uint32_t sequence,
                           uint64_t timestamp, const uint8_t *data, size_t size, uint8_t channels, uint32_t sample_rate);
@@ -321,12 +332,12 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     std::unique_ptr<asio::ip::udp::socket> receive_socket;
     std::unique_ptr<asio::ip::udp::socket> send_socket;
     std::unique_ptr<char[]> receive_buffer;
+    std::map<uint8_t, ReceiverContext> receivers;
     std::map<uint8_t, SenderContext> senders;
     std::mutex senders_mutex;
 
-    std::map<uint64_t, DecoderContext> decoders;
+    std::map<SourceUUID, DecoderContext> decoders;
     std::mutex decoders_mutex;
-    std::map<uint8_t, ReceiverContext> receivers;
     asio::steady_timer stats_timer;
 };
 

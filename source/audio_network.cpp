@@ -363,14 +363,15 @@ void NetWorker::report()
     for (auto &pair : decoders)
     {
         auto stats = pair.second.get_period_stats();
-        auto composite_key = pair.first;
+        auto source_id = pair.first;
 
         if (stats.packets_received > 0)
         {
-            AUDIO_INFO_PRINT(
-                "NETSTATS(0x%08X:%u) : [loss] %.2f%%, [jitter] %.2fms, [received] %u, [lost] %u, [out-of-order] %u",
-                InfoLabel::extract_ip(composite_key), InfoLabel::extract_token(composite_key), stats.packet_loss_rate,
-                stats.average_jitter, stats.packets_received, stats.packets_lost, stats.packets_out_of_order);
+            AUDIO_INFO_PRINT("NETSTATS(0x%08X|0x%08X:%u) : [loss] %.2f%%, [jitter] %.2fms, [received] %u, [lost] %u, "
+                             "[out-of-order] %u",
+                             source_id.sender_ip, source_id.gateway_ip, source_id.sender_token, stats.packet_loss_rate,
+                             stats.average_jitter, stats.packets_received, stats.packets_lost,
+                             stats.packets_out_of_order);
         }
     }
 }
@@ -620,7 +621,8 @@ void NetWorker::handle_receive(const asio::error_code &error, std::size_t bytes_
         const auto *payload = reinterpret_cast<const uint8_t *>(receive_buffer.get() + sizeof(DataPacket));
         size_t payload_size = bytes_transferred - sizeof(DataPacket);
         auto sender_id = sender_endpoint.address().is_v4() ? sender_endpoint.address().to_v4().to_uint() : 0;
-        process_data_packet(data_header, payload, payload_size, sender_id);
+        process_and_deliver_audio(data_header, payload, payload_size,
+                                  SourceUUID{data_header->session_id, sender_id, data_header->sender_id});
     }
 
     if (running)
@@ -645,64 +647,48 @@ void NetWorker::retry_receive_with_backoff()
     });
 }
 
-NetWorker::DecoderContext &NetWorker::get_decoder(uint8_t sender_id, uint32_t session_id, unsigned int channels,
-                                                  unsigned int sample_rate)
+NetWorker::DecoderContext &NetWorker::get_decoder(SourceUUID sid, unsigned int channels, unsigned int sample_rate)
 {
     std::lock_guard<std::mutex> lock(decoders_mutex);
-
-    uint64_t composite_key = InfoLabel::make_composite(session_id, sender_id);
-    auto it = decoders.find(composite_key);
+    auto it = decoders.find(sid);
     if (it == decoders.end())
     {
-        auto result = decoders.emplace(composite_key, DecoderContext(channels, sample_rate));
+        auto result = decoders.emplace(sid, DecoderContext(channels, sample_rate));
         return result.first->second;
     }
 
     return it->second;
 }
 
-// Unified packet processing methods
-void NetWorker::process_data_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size,
-                                    uint32_t sender_ip)
-{
-    if (!validate_packet(header, payload, payload_size))
-    {
-        return;
-    }
-
-    uint32_t combined_session_id = (sender_ip & 0xFFFF0000) | (header->session_id & 0x0000FFFF);
-
-    process_and_deliver_audio(header->sender_id, header->receiver_id, header->channels, header->sequence,
-                              header->timestamp, payload, payload_size, combined_session_id, header->sample_rate);
-}
-
-bool NetWorker::validate_packet(const DataPacket *header, const uint8_t *payload, size_t payload_size)
-{
-    return header && payload && payload_size > 0 && header->channels > 0 && header->channels <= 2;
-}
-
-void NetWorker::process_and_deliver_audio(uint8_t sender_id, uint8_t receiver_id, uint8_t channels, uint32_t sequence,
-                                          uint64_t timestamp, const uint8_t *opus_data, size_t opus_size,
-                                          uint32_t session_id, unsigned int sample_rate)
+void NetWorker::process_and_deliver_audio(const DataPacket *header, const uint8_t *opus_data, size_t opus_size,
+                                          SourceUUID source_id)
 {
     if (!opus_data || opus_size == 0)
     {
         return;
     }
 
-    auto &decoder_context = get_decoder(sender_id, session_id, channels, sample_rate);
+    auto receiver_id = header->receiver_id;
+    auto channels = header->channels;
+    auto sample_rate = header->sample_rate;
+    auto sequence = header->sequence;
+    auto timestamp = header->timestamp;
+
+    auto &decoder_context = get_decoder(source_id, channels, sample_rate);
     decoder_context.update_stats(sequence, timestamp);
 
     if (!decoder_context.decoder || !decoder_context.decode_buffer)
     {
-        AUDIO_ERROR_PRINT("Decoder not available for sender %u (session 0x%08X)", sender_id, session_id);
+        AUDIO_ERROR_PRINT("Decoder not available for sender %u (session 0x%08X|0x%08X)", source_id.sender_token,
+                          source_id.sender_ip, source_id.gateway_ip);
         return;
     }
     int decoded_frames = opus_decode(decoder_context.decoder, opus_data, static_cast<opus_int32>(opus_size),
-                                        decoder_context.decode_buffer.get(), NETWORK_MAX_FRAMES, 1);
+                                     decoder_context.decode_buffer.get(), NETWORK_MAX_FRAMES, 0);
     if (decoded_frames < 0)
     {
-        AUDIO_ERROR_PRINT("Failed to decode Opus data from sender %u (session 0x%08X): %s", sender_id, session_id,
+        AUDIO_ERROR_PRINT("Failed to decode Opus data from sender %u (session 0x%08X|0x%08X): %s",
+                          source_id.sender_token, source_id.sender_ip, source_id.gateway_ip,
                           opus_strerror(decoded_frames));
         return;
     }
@@ -710,8 +696,8 @@ void NetWorker::process_and_deliver_audio(uint8_t sender_id, uint8_t receiver_id
     auto receiver_it = receivers.find(receiver_id);
     if (receiver_it != receivers.end())
     {
-        receiver_it->second(sender_id, channels, static_cast<unsigned int>(decoded_frames), sample_rate,
-                            decoder_context.decode_buffer.get(), session_id);
+        receiver_it->second(channels, static_cast<unsigned int>(decoded_frames), sample_rate,
+                            decoder_context.decode_buffer.get(), source_id);
     }
     else
     {

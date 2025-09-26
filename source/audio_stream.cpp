@@ -144,11 +144,11 @@ RetCode OAStream::initialize_network(const std::shared_ptr<NetWorker> &nw)
     networker = nw;
     std::weak_ptr<OAStream> weak_self = shared_from_this();
     auto result =
-        nw->register_receiver(token, [weak_self](uint8_t sender_id, unsigned int channels, unsigned int frames,
-                                                 unsigned int sample_rate, const int16_t *data, uint32_t source_ip) {
+        nw->register_receiver(token, [weak_self](unsigned int channels, unsigned int frames, unsigned int sample_rate,
+                                                 const int16_t *data, SourceUUID source_id) {
             if (auto self = weak_self.lock())
             {
-                auto ret = self->direct_push(sender_id, channels, frames, sample_rate, data, source_ip);
+                auto ret = self->direct_push(channels, frames, sample_rate, data, source_id);
                 if (ret != RetCode::OK)
                 {
                     AUDIO_ERROR_PRINT("Failed to push data: %s", ret.what());
@@ -244,8 +244,8 @@ RetCode OAStream::restart(const AudioDeviceName &_name)
     return start();
 }
 
-RetCode OAStream::direct_push(unsigned char itoken, unsigned int chan, unsigned int frames, unsigned int sample_rate,
-                              const int16_t *data, uint32_t source_ip)
+RetCode OAStream::direct_push(unsigned int chan, unsigned int frames, unsigned int sample_rate, const int16_t *data,
+                              SourceUUID source_id)
 {
     if (!oas_ready)
     {
@@ -257,14 +257,13 @@ RetCode OAStream::direct_push(unsigned char itoken, unsigned int chan, unsigned 
         return {RetCode::FAILED, "Invalid data pointer"};
     }
 
-    uint64_t composite_key = InfoLabel::make_composite(source_ip, itoken);
     std::lock_guard<std::mutex> grd(session_mtx);
-    auto it = sessions.find(composite_key);
+    auto it = sessions.find(source_id);
     if (it == sessions.end())
     {
         unsigned int std_fr = (std::max)(frames, sample_rate * ti / 1000);
         auto imap = chan == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP;
-        auto result = sessions.emplace(composite_key,
+        auto result = sessions.emplace(source_id,
                                        std::make_unique<SessionContext>(sample_rate, chan, fs, ch, std_fr, imap, omap));
 
         if (!result.second)
@@ -273,7 +272,8 @@ RetCode OAStream::direct_push(unsigned char itoken, unsigned int chan, unsigned 
         }
 
         it = result.first;
-        AUDIO_INFO_PRINT("%u receiver New connection: %u (IP: 0x%08X)", token, itoken, source_ip);
+        AUDIO_INFO_PRINT("%u receiver New connection: %u (IP: 0x%08X|0x%08X)", token, source_id.sender_token,
+                         source_id.sender_ip, source_id.gateway_ip);
     }
 
     bool success = it->second->session.store(reinterpret_cast<const char *>(data), frames * chan * sizeof(PCM_TYPE));
@@ -294,14 +294,21 @@ void OAStream::unmute()
 
 RetCode OAStream::mute(unsigned char itoken, const std::string &ip)
 {
-    if (ip.empty())
+    try
     {
+        uint32_t ip_address = 0;
+        if (!ip.empty())
+        {
+            asio::ip::address_v4 addr = asio::ip::make_address_v4(ip);
+            ip_address = addr.to_uint();
+        }
+
         std::lock_guard<std::mutex> grd(session_mtx);
         int muted_count = 0;
 
         for (auto &session_pair : sessions)
         {
-            if ((session_pair.first & 0xFF) == itoken)
+            if (session_pair.first.sender_token == itoken && session_pair.first.sender_ip == ip_address)
             {
                 session_pair.second->enabled = false;
                 muted_count++;
@@ -310,35 +317,12 @@ RetCode OAStream::mute(unsigned char itoken, const std::string &ip)
 
         if (muted_count > 0)
         {
-            AUDIO_INFO_PRINT("Muted %d sessions with token %u (all IPs)", muted_count, itoken);
+            AUDIO_INFO_PRINT("Muted %d sessions with token %u", muted_count, itoken);
             return RetCode::OK;
         }
         else
         {
             AUDIO_INFO_PRINT("No sessions found with token %u to mute", itoken);
-            return {RetCode::NOACTION, "Session not found"};
-        }
-    }
-
-    try
-    {
-        uint32_t ip_address = 0;
-        asio::ip::address_v4 addr = asio::ip::make_address_v4(ip);
-        ip_address = addr.to_uint();
-
-        uint64_t composite_key = InfoLabel::make_composite(ip_address, itoken);
-
-        std::lock_guard<std::mutex> grd(session_mtx);
-        auto it = sessions.find(composite_key);
-        if (it != sessions.end())
-        {
-            it->second->enabled = false;
-            AUDIO_INFO_PRINT("Muted session from IP %s with token %u", ip.c_str(), itoken);
-            return RetCode::OK;
-        }
-        else
-        {
-            AUDIO_ERROR_PRINT("Cannot find session from IP %s with token %u", ip.c_str(), itoken);
             return {RetCode::NOACTION, "Session not found"};
         }
     }
@@ -351,14 +335,20 @@ RetCode OAStream::mute(unsigned char itoken, const std::string &ip)
 
 RetCode OAStream::unmute(unsigned char itoken, const std::string &ip)
 {
-    if (ip.empty())
+    try
     {
+        uint32_t ip_address = 0;
+        if (!ip.empty())
+        {
+            asio::ip::address_v4 addr = asio::ip::make_address_v4(ip);
+            ip_address = addr.to_uint();
+        }
         std::lock_guard<std::mutex> grd(session_mtx);
         int unmuted_count = 0;
 
         for (auto &session_pair : sessions)
         {
-            if ((session_pair.first & 0xFF) == itoken)
+            if (session_pair.first.sender_token == itoken && session_pair.first.sender_ip == ip_address)
             {
                 session_pair.second->enabled = true;
                 unmuted_count++;
@@ -373,29 +363,6 @@ RetCode OAStream::unmute(unsigned char itoken, const std::string &ip)
         else
         {
             AUDIO_INFO_PRINT("No sessions found with token %u to unmute", itoken);
-            return {RetCode::NOACTION, "Session not found"};
-        }
-    }
-
-    try
-    {
-        uint32_t ip_address = 0;
-        asio::ip::address_v4 addr = asio::ip::make_address_v4(ip);
-        ip_address = addr.to_uint();
-
-        uint64_t composite_key = InfoLabel::make_composite(ip_address, itoken);
-
-        std::lock_guard<std::mutex> grd(session_mtx);
-        auto it = sessions.find(composite_key);
-        if (it != sessions.end())
-        {
-            it->second->enabled = true;
-            AUDIO_INFO_PRINT("Unmuted session from IP %s with token %u", ip.c_str(), itoken);
-            return RetCode::OK;
-        }
-        else
-        {
-            AUDIO_ERROR_PRINT("Cannot find session from IP %s with token %u", ip.c_str(), itoken);
             return {RetCode::NOACTION, "Session not found"};
         }
     }
@@ -497,8 +464,8 @@ void OAStream::process_data()
             {
                 if (context->session.idle_count++ > SESSION_IDLE_TIMEOUT)
                 {
-                    AUDIO_INFO_PRINT("Removing empty session: %u (IP: 0x%08X)", static_cast<uint8_t>(it->first & 0xFF),
-                                     static_cast<uint32_t>(it->first >> 32));
+                    AUDIO_INFO_PRINT("Removing empty session: %u (IP: 0x%08X|0x%08X)", it->first.sender_token,
+                                     it->first.sender_ip, it->first.gateway_ip);
                     it = sessions.erase(it);
                     continue;
                 }
@@ -979,7 +946,7 @@ RetCode IAStream::process_data()
     {
         if (auto np = dest.lock())
         {
-            np->direct_push(token, ch, ps, fs, src);
+            np->direct_push(ch, ps, fs, src, SourceUUID{token, 0, 0});
         }
     }
 
