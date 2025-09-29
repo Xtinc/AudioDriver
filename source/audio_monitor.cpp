@@ -422,8 +422,13 @@ static std::string get_device_description(const char *device_name)
             const char *card_id = snd_ctl_card_info_get_id(info);
             const char *card_longname = snd_ctl_card_info_get_longname(info);
 
-            // Prefer detailed name if available
-            if (card_longname && strlen(card_longname) > 0)
+            //use card ID
+            if (card_id && strlen(card_id) > 0)
+            {
+                result = card_id;
+            }
+            // detailed name if available
+            else if (card_longname && strlen(card_longname) > 0)
             {
                 result = card_longname;
             }
@@ -431,11 +436,6 @@ static std::string get_device_description(const char *device_name)
             else if (card_name && strlen(card_name) > 0)
             {
                 result = card_name;
-            }
-            // Finally use card ID
-            else if (card_id && strlen(card_id) > 0)
-            {
-                result = card_id;
             }
         }
 
