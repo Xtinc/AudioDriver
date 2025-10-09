@@ -5,6 +5,19 @@ project(test_alsa VERSION 0.1.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_library(ASOUND_LIB asound)
+    find_library(UDEV_LIB udev)
+    if(NOT ASOUND_LIB)
+        message(FATAL_ERROR "Could not find asound library. Please install the necessary development packages.")
+        return()
+    endif()
+        if(NOT UDEV_LIB)
+        message(FATAL_ERROR "Could not find udev library. Please install the necessary development packages.")
+        return()
+    endif()
+endif()
+
 # Compiler-specific options
 if(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
     # Set warning level to W4 and enable address sanitizer for MSVC
