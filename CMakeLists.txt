@@ -43,11 +43,13 @@ add_subdirectory(opus-1.5.2)
 
 # Collect source files
 aux_source_directory(${CMAKE_SOURCE_DIR}/source TRANS_FILES)
+aux_source_directory(${CMAKE_SOURCE_DIR}/source/ns ANS_FILES)
 
 # Main library
-add_library(bettyaudio STATIC ${TRANS_FILES})
+add_library(bettyaudio STATIC ${TRANS_FILES} ${ANS_FILES})
 target_include_directories(bettyaudio 
     PRIVATE "${CMAKE_SOURCE_DIR}/source"
+    PRIVATE "${CMAKE_SOURCE_DIR}/source/ns"
     PUBLIC "${CMAKE_SOURCE_DIR}/include"
 )
 target_link_libraries(bettyaudio 
