@@ -6,7 +6,7 @@
 #include <iomanip>
 
 // AudioCenter
-AudioCenter::AudioCenter(bool enable_network, unsigned short port, const std::string &local_ip)
+AudioCenter::AudioCenter(bool enable_network, const std::string &local_ip, unsigned short port)
     : center_state(State::INIT)
 {
     config = std::make_unique<INIReader>("audiocenter.ini");
@@ -250,21 +250,21 @@ RetCode AudioCenter::create(IToken itoken, OToken otoken, bool enable_network)
 
     if (oas->second->omap == DEFAULT_MONO_MAP)
     {
-        ias_map[itoken.tok] =
-            std::make_shared<IAStream>(itoken.tok, AudioDeviceName("null_dummy", 0), enum2val(AudioPeriodSize::INR_20MS),
-                                       enum2val(AudioBandWidth::Full), 1, false, false);
+        ias_map[itoken.tok] = std::make_shared<IAStream>(itoken.tok, AudioDeviceName("null_dummy", 0),
+                                                         enum2val(AudioPeriodSize::INR_20MS),
+                                                         enum2val(AudioBandWidth::Full), 1, false, false);
     }
     else if (oas->second->omap == DEFAULT_DUAL_MAP)
     {
-        ias_map[itoken.tok] =
-            std::make_shared<IAStream>(itoken.tok, AudioDeviceName("null_dummy", 0), enum2val(AudioPeriodSize::INR_20MS),
-                                       enum2val(AudioBandWidth::Full), 2, false, false);
+        ias_map[itoken.tok] = std::make_shared<IAStream>(itoken.tok, AudioDeviceName("null_dummy", 0),
+                                                         enum2val(AudioPeriodSize::INR_20MS),
+                                                         enum2val(AudioBandWidth::Full), 2, false, false);
     }
     else
     {
-        ias_map[itoken.tok] =
-            std::make_shared<IAStream>(itoken.tok, AudioDeviceName("null_dummy", 0), enum2val(AudioPeriodSize::INR_20MS),
-                                       enum2val(AudioBandWidth::Full), 99, oas->second->omap, false);
+        ias_map[itoken.tok] = std::make_shared<IAStream>(itoken.tok, AudioDeviceName("null_dummy", 0),
+                                                         enum2val(AudioPeriodSize::INR_20MS),
+                                                         enum2val(AudioBandWidth::Full), 99, oas->second->omap, false);
     }
 
     if (enable_network && net_mgr)

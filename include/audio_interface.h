@@ -428,8 +428,8 @@ class AudioCenter
      * @param port Network port to use (ignored if enable_network is false)
      * @param local_ip Local IP address to use for network identification (empty for default)
      */
-    AudioCenter(bool enable_network = false, unsigned short port = NETWORK_AUDIO_TRANS_PORT,
-                const std::string &local_ip = "127.0.0.1");
+    AudioCenter(bool enable_network = false, const std::string &local_ip = "127.0.0.1",
+                unsigned short port = NETWORK_AUDIO_TRANS_PORT);
 
     /**
      * @brief Destructor for AudioCenter

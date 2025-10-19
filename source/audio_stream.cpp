@@ -1096,7 +1096,7 @@ void IAStream::reset_self()
 }
 
 // AudioPlayer
-AudioPlayer::AudioPlayer(unsigned char _token) : token(_token), preemptive(0), volume(80)
+AudioPlayer::AudioPlayer(unsigned char _token) : token(_token), preemptive(0), volume(50)
 {
 }
 
