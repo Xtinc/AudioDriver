@@ -134,7 +134,7 @@ class LocSampler
      * @param denoise Enable noise suppression if true
      */
     LocSampler(unsigned int src_fs, unsigned int src_ch, unsigned int dst_fs, unsigned int dst_ch,
-               unsigned int max_frames, const AudioChannelMap &imap, const AudioChannelMap &omap, bool denoise = false);
+               unsigned int max_frames, const AudioChannelMap &imap, const AudioChannelMap &omap, bool denoise);
 
     ~LocSampler();
 

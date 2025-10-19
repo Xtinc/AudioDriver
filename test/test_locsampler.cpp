@@ -258,7 +258,7 @@ bool testLocSamplerProcess(const LocSamplerTestCase &testcase)
     const unsigned int processPeriod = 10; // ms
 
     // Create LocSampler instance using 10ms processing period
-    LocSampler sampler(srcFs, srcCh, dstFs, dstCh, processPeriod * srcFs / 1000, imap, omap);
+    LocSampler sampler(srcFs, srcCh, dstFs, dstCh, processPeriod * srcFs / 1000, imap, omap, false);
 
     // Calculate number of processing iterations
     unsigned int numProcessCalls = timeInterval / processPeriod;

@@ -445,10 +445,11 @@ class AudioCenter
      * @param ch Number of channels
      * @param enable_network Whether to enable network functionality for this stream
      * @param enable_reset Whether to enable auto reset for this stream
+     * @param enable_denoise Whether to enable denoise processing for this stream
      * @return RetCode indicating success or failure
      */
     RetCode create(IToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps, unsigned int ch,
-                   bool enable_network = false, bool enable_reset = false);
+                   bool enable_network = false, bool enable_reset = false, bool enable_denoise = false);
 
     /**
      * @brief Creates an input stream with custom channel mapping
@@ -460,10 +461,12 @@ class AudioCenter
      * @param imap Channel mapping between user channel and device channel
      * @param enable_network Whether to enable network functionality for this stream
      * @param enable_reset Whether to enable auto reset for this stream
+     * @param enable_denoise Whether to enable denoise processing for this stream
      * @return RetCode indicating success or failure
      */
     RetCode create(IToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps,
-                   unsigned int dev_ch, const AudioChannelMap &imap, bool enable_network = false);
+                   unsigned int dev_ch, const AudioChannelMap &imap, bool enable_network = false,
+                   bool enable_denoise = false);
 
     /**
      * @brief Creates an output stream
@@ -660,7 +663,7 @@ class AudioCenter
     std::map<unsigned char, std::shared_ptr<IAStream>> ias_map; /**< Map of input streams */
     std::map<unsigned char, std::shared_ptr<OAStream>> oas_map; /**< Map of output streams */
 
-    std::unique_ptr<INIReader> config;      /**< Configuration manager */
+    std::unique_ptr<INIReader> config;     /**< Configuration manager */
     std::shared_ptr<NetWorker> net_mgr;    /**< Network manager */
     std::unique_ptr<AudioMonitor> monitor; /**< Audio device monitor */
     std::shared_ptr<AudioPlayer> player;   /**< Audio player */
