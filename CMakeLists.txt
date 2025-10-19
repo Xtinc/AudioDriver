@@ -49,7 +49,6 @@ aux_source_directory(${CMAKE_SOURCE_DIR}/source/ns ANS_FILES)
 add_library(bettyaudio STATIC ${TRANS_FILES} ${ANS_FILES})
 target_include_directories(bettyaudio 
     PRIVATE "${CMAKE_SOURCE_DIR}/source"
-    PRIVATE "${CMAKE_SOURCE_DIR}/source/ns"
     PUBLIC "${CMAKE_SOURCE_DIR}/include"
 )
 target_link_libraries(bettyaudio 

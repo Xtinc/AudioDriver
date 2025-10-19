@@ -1,5 +1,5 @@
 #include "audio_process.h"
-#include "noise_suppressor.h"
+#include "ns/noise_supression.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
