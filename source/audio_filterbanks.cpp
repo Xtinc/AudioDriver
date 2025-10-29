@@ -560,3 +560,56 @@ void SplittingFilter::ThreeBandsSynthesis(const ChannelBuffer<float> *bands, Cha
                                                   data->channels_view()[i].data(), ThreeBandFilterBank::kFullBandSize));
     }
 }
+
+LMSFilter::LMSFilter(size_t filter_length, float step_size)
+    : step_size_(step_size), regularization_(1e-10f), length_(filter_length), buffer_(filter_length, 0.0f),
+      weights_(filter_length, 0.0f), buffer_index_(0), error_(0.0f)
+{
+    DBG_ASSERT_COND(filter_length > 0);
+    DBG_ASSERT_COND(step_size > 0.0f);
+}
+
+float LMSFilter::Process(float input, float desired)
+{
+    // Update buffer with new input
+    buffer_[buffer_index_] = input;
+
+    // Compute filter output
+    float output = 0.0f;
+    for (size_t i = 0; i < length_; ++i)
+    {
+        const size_t delay_index = (buffer_index_ + length_ - i) % length_;
+        output += weights_[i] * buffer_[delay_index];
+    }
+
+    // Compute error
+    error_ = desired - output;
+
+    // Compute normalized step size
+    float squared_norm = 0.0f;
+    for (const auto &sample : buffer_)
+    {
+        squared_norm += sample * sample;
+    }
+    const float norm_step_size = step_size_ / (regularization_ + squared_norm);
+
+    // Update weights (LMS adaptation)
+    for (size_t i = 0; i < length_; ++i)
+    {
+        const size_t delay_index = (buffer_index_ + length_ - i) % length_;
+        weights_[i] += norm_step_size * error_ * buffer_[delay_index];
+    }
+
+    // Update buffer index
+    buffer_index_ = (buffer_index_ + 1) % length_;
+
+    return output;
+}
+
+void LMSFilter::Reset()
+{
+    std::fill(buffer_.begin(), buffer_.end(), 0.0f);
+    std::fill(weights_.begin(), weights_.end(), 0.0f);
+    buffer_index_ = 0;
+    error_ = 0.0f;
+}

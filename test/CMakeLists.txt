@@ -15,5 +15,8 @@ target_link_libraries(test_dr_compressor bettyaudio)
 add_executable(test_locsampler test_locsampler.cpp)
 target_link_libraries(test_locsampler bettyaudio)
 
+add_executable(test_lms_filter test_lms_filter.cpp)
+target_link_libraries(test_lms_filter bettyaudio)
+
 add_executable(udp_forwarder udp_forwarder_test.cpp)
 target_link_libraries(udp_forwarder asio)

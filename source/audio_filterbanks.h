@@ -148,4 +148,81 @@ class SplittingFilter
     std::vector<ThreeBandFilterBank> three_band_filter_banks_;
 };
 
+/**
+ * @brief An implementation of Least Mean Squares (LMS) adaptive filter
+ *
+ * The LMS filter is an adaptive digital filter that uses the least mean squares
+ * algorithm to automatically adjust its coefficients to minimize the mean square
+ * error between the desired and actual output signals.
+ *
+ * The filter implements the normalized LMS (NLMS) algorithm which provides
+ * better convergence properties by normalizing the step size with the input
+ * signal power. The adaptation equation is:
+ *
+ * w(n+1) = w(n) + μ/(ε + ||x(n)||²) * e(n) * x(n)
+ *
+ * Where:
+ * - w(n) is the weight vector at time n
+ * - μ is the step size parameter
+ * - ε is the regularization constant
+ * - x(n) is the input signal vector
+ * - e(n) is the error signal (desired - output)
+ *
+ * Features:
+ * * Normalized step size for stable convergence
+ * * Circular buffer for efficient memory usage
+ * * Regularization to prevent numerical instability
+ * * Reset capability for reinitialization
+ */
+class LMSFilter
+{
+  public:
+    /**
+     * @brief Constructs an LMS filter
+     *
+     * @param filter_length Length of the adaptive filter (number of taps)
+     * @param step_size Step size parameter for the LMS algorithm (μ)
+     *                  Typical values are between 0.01 and 1.0
+     */
+    LMSFilter(size_t filter_length, float step_size);
+
+    /**
+     * @brief Destructor
+     */
+    ~LMSFilter() = default;
+
+    /**
+     * @brief Processes a sample and adapts the filter coefficients
+     *
+     * This function performs one iteration of the LMS algorithm:
+     * 1. Computes the filter output using current weights
+     * 2. Calculates the error signal
+     * 3. Updates the filter weights using the NLMS adaptation rule
+     *
+     * @param input Input signal sample
+     * @param desired Desired signal sample (reference)
+     * @return Filtered output signal
+     */
+    float Process(float input, float desired);
+
+    /**
+     * @brief Resets the filter state
+     *
+     * Clears all internal buffers and resets filter weights to zero.
+     * This is useful when starting adaptation on a new signal or
+     * when discontinuities occur in the input data.
+     */
+    void Reset();
+
+  private:
+    const float step_size_;      ///< Adaptation step size parameter
+    const float regularization_; ///< Regularization constant to prevent division by zero
+    const size_t length_;        ///< Length of the adaptive filter
+
+    std::vector<float> buffer_;  ///< Circular input buffer
+    std::vector<float> weights_; ///< Adaptive filter coefficients
+    size_t buffer_index_;        ///< Current index in the circular buffer
+    float error_;                ///< Last computed error signal
+};
+
 #endif
