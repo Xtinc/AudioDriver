@@ -214,7 +214,7 @@ LocSampler::LocSampler(unsigned int src_fs, unsigned int src_ch, unsigned int ds
         else
         {
             AUDIO_DEBUG_PRINT("Enable NoiseSuppressor");
-            denoiser = std::make_unique<NoiseSuppressor>(1, real_ochan);
+            denoiser = std::make_unique<NoiseSuppressor>(0, real_ochan);
             if (dst_fs > DENOISE_SAMPLE_RATE)
             {
                 split_data =

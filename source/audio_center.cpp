@@ -522,6 +522,42 @@ RetCode AudioCenter::register_callback(IToken token, AudioInputCallBack cb, unsi
     return RetCode::OK;
 }
 
+RetCode AudioCenter::register_filter(IToken token, const std::vector<AudioChannelMap> &channel_maps,
+                                     size_t filter_length, float step_size)
+{
+    auto state = center_state.load();
+    if (state != State::CONNECTING && state != State::INIT)
+    {
+        AUDIO_ERROR_PRINT("AudioCenter not in CONNECTING or INIT state");
+        return {RetCode::ESTATE, "AudioCenter not in CONNECTING or INIT state"};
+    }
+
+    if (!token)
+    {
+        AUDIO_ERROR_PRINT("Invalid token: %u", token.tok);
+        return {RetCode::EPARAM, "Invalid token"};
+    }
+
+    // Find the stream
+    auto it = ias_map.find(token.tok);
+    if (it == ias_map.end())
+    {
+        AUDIO_ERROR_PRINT("Invalid input token: %u", token.tok);
+        return {RetCode::EPARAM, "Invalid input token"};
+    }
+
+    it->second->register_filter(std::make_unique<LMSFilterBank>(channel_maps, filter_length, step_size));
+
+    std::ostringstream oss;
+    for (const auto &map : channel_maps)
+    {
+        oss << "\n[ " << map[0] << " <- " << map[1] << " ]";
+    }
+
+    AUDIO_DEBUG_PRINT("LMS filter bank registered for input stream %u:%s", token.tok, oss.str().c_str());
+    return RetCode::OK;
+}
+
 RetCode AudioCenter::direct_push_pcm(IToken itoken, OToken otoken, unsigned int chan, unsigned int frames,
                                      unsigned int sample_rate, const int16_t *data)
 {

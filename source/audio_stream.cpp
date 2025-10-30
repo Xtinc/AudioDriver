@@ -239,6 +239,7 @@ RetCode OAStream::restart(const AudioDeviceName &_name)
     if (np)
     {
         np->reset2echo(_name, fs, ch);
+        np->start();
     }
     oas_ready = true;
     return start();
@@ -862,6 +863,24 @@ void IAStream::register_callback(AudioInputCallBack cb, unsigned int required_fr
     session = std::make_unique<SessionData>(required_frames * sizeof(PCM_TYPE), 2, spf_ch);
 }
 
+void IAStream::register_filter(filter_ptr &&lms_filter)
+{
+    if (!lms_filter)
+    {
+        AUDIO_ERROR_PRINT("Attempting to register null LMS filter for token %u", token);
+        return;
+    }
+
+    // Validate that device has enough channels for the filter
+    if (idevice && idevice->ch() < 2)
+    {
+        AUDIO_ERROR_PRINT("LMS filter requires at least 2 channels, device has %u channels", idevice->ch());
+        return;
+    }
+
+    filter_bank = std::move(lms_filter);
+}
+
 void IAStream::execute_loop(TimePointer tp, unsigned int cnt)
 {
     if (!ias_ready)
@@ -925,6 +944,11 @@ RetCode IAStream::process_data()
 
     InterleavedView<PCM_TYPE> iview(reinterpret_cast<PCM_TYPE *>(dev_buf.get()), dev_fr, idevice->ch());
     InterleavedView<PCM_TYPE> oview(reinterpret_cast<PCM_TYPE *>(usr_buf.get()), ps, ch);
+
+    if (filter_bank)
+    {
+        filter_bank->process(iview);
+    }
 
     auto volume_gain = volume2gain(volume.load());
     ret = sampler->process(iview, oview, volume_gain);

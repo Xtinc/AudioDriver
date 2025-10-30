@@ -15,6 +15,7 @@ constexpr AudioChannelMap DEFAULT_MONO_MAP = {0, 0};
 
 using SessionData = KFifo;
 using TimePointer = std::chrono::steady_clock::time_point;
+using filter_ptr = std::unique_ptr<LMSFilterBank>;
 using sampler_ptr = std::unique_ptr<LocSampler>;
 using session_ptr = std::unique_ptr<SessionData>;
 using network_ptr = std::weak_ptr<NetWorker>;
@@ -160,6 +161,7 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     AudioDeviceName name() const;
 
     void register_callback(AudioInputCallBack cb, unsigned int required_frames, UsrCallBackMode mode, void *ptr);
+    void register_filter(filter_ptr &&lms_filter);
 
   private:
     void execute_loop(TimePointer tp, unsigned int cnt);
@@ -194,6 +196,7 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     ibuffer_ptr dev_buf;
     idevice_ptr idevice;
     sampler_ptr sampler;
+    filter_ptr filter_bank;
     std::atomic_uint volume;
 
     std::mutex dest_mtx;

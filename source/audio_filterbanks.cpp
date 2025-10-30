@@ -562,19 +562,17 @@ void SplittingFilter::ThreeBandsSynthesis(const ChannelBuffer<float> *bands, Cha
 }
 
 LMSFilter::LMSFilter(size_t filter_length, float step_size)
-    : step_size_(step_size), regularization_(1e-10f), length_(filter_length), buffer_(filter_length, 0.0f),
-      weights_(filter_length, 0.0f), buffer_index_(0), error_(0.0f)
+    : step_size_(step_size), regularization_(1e-10f), // Small value to prevent division by zero
+      length_(filter_length), buffer_(filter_length, 0.0f), weights_(filter_length, 0.0f), buffer_index_(0),
+      error_(0.0f)
 {
     DBG_ASSERT_COND(filter_length > 0);
-    DBG_ASSERT_COND(step_size > 0.0f);
+    DBG_ASSERT_COND(step_size > 0.0f && step_size <= 2.0f); // Stability constraint
 }
 
 float LMSFilter::Process(float input, float desired)
 {
-    // Update buffer with new input
     buffer_[buffer_index_] = input;
-
-    // Compute filter output
     float output = 0.0f;
     for (size_t i = 0; i < length_; ++i)
     {
@@ -582,25 +580,23 @@ float LMSFilter::Process(float input, float desired)
         output += weights_[i] * buffer_[delay_index];
     }
 
-    // Compute error
     error_ = desired - output;
 
-    // Compute normalized step size
-    float squared_norm = 0.0f;
+    float input_power = regularization_;
     for (const auto &sample : buffer_)
     {
-        squared_norm += sample * sample;
+        input_power += sample * sample;
     }
-    const float norm_step_size = step_size_ / (regularization_ + squared_norm);
 
-    // Update weights (LMS adaptation)
+    const float normalized_step = step_size_ / input_power;
+
+    // w(n+1) = w(n) + normalized_step * e(n) * x(n)
     for (size_t i = 0; i < length_; ++i)
     {
         const size_t delay_index = (buffer_index_ + length_ - i) % length_;
-        weights_[i] += norm_step_size * error_ * buffer_[delay_index];
+        weights_[i] += normalized_step * error_ * buffer_[delay_index];
     }
 
-    // Update buffer index
     buffer_index_ = (buffer_index_ + 1) % length_;
 
     return output;
@@ -612,4 +608,85 @@ void LMSFilter::Reset()
     std::fill(weights_.begin(), weights_.end(), 0.0f);
     buffer_index_ = 0;
     error_ = 0.0f;
+}
+
+LMSFilterBank::LMSFilterBank(const std::vector<AudioChannelMap> &channel_maps, size_t filter_length, float step_size)
+    : available_(true), channel_maps_(channel_maps)
+{
+    DBG_ASSERT_GT(filter_length, 0);
+    DBG_ASSERT_GT(step_size, 0.0f);
+    DBG_ASSERT_LE(step_size, 2.0f);
+
+    // Create one LMS filter for each channel mapping
+    lms_filters_.reserve(channel_maps_.size());
+    for (size_t i = 0; i < channel_maps.size(); ++i)
+    {
+        lms_filters_.emplace_back(filter_length, step_size);
+    }
+}
+
+void LMSFilterBank::process(InterleavedView<int16_t> input)
+{
+    if (!available_)
+    {
+        return;
+    }
+
+    const auto num_channels = input.num_channels();
+    const auto num_frames = input.samples_per_channel();
+
+    // Validate that we have enough channels for all filter mappings
+    for (size_t i = 0; i < channel_maps_.size(); ++i)
+    {
+        const auto &channel_map = channel_maps_[i];
+        const auto target_channel = channel_map[0];
+        const auto reference_channel = channel_map[1];
+
+        if (target_channel >= num_channels || reference_channel >= num_channels)
+        {
+            AUDIO_ERROR_PRINT("LMSFilterBank: Invalid channel mapping [%u,%u] for %zu channels", target_channel,
+                              reference_channel, num_channels);
+            available_ = false;
+            return;
+        }
+    }
+
+    // Process each LMS filter
+    for (size_t filter_idx = 0; filter_idx < channel_maps_.size(); ++filter_idx)
+    {
+        const auto &channel_map = channel_maps_[filter_idx];
+        const auto target_channel = channel_map[0];    // Channel to be filtered
+        const auto reference_channel = channel_map[1]; // Reference/desired signal
+
+        auto &lms_filter = lms_filters_[filter_idx];
+
+        for (size_t frame = 0; frame < num_frames; ++frame)
+        {
+            const size_t target_idx = frame * num_channels + target_channel;
+            const size_t reference_idx = frame * num_channels + reference_channel;
+
+            const float target_sample = static_cast<float>(input[target_idx]) / 32768.0f;
+            const float reference_sample = static_cast<float>(input[reference_idx]) / 32768.0f;
+
+            // Apply LMS filtering
+            // The LMS filter learns to predict the reference signal from the target
+            // The filtered output is: target - lms_prediction
+            const float lms_output = lms_filter.Process(target_sample, reference_sample);
+            float filtered_sample = target_sample - lms_output;
+
+            // Clamp to prevent overflow
+            filtered_sample = std::max(-1.0f, std::min(1.0f, filtered_sample));
+
+            // Convert back to int16 and update target channel
+            input[target_idx] = static_cast<int16_t>(filtered_sample * 32767.0f);
+        }
+    }
+}
+
+void LMSFilterBank::reset()
+{
+    for (auto &filter : lms_filters_)
+    {
+        filter.Reset();
+    }
 }

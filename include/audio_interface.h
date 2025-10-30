@@ -16,6 +16,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <vector>
 
 #if defined(_WIN32) || defined(_WIN64)
 #include <sdkddkver.h>
@@ -554,6 +555,28 @@ class AudioCenter
      */
     RetCode register_callback(IToken token, AudioInputCallBack cb, unsigned int required_frames, UsrCallBackMode mode,
                               void *ptr);
+
+    /**
+     * @brief Registers an adaptive filter for an input stream
+     *
+     * The LMS filter bank will be applied to the input stream to perform
+     * adaptive filtering between specified channel pairs. This is commonly
+     * used for acoustic echo cancellation or noise reduction.
+     *
+     * @param token Input token to register the filter for
+     * @param channel_maps Vector of channel mapping pairs: [target_channel, reference_channel]
+     *                     - target_channel: channel index to be filtered (where adaptive filter output is applied)
+     *                     - reference_channel: channel index used as reference/desired signal
+     * @param filter_length NLMS filter length (number of taps), typical range: 16-128
+     * @param step_size NLMS learning step size, typical range: 0.01-1.0
+     *                  Smaller values = more stable but slower convergence
+     * @return RetCode indicating success or failure
+     *
+     * @note The channel indices in channel_maps must be valid for the input stream's channel count
+     * @note Only one filter bank can be registered per input stream (subsequent calls will replace existing filter)
+     */
+    RetCode register_filter(IToken token, const std::vector<AudioChannelMap> &channel_maps, size_t filter_length,
+                            float step_size);
 
     /**
      * @brief Directly pushes PCM data to an output stream

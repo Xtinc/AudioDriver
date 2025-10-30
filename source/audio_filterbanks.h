@@ -163,8 +163,8 @@ class SplittingFilter
  *
  * Where:
  * - w(n) is the weight vector at time n
- * - μ is the step size parameter
- * - ε is the regularization constant
+ * - μ is the step size parameter (controls adaptation speed)
+ * - ε is the regularization constant (prevents division by zero)
  * - x(n) is the input signal vector
  * - e(n) is the error signal (desired - output)
  *
@@ -181,8 +181,9 @@ class LMSFilter
      * @brief Constructs an LMS filter
      *
      * @param filter_length Length of the adaptive filter (number of taps)
+     *                      Typical values: 32-512 samples
      * @param step_size Step size parameter for the LMS algorithm (μ)
-     *                  Typical values are between 0.01 and 1.0
+     *                  Typical values: 0.01-1.0, smaller = more stable but slower
      */
     LMSFilter(size_t filter_length, float step_size);
 
@@ -194,14 +195,15 @@ class LMSFilter
     /**
      * @brief Processes a sample and adapts the filter coefficients
      *
-     * This function performs one iteration of the LMS algorithm:
-     * 1. Computes the filter output using current weights
-     * 2. Calculates the error signal
-     * 3. Updates the filter weights using the NLMS adaptation rule
+     * This function performs one iteration of the NLMS algorithm:
+     * 1. Updates circular buffer with new input
+     * 2. Computes filter output using current weights: y(n) = w^T(n) * x(n)
+     * 3. Calculates error signal: e(n) = d(n) - y(n)
+     * 4. Updates filter weights using NLMS rule
      *
-     * @param input Input signal sample
-     * @param desired Desired signal sample (reference)
-     * @return Filtered output signal
+     * @param input Input signal sample (x(n))
+     * @param desired Desired signal sample (d(n)) - reference/target signal
+     * @return Filtered output signal (y(n))
      */
     float Process(float input, float desired);
 
@@ -209,20 +211,105 @@ class LMSFilter
      * @brief Resets the filter state
      *
      * Clears all internal buffers and resets filter weights to zero.
-     * This is useful when starting adaptation on a new signal or
-     * when discontinuities occur in the input data.
+     * Use when starting adaptation on a new signal or handling discontinuities.
      */
     void Reset();
 
-  private:
-    const float step_size_;      ///< Adaptation step size parameter
-    const float regularization_; ///< Regularization constant to prevent division by zero
-    const size_t length_;        ///< Length of the adaptive filter
+    /**
+     * @brief Gets the current error signal
+     * @return Last computed error value
+     */
+    float GetError() const
+    {
+        return error_;
+    }
 
-    std::vector<float> buffer_;  ///< Circular input buffer
-    std::vector<float> weights_; ///< Adaptive filter coefficients
+    /**
+     * @brief Gets current filter length
+     * @return Number of filter taps
+     */
+    size_t GetLength() const
+    {
+        return length_;
+    }
+
+  private:
+    const float step_size_;      ///< Adaptation step size parameter (μ)
+    const float regularization_; ///< Regularization constant (ε) to prevent division by zero
+    const size_t length_;        ///< Length of the adaptive filter (number of taps)
+
+    std::vector<float> buffer_;  ///< Circular input buffer x(n), x(n-1), ..., x(n-L+1)
+    std::vector<float> weights_; ///< Adaptive filter coefficients w0, w1, ..., wL-1
     size_t buffer_index_;        ///< Current index in the circular buffer
-    float error_;                ///< Last computed error signal
+    float error_;                ///< Last computed error signal e(n) = d(n) - y(n)
+};
+
+/**
+ * @brief Audio channel mapping for LMS filter processing
+ *
+ * First element: target channel index (channel to be filtered)
+ * Second element: reference channel index (desired signal source)
+ */
+typedef std::array<unsigned int, 2> AudioChannelMap;
+
+/**
+ * @brief Bank of LMS filters for multi-channel audio processing
+ *
+ * This class manages multiple LMS filters, each configured with a specific
+ * channel mapping. It's designed for real-time audio processing scenarios
+ * such as:
+ * - Acoustic echo cancellation (AEC)
+ * - Noise cancellation between microphone channels
+ * - Adaptive feedback suppression
+ *
+ * The filter bank processes interleaved audio data where each LMS filter
+ * operates on a pair of channels defined by the channel mapping.
+ */
+class LMSFilterBank
+{
+  public:
+    /**
+     * @brief Constructs an LMS filter bank
+     *
+     * Creates one LMS filter for each channel mapping. Each filter adapts
+     * independently based on its assigned channel pair.
+     *
+     * @param channel_maps Vector of channel mappings for each LMS filter
+     *                     Each map contains [target_channel, reference_channel]
+     * @param filter_length Length of each LMS filter (number of taps)
+     * @param step_size Step size parameter for all LMS filters
+     */
+    LMSFilterBank(const std::vector<AudioChannelMap> &channel_maps, size_t filter_length, float step_size);
+
+    /**
+     * @brief Destructor
+     */
+    ~LMSFilterBank() = default;
+
+    /**
+     * @brief Processes interleaved audio data through the filter bank
+     *
+     * For each configured channel pair:
+     * 1. Extracts target and reference channel samples
+     * 2. Applies LMS filtering: filtered = target - lms_output
+     * 3. Updates the target channel with filtered result
+     * 4. Clamps output to prevent overflow
+     *
+     * @param input Interleaved audio buffer (modified in-place)
+     *              Format: [ch0_sample0, ch1_sample0, ..., chN_sample0,
+     *                       ch0_sample1, ch1_sample1, ..., chN_sample1, ...]
+     */
+    void process(InterleavedView<int16_t> input);
+
+    /**
+     * @brief Resets all LMS filters in the bank
+     */
+    void reset();
+
+  private:
+    bool available_;
+    std::vector<AudioChannelMap> channel_maps_; ///< Channel mappings for each LMS filter
+    std::vector<LMSFilter> lms_filters_;        ///< Collection of LMS filters
 };
 
 #endif

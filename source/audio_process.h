@@ -1,7 +1,7 @@
 #ifndef AUDIO_PROCESS_HEADER
 #define AUDIO_PROCESS_HEADER
 
-#include "audio_dataview.h"
+#include "audio_filterbanks.h"
 #include "audio_interface.h"
 #include <array>
 #include <memory>
