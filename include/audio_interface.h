@@ -241,6 +241,85 @@ enum class AudioPeriodSize : unsigned int
 };
 
 /**
+ * @enum StreamFlags
+ * @brief Bitflags for controlling stream creation options
+ */
+enum class StreamFlags : unsigned int
+{
+    None = 0x00,    /**< No special options */
+    Network = 0x01, /**< Enable network functionality */
+    Reset = 0x02,   /**< Enable auto reset */
+    Denoise = 0x04  /**< Enable denoise processing */
+};
+
+/**
+ * @brief Bitwise OR operator for StreamFlags
+ */
+constexpr StreamFlags operator|(StreamFlags lhs, StreamFlags rhs) noexcept
+{
+    return static_cast<StreamFlags>(static_cast<unsigned int>(lhs) | static_cast<unsigned int>(rhs));
+}
+
+/**
+ * @brief Bitwise AND operator for StreamFlags
+ */
+constexpr StreamFlags operator&(StreamFlags lhs, StreamFlags rhs) noexcept
+{
+    return static_cast<StreamFlags>(static_cast<unsigned int>(lhs) & static_cast<unsigned int>(rhs));
+}
+
+/**
+ * @brief Bitwise XOR operator for StreamFlags
+ */
+constexpr StreamFlags operator^(StreamFlags lhs, StreamFlags rhs) noexcept
+{
+    return static_cast<StreamFlags>(static_cast<unsigned int>(lhs) ^ static_cast<unsigned int>(rhs));
+}
+
+/**
+ * @brief Bitwise NOT operator for StreamFlags
+ */
+constexpr StreamFlags operator~(StreamFlags flags) noexcept
+{
+    return static_cast<StreamFlags>(~static_cast<unsigned int>(flags));
+}
+
+/**
+ * @brief Compound bitwise OR assignment operator for StreamFlags
+ */
+constexpr StreamFlags &operator|=(StreamFlags &lhs, StreamFlags rhs) noexcept
+{
+    lhs = lhs | rhs;
+    return lhs;
+}
+
+/**
+ * @brief Compound bitwise AND assignment operator for StreamFlags
+ */
+constexpr StreamFlags &operator&=(StreamFlags &lhs, StreamFlags rhs) noexcept
+{
+    lhs = lhs & rhs;
+    return lhs;
+}
+
+/**
+ * @brief Compound bitwise XOR assignment operator for StreamFlags
+ */
+constexpr StreamFlags &operator^=(StreamFlags &lhs, StreamFlags rhs) noexcept
+{
+    lhs = lhs ^ rhs;
+    return lhs;
+}
+
+/**
+ * @brief Helper function to check if a flag is set
+ */
+constexpr bool has_flag(StreamFlags flags, StreamFlags flag) noexcept
+{
+    return (flags & flag) == flag;
+}
+
+/**
  * @struct AudioToken
  * @brief Base class for audio tokens
  */
@@ -439,13 +518,11 @@ class AudioCenter
      * @param bw Audio bandwidth (sample rate)
      * @param ps Audio period size
      * @param ch Number of channels
-     * @param enable_network Whether to enable network functionality for this stream
-     * @param enable_reset Whether to enable auto reset for this stream
-     * @param enable_denoise Whether to enable denoise processing for this stream
+     * @param flags Stream creation flags (Network | Reset | Denoise)
      * @return RetCode indicating success or failure
      */
     RetCode create(IToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps, unsigned int ch,
-                   bool enable_network = false, bool enable_reset = false, bool enable_denoise = false);
+                   StreamFlags flags = StreamFlags::None);
 
     /**
      * @brief Creates an input stream with custom channel mapping
@@ -455,14 +532,11 @@ class AudioCenter
      * @param ps Audio period size
      * @param dev_ch Number of channels to open device
      * @param imap Channel mapping between user channel and device channel
-     * @param enable_network Whether to enable network functionality for this stream
-     * @param enable_reset Whether to enable auto reset for this stream
-     * @param enable_denoise Whether to enable denoise processing for this stream
+     * @param flags Stream creation flags (Network | Denoise)
      * @return RetCode indicating success or failure
      */
     RetCode create(IToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps,
-                   unsigned int dev_ch, const AudioChannelMap &imap, bool enable_network = false,
-                   bool enable_denoise = false);
+                   unsigned int dev_ch, const AudioChannelMap &imap, StreamFlags flags = StreamFlags::None);
 
     /**
      * @brief Creates an output stream
@@ -471,12 +545,11 @@ class AudioCenter
      * @param bw Audio bandwidth (sample rate)
      * @param ps Audio period size
      * @param ch Number of channels
-     * @param enable_network Whether to enable network functionality for this stream
-     * @param enable_reset Whether to enable auto reset for this stream
+     * @param flags Stream creation flags (Network | Reset)
      * @return RetCode indicating success or failure
      */
     RetCode create(OToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps, unsigned int ch,
-                   bool enable_network = false, bool enable_reset = false);
+                   StreamFlags flags = StreamFlags::None);
 
     /**
      * @brief Creates an output stream with custom channel mapping
@@ -486,21 +559,20 @@ class AudioCenter
      * @param ps Audio period size
      * @param dev_ch Number of channels to open device
      * @param omap Channel mapping between user channel and device channel
-     * @param enable_network Whether to enable network functionality for this stream
-     * @param enable_reset Whether to enable auto reset for this stream
+     * @param flags Stream creation flags (Network)
      * @return RetCode indicating success or failure
      */
     RetCode create(OToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps,
-                   unsigned int dev_ch, const AudioChannelMap &omap, bool enable_network = false);
+                   unsigned int dev_ch, const AudioChannelMap &omap, StreamFlags flags = StreamFlags::None);
 
     /**
      * @brief Creates a link between input and output streams
      * @param itoken Input token
      * @param otoken Output token
-     * @param enable_network Whether to enable network functionality for this link
+     * @param flags Stream creation flags (Network)
      * @return RetCode indicating success or failure
      */
-    RetCode create(IToken itoken, OToken otoken, bool enable_network = false);
+    RetCode create(IToken itoken, OToken otoken, StreamFlags flags = StreamFlags::None);
 
     /**
      * @brief Prepares the AudioCenter for use

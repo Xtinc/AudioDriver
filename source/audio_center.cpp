@@ -30,7 +30,7 @@ AudioCenter::~AudioCenter()
 }
 
 RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps,
-                            unsigned int ch, bool enable_network, bool enable_reset, bool enable_denoise)
+                            unsigned int ch, StreamFlags flags)
 {
     AUDIO_INFO_PRINT("Creating %s input stream with token %u", name.first.c_str(), token.tok);
 
@@ -51,6 +51,10 @@ RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBand
         AUDIO_ERROR_PRINT("Token already exists: %u", token.tok);
         return RetCode::NOACTION;
     }
+
+    bool enable_network = has_flag(flags, StreamFlags::Network);
+    bool enable_reset = has_flag(flags, StreamFlags::Reset);
+    bool enable_denoise = has_flag(flags, StreamFlags::Denoise);
 
     ias_map[token.tok] =
         std::make_shared<IAStream>(token.tok, name, enum2val(ps), enum2val(bw), ch, enable_reset, enable_denoise);
@@ -70,9 +74,9 @@ RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBand
 }
 
 RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps,
-                            unsigned int dev_ch, const AudioChannelMap &imap, bool enable_network, bool enable_denoise)
+                            unsigned int dev_ch, const AudioChannelMap &imap, StreamFlags flags)
 {
-    AUDIO_INFO_PRINT("Creating %s input stream with token %u", name.first.c_str(), token.tok);
+    AUDIO_INFO_PRINT("Creating %s input stream with token %u and channel mapping", name.first.c_str(), token.tok);
 
     if (center_state.load() != State::INIT)
     {
@@ -88,8 +92,8 @@ RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBand
 
     if (dev_ch < 2)
     {
-        AUDIO_ERROR_PRINT("Invalid device channel: %u, when channel map is specfied, at least two channel is necessary",
-                          dev_ch);
+        AUDIO_ERROR_PRINT(
+            "Invalid device channel: %u, when channel map is specified, at least two channels are necessary", dev_ch);
         return RetCode::EPARAM;
     }
 
@@ -104,6 +108,15 @@ RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBand
         AUDIO_ERROR_PRINT("Token already exists: %u", token.tok);
         return RetCode::NOACTION;
     }
+
+    if (has_flag(flags, StreamFlags::Reset))
+    {
+        AUDIO_ERROR_PRINT("Reset flag not supported for input stream with channel mapping (token %u), ignoring",
+                            token.tok);
+    }
+
+    bool enable_network = has_flag(flags, StreamFlags::Network);
+    bool enable_denoise = has_flag(flags, StreamFlags::Denoise);
 
     ias_map[token.tok] =
         std::make_shared<IAStream>(token.tok, name, enum2val(ps), enum2val(bw), dev_ch, imap, enable_denoise);
@@ -123,7 +136,7 @@ RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBand
 }
 
 RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps,
-                            unsigned int ch, bool enable_network, bool enable_reset)
+                            unsigned int ch, StreamFlags flags)
 {
     AUDIO_INFO_PRINT("Creating %s output stream with token %u", name.first.c_str(), token.tok);
 
@@ -144,6 +157,14 @@ RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBand
         AUDIO_ERROR_PRINT("Token already exists: %u", token.tok);
         return RetCode::NOACTION;
     }
+
+    if (has_flag(flags, StreamFlags::Denoise))
+    {
+        AUDIO_ERROR_PRINT("Denoise flag not supported for output stream (token %u), ignoring", token.tok);
+    }
+
+    bool enable_network = has_flag(flags, StreamFlags::Network);
+    bool enable_reset = has_flag(flags, StreamFlags::Reset);
 
     oas_map[token.tok] = std::make_shared<OAStream>(token.tok, name, enum2val(ps), enum2val(bw), ch, enable_reset);
 
@@ -162,9 +183,9 @@ RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBand
 }
 
 RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps,
-                            unsigned int dev_ch, const AudioChannelMap &omap, bool enable_network)
+                            unsigned int dev_ch, const AudioChannelMap &omap, StreamFlags flags)
 {
-    AUDIO_INFO_PRINT("Creating %s output stream with token %u", name.first.c_str(), token.tok);
+    AUDIO_INFO_PRINT("Creating %s output stream with token %u and channel mapping", name.first.c_str(), token.tok);
 
     if (center_state.load() != State::INIT)
     {
@@ -180,8 +201,8 @@ RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBand
 
     if (dev_ch < 2)
     {
-        AUDIO_ERROR_PRINT("Invalid device channel: %u, when channel map is specfied, at least two channel is necessary",
-                          dev_ch);
+        AUDIO_ERROR_PRINT(
+            "Invalid device channel: %u, when channel map is specified, at least two channels are necessary", dev_ch);
         return RetCode::EPARAM;
     }
 
@@ -196,6 +217,19 @@ RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBand
         AUDIO_ERROR_PRINT("Token already exists: %u", token.tok);
         return RetCode::NOACTION;
     }
+
+    if (has_flag(flags, StreamFlags::Reset))
+    {
+        AUDIO_ERROR_PRINT("Reset flag not supported for output stream with channel mapping (token %u), ignoring",
+                            token.tok);
+    }
+
+    if (has_flag(flags, StreamFlags::Denoise))
+    {
+        AUDIO_ERROR_PRINT("Denoise flag not supported for output stream (token %u), ignoring", token.tok);
+    }
+
+    bool enable_network = has_flag(flags, StreamFlags::Network);
 
     oas_map[token.tok] = std::make_shared<OAStream>(token.tok, name, enum2val(ps), enum2val(bw), dev_ch, false, omap);
 
@@ -213,7 +247,7 @@ RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBand
     return RetCode::OK;
 }
 
-RetCode AudioCenter::create(IToken itoken, OToken otoken, bool enable_network)
+RetCode AudioCenter::create(IToken itoken, OToken otoken, StreamFlags flags)
 {
     AUDIO_INFO_PRINT("Creating linked streams with tokens %u -> %u", itoken.tok, otoken.tok);
 
@@ -238,7 +272,7 @@ RetCode AudioCenter::create(IToken itoken, OToken otoken, bool enable_network)
     auto oas = oas_map.find(otoken.tok);
     if (oas == oas_map.end())
     {
-        AUDIO_ERROR_PRINT("Output token don't exists: %u", otoken.tok);
+        AUDIO_ERROR_PRINT("Output token doesn't exist: %u", otoken.tok);
         return RetCode::EPARAM;
     }
 
@@ -267,7 +301,7 @@ RetCode AudioCenter::create(IToken itoken, OToken otoken, bool enable_network)
                                                          enum2val(AudioBandWidth::Full), 99, oas->second->omap, false);
     }
 
-    if (enable_network && net_mgr)
+    if (has_flag(flags, StreamFlags::Denoise) && net_mgr)
     {
         auto ret = ias_map[itoken.tok]->initialize_network(net_mgr);
         if (!ret)
