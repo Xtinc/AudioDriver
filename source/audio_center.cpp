@@ -11,7 +11,7 @@ AudioCenter::AudioCenter(bool enable_network, const std::string &local_ip, unsig
 {
     config = std::make_unique<INIReader>("audiocenter.ini");
     monitor = std::make_unique<AudioMonitor>(BG_SERVICE);
-    player = std::make_shared<AudioPlayer>(WAVE_PLAYER_TOKEN.tok);
+    player = std::make_shared<AudioPlayer>(USER_MAX_AUDIO_TOKEN);
     if (enable_network)
     {
         net_mgr = std::make_shared<NetWorker>(BG_SERVICE, port, local_ip);

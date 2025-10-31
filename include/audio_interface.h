@@ -399,11 +399,6 @@ constexpr auto USR_DUMMY_IN = 100_itk;
  */
 constexpr auto USR_DUMMY_OUT = 200_otk;
 
-/**
- * @brief Token for audio player
- */
-constexpr auto WAVE_PLAYER_TOKEN = IToken(AudioToken(USER_MAX_AUDIO_TOKEN));
-
 // Forward declarations
 class INIReader;
 class IAStream;
