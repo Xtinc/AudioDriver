@@ -301,7 +301,7 @@ RetCode AudioCenter::create(IToken itoken, OToken otoken, StreamFlags flags)
                                                          enum2val(AudioBandWidth::Full), 99, oas->second->omap, false);
     }
 
-    if (has_flag(flags, StreamFlags::Denoise) && net_mgr)
+    if (has_flag(flags, StreamFlags::Network) && net_mgr)
     {
         auto ret = ias_map[itoken.tok]->initialize_network(net_mgr);
         if (!ret)
@@ -399,16 +399,16 @@ RetCode AudioCenter::prepare(bool enable_usb_detection)
             AUDIO_INFO_PRINT("Del device: %s", info.name.c_str());
             if (ias->second->name().first == info.id)
             {
-                ias->second->restart({"null", 0});
-                usr_cfg.input_device_id = "null";
-                usr_cfg.input_device_name = "null";
+                ias->second->restart({"null_usb", 0});
+                usr_cfg.input_device_id = "null_usb";
+                usr_cfg.input_device_name = "null_usb";
                 config->SaveDeviceConfig(usr_cfg);
             }
             if (oas->second->name().first == info.id)
             {
-                oas->second->restart({"null", 0});
-                usr_cfg.output_device_id = "null";
-                usr_cfg.output_device_name = "null";
+                oas->second->restart({"null_usb", 0});
+                usr_cfg.output_device_id = "null_usb";
+                usr_cfg.output_device_name = "null_usb";
                 config->SaveDeviceConfig(usr_cfg);
             }
             break;
