@@ -112,7 +112,7 @@ RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBand
     if (has_flag(flags, StreamFlags::Reset))
     {
         AUDIO_ERROR_PRINT("Reset flag not supported for input stream with channel mapping (token %u), ignoring",
-                            token.tok);
+                          token.tok);
     }
 
     bool enable_network = has_flag(flags, StreamFlags::Network);
@@ -221,7 +221,7 @@ RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBand
     if (has_flag(flags, StreamFlags::Reset))
     {
         AUDIO_ERROR_PRINT("Reset flag not supported for output stream with channel mapping (token %u), ignoring",
-                            token.tok);
+                          token.tok);
     }
 
     if (has_flag(flags, StreamFlags::Denoise))
@@ -282,39 +282,53 @@ RetCode AudioCenter::create(IToken itoken, OToken otoken, StreamFlags flags)
         return RetCode::EPARAM;
     }
 
-    if (oas->second->omap == DEFAULT_MONO_MAP)
+    try
     {
-        ias_map[itoken.tok] = std::make_shared<IAStream>(itoken.tok, AudioDeviceName("null_dummy", 0),
-                                                         enum2val(AudioPeriodSize::INR_20MS),
-                                                         enum2val(AudioBandWidth::Full), 1, false, false);
-    }
-    else if (oas->second->omap == DEFAULT_DUAL_MAP)
-    {
-        ias_map[itoken.tok] = std::make_shared<IAStream>(itoken.tok, AudioDeviceName("null_dummy", 0),
-                                                         enum2val(AudioPeriodSize::INR_20MS),
-                                                         enum2val(AudioBandWidth::Full), 2, false, false);
-    }
-    else
-    {
-        ias_map[itoken.tok] = std::make_shared<IAStream>(itoken.tok, AudioDeviceName("null_dummy", 0),
-                                                         enum2val(AudioPeriodSize::INR_20MS),
-                                                         enum2val(AudioBandWidth::Full), 99, oas->second->omap, false);
-    }
-
-    if (has_flag(flags, StreamFlags::Network) && net_mgr)
-    {
-        auto ret = ias_map[itoken.tok]->initialize_network(net_mgr);
-        if (!ret)
+        std::shared_ptr<IAStream> new_stream;
+        if (oas->second->omap == DEFAULT_MONO_MAP)
         {
-            AUDIO_ERROR_PRINT("Failed to initialize network for input stream %u: %s", itoken.tok, ret.what());
-            return ret;
+            new_stream = std::make_shared<IAStream>(itoken.tok, AudioDeviceName("null_dummy", 0),
+                                                    enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full),
+                                                    1, false, false);
         }
-        AUDIO_DEBUG_PRINT("Network initialized for input stream %u", itoken.tok);
+        else if (oas->second->omap == DEFAULT_DUAL_MAP)
+        {
+            new_stream = std::make_shared<IAStream>(itoken.tok, AudioDeviceName("null_dummy", 0),
+                                                    enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full),
+                                                    2, false, false);
+        }
+        else
+        {
+            new_stream = std::make_shared<IAStream>(itoken.tok, AudioDeviceName("null_dummy", 0),
+                                                    enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full),
+                                                    99, oas->second->omap, false);
+        }
+
+        if (has_flag(flags, StreamFlags::Network) && net_mgr)
+        {
+            auto ret = new_stream->initialize_network(net_mgr);
+            if (!ret)
+            {
+                AUDIO_ERROR_PRINT("Failed to initialize network for input stream %u: %s", itoken.tok, ret.what());
+                return ret;
+            }
+            AUDIO_DEBUG_PRINT("Network initialized for input stream %u", itoken.tok);
+        }
+
+        oas->second->register_listener(new_stream);
+        ias_map[itoken.tok] = std::move(new_stream);
+        return RetCode::OK;
     }
-
-    oas->second->register_listener(ias_map[itoken.tok]);
-
-    return RetCode::OK;
+    catch (const std::bad_alloc &e)
+    {
+        AUDIO_ERROR_PRINT("Memory allocation failed for input stream %u: %s", itoken.tok, e.what());
+        return RetCode::FAILED;
+    }
+    catch (const std::exception &e)
+    {
+        AUDIO_ERROR_PRINT("Exception occurred while creating input stream %u: %s", itoken.tok, e.what());
+        return RetCode::EXCEPTION;
+    }
 }
 
 RetCode AudioCenter::prepare(bool enable_usb_detection)
