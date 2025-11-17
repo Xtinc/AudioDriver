@@ -399,6 +399,12 @@ void OAStream::register_listener(const std::shared_ptr<IAStream> &ias)
         return;
     }
 
+    if (!ias)
+    {
+        AUDIO_ERROR_PRINT("Invalid IAStream pointer for token %u", token);
+        return;
+    }
+
     auto ret = ias->reset2echo({odevice->hw_name, 0}, fs, ch);
     if (!ret)
     {
