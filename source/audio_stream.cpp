@@ -281,6 +281,11 @@ RetCode OAStream::direct_push(unsigned int chan, unsigned int frames, unsigned i
     return success ? RetCode::OK : RetCode::NOACTION;
 }
 
+bool OAStream::available() const
+{
+    return oas_ready.load();
+}
+
 void OAStream::mute()
 {
     muted.store(true);
@@ -824,6 +829,11 @@ RetCode IAStream::direct_push(const char *data, size_t len) const
                   static_cast<unsigned int>(len) / (sizeof(PCM_TYPE) * dev_ch), usr_cb.ptr);
     }
     return idevice->write(data, len);
+}
+
+bool IAStream::available() const
+{
+    return ias_ready.load();
 }
 
 void IAStream::mute()

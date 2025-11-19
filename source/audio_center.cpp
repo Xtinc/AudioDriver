@@ -56,8 +56,16 @@ RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBand
     bool enable_reset = has_flag(flags, StreamFlags::Reset);
     bool enable_denoise = has_flag(flags, StreamFlags::Denoise);
 
-    ias_map[token.tok] =
+    auto ias_ptr =
         std::make_shared<IAStream>(token.tok, name, enum2val(ps), enum2val(bw), ch, enable_reset, enable_denoise);
+
+    if (!ias_ptr->available())
+    {
+        AUDIO_ERROR_PRINT("Failed to create input stream %u, device not available", token.tok);
+        return RetCode::EOPEN;
+    }
+
+    ias_map[token.tok] = std::move(ias_ptr);
 
     if (enable_network && net_mgr)
     {
@@ -118,8 +126,16 @@ RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBand
     bool enable_network = has_flag(flags, StreamFlags::Network);
     bool enable_denoise = has_flag(flags, StreamFlags::Denoise);
 
-    ias_map[token.tok] =
+    auto ias_ptr =
         std::make_shared<IAStream>(token.tok, name, enum2val(ps), enum2val(bw), dev_ch, imap, enable_denoise);
+
+    if (!ias_ptr->available())
+    {
+        AUDIO_ERROR_PRINT("Failed to create input stream %u, device not available", token.tok);
+        return RetCode::EOPEN;
+    }
+
+    ias_map[token.tok] = std::move(ias_ptr);
 
     if (enable_network && net_mgr)
     {
@@ -166,7 +182,15 @@ RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBand
     bool enable_network = has_flag(flags, StreamFlags::Network);
     bool enable_reset = has_flag(flags, StreamFlags::Reset);
 
-    oas_map[token.tok] = std::make_shared<OAStream>(token.tok, name, enum2val(ps), enum2val(bw), ch, enable_reset);
+    auto oas_ptr = std::make_shared<OAStream>(token.tok, name, enum2val(ps), enum2val(bw), ch, enable_reset);
+
+    if (!oas_ptr->available())
+    {
+        AUDIO_ERROR_PRINT("Failed to create output stream %u, device not available", token.tok);
+        return RetCode::EOPEN;
+    }
+
+    oas_map[token.tok] = std::move(oas_ptr);
 
     if (enable_network && net_mgr)
     {
@@ -231,7 +255,15 @@ RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBand
 
     bool enable_network = has_flag(flags, StreamFlags::Network);
 
-    oas_map[token.tok] = std::make_shared<OAStream>(token.tok, name, enum2val(ps), enum2val(bw), dev_ch, false, omap);
+    auto oas_ptr = std::make_shared<OAStream>(token.tok, name, enum2val(ps), enum2val(bw), dev_ch, false, omap);
+
+    if (!oas_ptr->available())
+    {
+        AUDIO_ERROR_PRINT("Failed to create output stream %u, device not available", token.tok);
+        return RetCode::EOPEN;
+    }
+
+    oas_map[token.tok] = std::move(oas_ptr);
 
     if (enable_network && net_mgr)
     {
@@ -276,6 +308,12 @@ RetCode AudioCenter::create(IToken itoken, OToken otoken, StreamFlags flags)
         return RetCode::EPARAM;
     }
 
+    if (!oas->second->available())
+    {
+        AUDIO_ERROR_PRINT("Output stream %u not available", otoken.tok);
+        return RetCode::EPARAM;
+    }
+    
     if (ias_map.find(itoken.tok) != ias_map.end())
     {
         AUDIO_ERROR_PRINT("Input token already exists: %u", itoken.tok);
