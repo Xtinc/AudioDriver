@@ -371,9 +371,9 @@ RetCode AudioCenter::prepare(bool enable_usb_detection)
         return RetCode::OK;
     }
 
-    auto usr_cfg = config->LoadDeviceConfig();
-    auto default_usb_in = usr_cfg.input_device_id.empty() ? "null_usb" : usr_cfg.input_device_id;
-    auto default_usb_out = usr_cfg.output_device_id.empty() ? "null_usb" : usr_cfg.output_device_id;
+    auto cfg = config->LoadDeviceConfig();
+    auto default_usb_in = cfg.input_device_id.empty() ? "null_usb" : cfg.input_device_id;
+    auto default_usb_out = cfg.output_device_id.empty() ? "null_usb" : cfg.output_device_id;
 
     ias_map.emplace(USR_DUMMY_IN.tok, std::make_shared<IAStream>(USR_DUMMY_IN.tok, AudioDeviceName(default_usb_in, 0),
                                                                  enum2val(AudioPeriodSize::INR_20MS),
@@ -590,7 +590,7 @@ RetCode AudioCenter::register_callback(IToken token, AudioInputCallBack cb, unsi
     }
 
     it->second->register_callback(cb, frames, mode, ptr);
-    AUDIO_DEBUG_PRINT("Callback registered for input stream %u, mode: %d", token.tok, mode);
+    AUDIO_DEBUG_PRINT("Callback registered for input stream %u, mode: %d", token.tok, static_cast<int>(mode));
     return RetCode::OK;
 }
 

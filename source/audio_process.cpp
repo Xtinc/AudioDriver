@@ -178,11 +178,11 @@ float SincInterpolator::interpolator(double x, const float *input, const float *
     return (std::max)(-1.0f, (std::min)(1.0f, sum));
 }
 
-LocSampler::LocSampler(unsigned int src_fs, unsigned int src_ch, unsigned int dst_fs, unsigned int dst_ch,
+LocSampler::LocSampler(unsigned int sfs, unsigned int sch, unsigned int dfs, unsigned int dch,
                        unsigned int max_iframe, const AudioChannelMap &imap, const AudioChannelMap &omap)
-    : src_fs(src_fs), src_ch(src_ch), dst_fs(dst_fs), dst_ch(dst_ch), ratio(static_cast<double>(dst_fs) / src_fs),
-      ti(max_iframe * 1000 / src_fs), ichan_map(imap), ochan_map(omap), real_ichan(std::min(2u, src_ch)),
-      real_ochan(std::min(2u, dst_ch))
+    : src_fs(sfs), src_ch(sch), dst_fs(dfs), dst_ch(dch), ratio(static_cast<double>(dfs) / sfs),
+      ti(max_iframe * 1000 / sfs), ichan_map(imap), ochan_map(omap), real_ichan(std::min(2u, sch)),
+      real_ochan(std::min(2u, dch))
 {
     // Validate input parameters
     DBG_ASSERT_GT(src_ch, 0u);

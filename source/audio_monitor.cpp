@@ -403,14 +403,14 @@ static std::string get_device_description(const char *device_name)
     }
 
     // Build card control name
-    char card_name[32];
-    snprintf(card_name, sizeof(card_name), "hw:%d", card_num);
+    char card_ctl_name[32];
+    snprintf(card_ctl_name, sizeof(card_ctl_name), "hw:%d", card_num);
 
     snd_ctl_t *handle;
     std::string result = device_name;
 
     // Try to open the control interface
-    int err = snd_ctl_open(&handle, card_name, SND_CTL_READONLY);
+    int err = snd_ctl_open(&handle, card_ctl_name, SND_CTL_READONLY);
     if (err >= 0)
     {
         snd_ctl_card_info_t *info;

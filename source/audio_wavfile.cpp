@@ -185,9 +185,9 @@ WavFile::~WavFile()
     }
 }
 
-RetCode WavFile::open(const std::string &path, mode mode)
+RetCode WavFile::open(const std::string &path, mode io_mode)
 {
-    if (mode == mode::out)
+    if (io_mode == mode::out)
     {
         ostream.open(path.c_str(), std::ios::binary | std::ios::trunc);
         if (!ostream.is_open())

@@ -251,8 +251,8 @@ static RetCode resolve_endpoint(const std::string &ip, uint16_t port, asio::ip::
     }
 }
 
-NetWorker::NetWorker(asio::io_context &io_context, uint16_t port, const std::string &local_ip)
-    : retry_count(0), io_context(io_context), running(false), local_session_ip(0),
+NetWorker::NetWorker(asio::io_context &ioc, uint16_t port, const std::string &local_ip)
+    : retry_count(0), io_context(ioc), running(false), local_session_ip(0),
       receive_buffer(new char[NETWORK_MAX_BUFFER_SIZE])
 {
     try
