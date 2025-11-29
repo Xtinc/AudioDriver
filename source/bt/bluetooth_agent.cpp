@@ -490,7 +490,7 @@ void BluetoothAgent::update_device_property(BluetoothDevice &device, const char 
         dbus_message_iter_get_basic(&variant_iter, &address);
         device.address = address;
     }
-    else if (strcmp(key, "Name") && dbus_message_iter_get_arg_type(&variant_iter) == DBUS_TYPE_STRING)
+    else if (strcmp(key, "Name") == 0 && dbus_message_iter_get_arg_type(&variant_iter) == DBUS_TYPE_STRING)
     {
         const char *name;
         dbus_message_iter_get_basic(&variant_iter, &name);
