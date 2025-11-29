@@ -11,6 +11,7 @@
 #define AGENT_PATH "/org/bluez/agent"
 #define AGENT_SERVICE "org.bluez.agent"
 
+#include <dbus/dbus.h>
 #include <algorithm>
 #include <cstring>
 #include <sstream>
@@ -36,7 +37,8 @@ static DBusHandlerResult message_handler_callback(DBusConnection *, DBusMessage 
 }
 
 BluetoothAgent::BluetoothAgent(const std::string &adapter_path)
-    : connection_(nullptr), adapter_path_(adapter_path), running_(false), scanning_(false)
+    : connection_(nullptr), adapter_path_(adapter_path), running_(false), scanning_(false),
+      waiting_for_confirmation_(false)
 {
 }
 
@@ -249,39 +251,6 @@ std::vector<BluetoothDevice> BluetoothAgent::list() const
     std::lock_guard<std::mutex> lock(devices_mutex_);
     return devices_;
 }
-
-// void BluetoothAgent::info(const std::string &device_path) const
-// {
-//     std::lock_guard<std::mutex> lock(devices_mutex_);
-
-//     auto dev_iter = std::find_if(devices_.begin(), devices_.end(),
-//                                  [device_path](const BluetoothDevice &dev) { return dev.path == device_path; });
-//     if (dev_iter != devices_.end())
-//     {
-//         const BluetoothDevice &dev = *dev_iter;
-//         std::stringstream ss;
-//         ss << "Device Info:\n"
-//            << "Path: " << dev.path << "\n"
-//            << "Address: " << dev.address << "\n"
-//            << "Name: " << dev.name << "\n"
-//            << "Alias: " << dev.alias << "\n"
-//            << "RSSI: " << dev.rssi << "\n"
-//            << "Paired: " << (dev.paired ? "true" : "false") << "\n"
-//            << "Connected: " << (dev.connected ? "true" : "false") << "\n"
-//            << "Trusted: " << (dev.trusted ? "true" : "false") << "\n"
-//            << "Blocked: " << (dev.blocked ? "true" : "false") << "\n"
-//            << "UUIDs:\n";
-//         for (const auto &uuid : dev.uuids)
-//         {
-//             ss << "  " << uuid << "\n";
-//         }
-//         AUDIO_INFO_PRINT("%s", ss.str().c_str());
-//     }
-//     else
-//     {
-//         AUDIO_ERROR_PRINT("Device not found: %s", device_path.c_str());
-//     }
-// }
 
 bool BluetoothAgent::set_adapter_property(const char *property, bool value)
 {
@@ -709,7 +678,7 @@ DBusHandlerResult BluetoothAgent::handle_request_pincode(DBusMessage *msg)
     if (dbus_message_get_args(msg, nullptr, DBUS_TYPE_OBJECT_PATH, &device_path, DBUS_TYPE_INVALID))
     {
         const char *pincode = "1234";
-        AUDIO_INFO_PRINT("Received RequestPinCode for device: %s, send PIN: %s", device_path, pincode);
+        AUDIO_INFO_PRINT("PIN Code Request - Device: %s, Sending PIN: %s", device_path, pincode);
         DBusMessage *reply = dbus_message_new_method_return(msg);
         dbus_message_append_args(reply, DBUS_TYPE_STRING, &pincode, DBUS_TYPE_INVALID);
         dbus_connection_send(connection_, reply, nullptr);
@@ -726,7 +695,7 @@ DBusHandlerResult BluetoothAgent::handle_display_pincode(DBusMessage *msg)
     if (dbus_message_get_args(msg, nullptr, DBUS_TYPE_OBJECT_PATH, &device_path, DBUS_TYPE_STRING, &pincode,
                               DBUS_TYPE_INVALID))
     {
-        AUDIO_INFO_PRINT("Received DisplayPinCode for device: %s, PIN: %s", device_path, pincode);
+        AUDIO_INFO_PRINT("Display PIN Code - Device: %s, PIN: %s", device_path, pincode);
         DBusMessage *reply = dbus_message_new_method_return(msg);
         dbus_connection_send(connection_, reply, nullptr);
         dbus_message_unref(reply);
@@ -740,10 +709,8 @@ DBusHandlerResult BluetoothAgent::handle_request_passkey(DBusMessage *msg)
     const char *device_path;
     if (dbus_message_get_args(msg, nullptr, DBUS_TYPE_OBJECT_PATH, &device_path, DBUS_TYPE_INVALID))
     {
-        AUDIO_INFO_PRINT("Received RequestPasskey for device: %s", device_path);
         dbus_uint32_t passkey = 123456;
-        AUDIO_INFO_PRINT("Sending Passkey: %06u", passkey);
-
+        AUDIO_INFO_PRINT("Passkey Request - Device: %s, Sending Passkey: %06u", device_path, passkey);
         DBusMessage *reply = dbus_message_new_method_return(msg);
         dbus_message_append_args(reply, DBUS_TYPE_UINT32, &passkey, DBUS_TYPE_INVALID);
         dbus_connection_send(connection_, reply, nullptr);
@@ -761,8 +728,7 @@ DBusHandlerResult BluetoothAgent::handle_display_passkey(DBusMessage *msg)
     if (dbus_message_get_args(msg, nullptr, DBUS_TYPE_OBJECT_PATH, &device_path, DBUS_TYPE_UINT32, &passkey,
                               DBUS_TYPE_UINT16, &entered, DBUS_TYPE_INVALID))
     {
-        AUDIO_INFO_PRINT("Received DisplayPasskey for device: %s, Passkey: %06u, Entered: %u", device_path, passkey,
-                         entered);
+        AUDIO_INFO_PRINT("Display Passkey - Device: %s, Passkey: %06u (entered: %u digits)", device_path, passkey, entered);
         DBusMessage *reply = dbus_message_new_method_return(msg);
         dbus_connection_send(connection_, reply, nullptr);
         dbus_message_unref(reply);
@@ -775,16 +741,68 @@ DBusHandlerResult BluetoothAgent::handle_request_confirmation(DBusMessage *msg)
 {
     const char *device_path;
     dbus_uint32_t passkey;
-    if (dbus_message_get_args(msg, nullptr, DBUS_TYPE_OBJECT_PATH, &device_path, DBUS_TYPE_UINT32, &passkey,
-                              DBUS_TYPE_INVALID))
+    if (!dbus_message_get_args(msg, nullptr, DBUS_TYPE_OBJECT_PATH, &device_path, DBUS_TYPE_UINT32, &passkey,
+                               DBUS_TYPE_INVALID))
     {
-        AUDIO_INFO_PRINT("Received RequestConfirmation for device: %s, Passkey: %06u", device_path, passkey);
-        DBusMessage *reply = dbus_message_new_method_return(msg);
+        return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+    }
+
+    AUDIO_INFO_PRINT("Pairing Confirmation - Device: %s, Passkey: %06u (Use 'yes/no' to confirm, 10s timeout)", device_path, passkey);
+
+    waiting_for_confirmation_ = true;
+    bool confirmed = false;
+
+    std::future<bool> future;
+    {
+        std::lock_guard<std::mutex> lock(confirm_mutex_);
+        confirmation_promise_ = std::make_unique<std::promise<bool>>();
+        future = confirmation_promise_->get_future();
+    }
+
+    auto status = future.wait_for(std::chrono::seconds(10));
+    if (status == std::future_status::ready)
+    {
+        try 
+        {
+            confirmed = future.get();
+            AUDIO_INFO_PRINT("User %s pairing for device: %s", 
+                confirmed ? "accepted" : "rejected", device_path);
+        }
+        catch (const std::exception& e)
+        {
+            AUDIO_ERROR_PRINT("Exception getting confirmation result: %s", e.what());
+            confirmed = false;
+        }
+    }
+    else
+    {
+        AUDIO_INFO_PRINT("Pairing confirmation timeout, auto-rejecting device: %s", device_path);
+        confirmed = false;
+    }
+
+    waiting_for_confirmation_ = false;
+    {
+        std::lock_guard<std::mutex> lock(confirm_mutex_);
+        confirmation_promise_.reset();
+    }
+
+    DBusMessage *reply;
+    if (confirmed)
+    {
+        reply = dbus_message_new_method_return(msg);
+    }
+    else
+    {
+        reply = dbus_message_new_error(msg, "org.bluez.Error.Rejected", "Pairing rejected");
+    }
+
+    if (reply)
+    {
         dbus_connection_send(connection_, reply, nullptr);
         dbus_message_unref(reply);
-        return DBUS_HANDLER_RESULT_HANDLED;
     }
-    return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+
+    return DBUS_HANDLER_RESULT_HANDLED;
 }
 
 DBusHandlerResult BluetoothAgent::handle_request_authorization(DBusMessage *msg)
@@ -792,7 +810,7 @@ DBusHandlerResult BluetoothAgent::handle_request_authorization(DBusMessage *msg)
     const char *device_path;
     if (dbus_message_get_args(msg, nullptr, DBUS_TYPE_OBJECT_PATH, &device_path, DBUS_TYPE_INVALID))
     {
-        AUDIO_INFO_PRINT("Received RequestAuthorization for device: %s", device_path);
+        AUDIO_INFO_PRINT("Authorization Request - Device: %s (auto-accepting)", device_path);
         DBusMessage *reply = dbus_message_new_method_return(msg);
         dbus_connection_send(connection_, reply, nullptr);
         dbus_message_unref(reply);
@@ -808,7 +826,7 @@ DBusHandlerResult BluetoothAgent::handle_authorize_service(DBusMessage *msg)
     if (dbus_message_get_args(msg, nullptr, DBUS_TYPE_OBJECT_PATH, &device_path, DBUS_TYPE_STRING, &uuid,
                               DBUS_TYPE_INVALID))
     {
-        AUDIO_INFO_PRINT("Received AuthorizeService for device: %s, UUID: %s", device_path, uuid);
+        AUDIO_INFO_PRINT("Service Authorization - Device: %s, UUID: %s (auto-accepting)", device_path, uuid);
         DBusMessage *reply = dbus_message_new_method_return(msg);
         dbus_connection_send(connection_, reply, nullptr);
         dbus_message_unref(reply);
@@ -819,11 +837,26 @@ DBusHandlerResult BluetoothAgent::handle_authorize_service(DBusMessage *msg)
 
 DBusHandlerResult BluetoothAgent::handle_cancel(DBusMessage *msg)
 {
-    AUDIO_INFO_PRINT("Received Cancel");
+    AUDIO_INFO_PRINT("Pairing operation cancelled");
     DBusMessage *reply = dbus_message_new_method_return(msg);
     dbus_connection_send(connection_, reply, nullptr);
     dbus_message_unref(reply);
     return DBUS_HANDLER_RESULT_HANDLED;
+}
+
+void BluetoothAgent::set_user_confirmation(bool confirm)
+{
+    std::lock_guard<std::mutex> lock(confirm_mutex_);
+    if (confirmation_promise_)
+    {
+        confirmation_promise_->set_value(confirm);
+        AUDIO_DEBUG_PRINT("User confirmation set to: %s", confirm ? "accept" : "reject");
+    }
+}
+
+bool BluetoothAgent::is_waiting_for_confirmation() const
+{
+    return waiting_for_confirmation_;
 }
 
 #endif
