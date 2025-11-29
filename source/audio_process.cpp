@@ -1,5 +1,4 @@
 #include "audio_process.h"
-#include "ns/noise_supression.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -7,7 +6,6 @@
 static constexpr auto RS_BLKSIZE = 4;
 static constexpr auto A_PI = 3.141592653589793;
 static constexpr auto MAX_CONVERTER_RATIO = 8.0;
-static constexpr auto DENOISE_SAMPLE_RATE = 16000;
 
 static constexpr int16_t clamp_s16(int32_t v)
 {
@@ -181,10 +179,10 @@ float SincInterpolator::interpolator(double x, const float *input, const float *
 }
 
 LocSampler::LocSampler(unsigned int src_fs, unsigned int src_ch, unsigned int dst_fs, unsigned int dst_ch,
-                       unsigned int max_iframe, const AudioChannelMap &imap, const AudioChannelMap &omap, bool denoise)
+                       unsigned int max_iframe, const AudioChannelMap &imap, const AudioChannelMap &omap)
     : src_fs(src_fs), src_ch(src_ch), dst_fs(dst_fs), dst_ch(dst_ch), ratio(static_cast<double>(dst_fs) / src_fs),
       ti(max_iframe * 1000 / src_fs), ichan_map(imap), ochan_map(omap), real_ichan(std::min(2u, src_ch)),
-      real_ochan(std::min(2u, dst_ch)), enable_denoise(denoise)
+      real_ochan(std::min(2u, dst_ch))
 {
     // Validate input parameters
     DBG_ASSERT_GT(src_ch, 0u);
@@ -203,27 +201,6 @@ LocSampler::LocSampler(unsigned int src_fs, unsigned int src_ch, unsigned int ds
     analysis_ibuffer = std::make_unique<ChannelBuffer<float>>(src_fr, std::max(src_ch, dst_ch));
     analysis_obuffer = std::make_unique<ChannelBuffer<float>>(dst_fr, real_ochan);
     compressor = std::make_unique<DRCompressor>(static_cast<float>(dst_fs), real_ochan);
-
-    if (enable_denoise)
-    {
-        if (ti != 10 || dst_fs % DENOISE_SAMPLE_RATE)
-        {
-            AUDIO_ERROR_PRINT("Cannot enable denoise, ti = %u, dst_fs = %u", ti, dst_fs);
-            enable_denoise = false;
-        }
-        else
-        {
-            AUDIO_DEBUG_PRINT("Enable NoiseSuppressor");
-            denoiser = std::make_unique<NoiseSuppressor>(0, real_ochan);
-            if (dst_fs > DENOISE_SAMPLE_RATE)
-            {
-                split_data =
-                    std::make_unique<ChannelBuffer<float>>(dst_fr, real_ochan, dst_fr * 100 / DENOISE_SAMPLE_RATE);
-                splitting_filter =
-                    std::make_unique<SplittingFilter>(real_ochan, dst_fr * 100 / DENOISE_SAMPLE_RATE, dst_fr);
-            }
-        }
-    }
 
     // Create resampler if needed
     if (src_fs != dst_fs)
@@ -284,27 +261,10 @@ RetCode LocSampler::process(const InterleavedView<const PCM_TYPE> &input, const 
         buf_ptr = analysis_obuffer.get();
     }
 
-    // Step 4: Apply noise suppression if enabled
-    if (enable_denoise)
-    {
-        if (dst_fs > DENOISE_SAMPLE_RATE)
-        {
-            splitting_filter->Analysis(buf_ptr, split_data.get());
-            denoiser->Analyze(*split_data);
-            denoiser->Process(*split_data);
-            splitting_filter->Synthesis(split_data.get(), buf_ptr);
-        }
-        else
-        {
-            denoiser->Analyze(*buf_ptr);
-            denoiser->Process(*buf_ptr);
-        }
-    }
-
-    // Step 5: Apply dynamic range compression
+    // Step 4: Apply dynamic range compression
     compressor->process(buf_ptr, gain);
 
-    // Step 6: Interleave float data back to PCM format
+    // Step 5: Interleave float data back to PCM format
     interleave_f16_s16(buf_ptr, output);
 
     return RetCode::OK;

@@ -248,8 +248,7 @@ enum class StreamFlags : unsigned int
 {
     None = 0x00,    /**< No special options */
     Network = 0x01, /**< Enable network functionality */
-    Reset = 0x02,   /**< Enable auto reset */
-    Denoise = 0x04  /**< Enable denoise processing */
+    Reset = 0x02    /**< Enable auto reset */
 };
 
 /**
@@ -532,7 +531,7 @@ class AudioCenter
      * @param ps Audio period size
      * @param dev_ch Number of channels to open device
      * @param imap Channel mapping between user channel and device channel
-     * @param flags Stream creation flags (Network | Denoise)
+     * @param flags Stream creation flags (Network)
      * @return RetCode indicating success or failure
      */
     RetCode create(IToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps,

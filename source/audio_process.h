@@ -7,11 +7,6 @@
 #include <memory>
 #include <vector>
 
-// Forward declarations
-class NoiseSuppressor;
-class AnalysisBuffer;
-class SplittingFilter;
-
 /**
  * @brief Mixes audio channels together
  *
@@ -131,10 +126,9 @@ class LocSampler
      * @param max_frames Maximum number of input frames to process
      * @param imap Input channel mapping configuration
      * @param omap Output channel mapping configuration
-     * @param denoise Enable noise suppression if true
      */
     LocSampler(unsigned int src_fs, unsigned int src_ch, unsigned int dst_fs, unsigned int dst_ch,
-               unsigned int max_frames, const AudioChannelMap &imap, const AudioChannelMap &omap, bool denoise);
+               unsigned int max_frames, const AudioChannelMap &imap, const AudioChannelMap &omap);
 
     ~LocSampler();
 
@@ -142,7 +136,7 @@ class LocSampler
      * @brief Processes audio data with format conversion
      *
      * Performs channel conversion, sample rate conversion,
-     * noise suppression (if enabled), and dynamic range compression
+     * and dynamic range compression
      *
      * @param input Input audio data (interleaved PCM)
      * @param output Output audio data buffer (interleaved PCM)
@@ -165,14 +159,11 @@ class LocSampler
     const unsigned int real_ochan;
 
   private:
-    bool enable_denoise;
     std::unique_ptr<SincInterpolator> resampler;
     std::unique_ptr<DRCompressor> compressor;
-    std::unique_ptr<NoiseSuppressor> denoiser;
     std::unique_ptr<ChannelBuffer<float>> analysis_ibuffer;
     std::unique_ptr<ChannelBuffer<float>> analysis_obuffer;
-    std::unique_ptr<ChannelBuffer<float>> split_data;
-    std::unique_ptr<SplittingFilter> splitting_filter;
+
     /**
      * @brief Converts interleaved 16-bit PCM to deinterleaved float samples
      *

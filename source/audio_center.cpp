@@ -54,10 +54,8 @@ RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBand
 
     bool enable_network = has_flag(flags, StreamFlags::Network);
     bool enable_reset = has_flag(flags, StreamFlags::Reset);
-    bool enable_denoise = has_flag(flags, StreamFlags::Denoise);
 
-    auto ias_ptr =
-        std::make_shared<IAStream>(token.tok, name, enum2val(ps), enum2val(bw), ch, enable_reset, enable_denoise);
+    auto ias_ptr = std::make_shared<IAStream>(token.tok, name, enum2val(ps), enum2val(bw), ch, enable_reset);
 
     if (!ias_ptr->available())
     {
@@ -124,10 +122,8 @@ RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBand
     }
 
     bool enable_network = has_flag(flags, StreamFlags::Network);
-    bool enable_denoise = has_flag(flags, StreamFlags::Denoise);
 
-    auto ias_ptr =
-        std::make_shared<IAStream>(token.tok, name, enum2val(ps), enum2val(bw), dev_ch, imap, enable_denoise);
+    auto ias_ptr = std::make_shared<IAStream>(token.tok, name, enum2val(ps), enum2val(bw), dev_ch, imap);
 
     if (!ias_ptr->available())
     {
@@ -172,11 +168,6 @@ RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBand
     {
         AUDIO_ERROR_PRINT("Token already exists: %u", token.tok);
         return RetCode::NOACTION;
-    }
-
-    if (has_flag(flags, StreamFlags::Denoise))
-    {
-        AUDIO_ERROR_PRINT("Denoise flag not supported for output stream (token %u), ignoring", token.tok);
     }
 
     bool enable_network = has_flag(flags, StreamFlags::Network);
@@ -246,11 +237,6 @@ RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBand
     {
         AUDIO_ERROR_PRINT("Reset flag not supported for output stream with channel mapping (token %u), ignoring",
                           token.tok);
-    }
-
-    if (has_flag(flags, StreamFlags::Denoise))
-    {
-        AUDIO_ERROR_PRINT("Denoise flag not supported for output stream (token %u), ignoring", token.tok);
     }
 
     bool enable_network = has_flag(flags, StreamFlags::Network);
@@ -327,19 +313,19 @@ RetCode AudioCenter::create(IToken itoken, OToken otoken, StreamFlags flags)
         {
             new_stream = std::make_shared<IAStream>(itoken.tok, AudioDeviceName("null_dummy", 0),
                                                     enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full),
-                                                    1, false, false);
+                                                    1, false);
         }
         else if (oas->second->omap == DEFAULT_DUAL_MAP)
         {
             new_stream = std::make_shared<IAStream>(itoken.tok, AudioDeviceName("null_dummy", 0),
                                                     enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full),
-                                                    2, false, false);
+                                                    2, false);
         }
         else
         {
             new_stream = std::make_shared<IAStream>(itoken.tok, AudioDeviceName("null_dummy", 0),
                                                     enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full),
-                                                    99, oas->second->omap, false);
+                                                    99, oas->second->omap);
         }
 
         if (has_flag(flags, StreamFlags::Network) && net_mgr)
@@ -391,7 +377,7 @@ RetCode AudioCenter::prepare(bool enable_usb_detection)
 
     ias_map.emplace(USR_DUMMY_IN.tok, std::make_shared<IAStream>(USR_DUMMY_IN.tok, AudioDeviceName(default_usb_in, 0),
                                                                  enum2val(AudioPeriodSize::INR_20MS),
-                                                                 enum2val(AudioBandWidth::Full), 2, false, false));
+                                                                 enum2val(AudioBandWidth::Full), 2, false));
     oas_map.emplace(USR_DUMMY_OUT.tok,
                     std::make_shared<OAStream>(USR_DUMMY_OUT.tok, AudioDeviceName(default_usb_out, 0),
                                                enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2));
