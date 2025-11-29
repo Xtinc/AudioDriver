@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Find required libraries
 set(AUDIO_DRIVER_DEP_LIBS TRUE)
+set(AUDIO_DRIVER_HAVE_DBUS FALSE)
 if(WIN32)
     set(PLATFORM_LIBS ksuser mfplat mfuuid wmcodecdspuuid Winmm)
 else()
@@ -25,6 +26,7 @@ else()
     endif()
 
     if(DBUS_FOUND)
+        set(AUDIO_DRIVER_HAVE_DBUS TRUE)
         list(APPEND PLATFORM_LIBS ${DBUS_LIBRARIES})
     else()
         message(STATUS "AudioDriver: DBUS not found, building without DBUS support")
@@ -50,12 +52,13 @@ if(AUDIO_DRIVER_DEP_LIBS)
         PRIVATE source
         PUBLIC include
         PUBLIC $<$<NOT:$<PLATFORM_ID:Windows>>:${ALSA_INCLUDE_DIRS}>
-        PUBLIC $<$<AND:$<NOT:$<PLATFORM_ID:Windows>>,$<BOOL:${DBUS_FOUND}>>:${DBUS_INCLUDE_DIRS}>
+        PUBLIC $<$<BOOL:${AUDIO_DRIVER_HAVE_DBUS}>:${DBUS_INCLUDE_DIRS}>
     )
+
     target_link_libraries(bettyaudio asio opus ${PLATFORM_LIBS})
     target_compile_definitions(bettyaudio 
         PUBLIC $<$<PLATFORM_ID:Windows>:_CRT_SECURE_NO_WARNINGS>
-        PUBLIC $<$<AND:$<NOT:$<PLATFORM_ID:Windows>>,$<BOOL:${DBUS_FOUND}>>:HAVE_DBUS>
+        PUBLIC $<$<BOOL:${AUDIO_DRIVER_HAVE_DBUS}>:AUDIO_DRIVER_HAVE_DBUS>
     )
     
     # Compiler-specific options for bettyaudio only
