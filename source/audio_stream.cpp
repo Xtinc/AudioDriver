@@ -1,4 +1,5 @@
 #include "audio_stream.h"
+#include <cmath>
 
 #if WINDOWS_OS_ENVIRONMENT
 #include <combaseapi.h>

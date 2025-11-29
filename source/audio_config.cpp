@@ -2,6 +2,7 @@
 #include "audio_interface.h"
 #include <fstream>
 #include <sstream>
+#include <algorithm>
 
 INIReader::INIReader(const std::string &filename) : filename_(filename)
 {
