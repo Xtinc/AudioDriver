@@ -33,11 +33,6 @@ endif()
 
 # Only proceed with build if libraries are available
 if(AUDIO_DRIVER_DEP_LIBS)
-    # Compiler options
-    set(GNU_COMPILER_OPTIONS "-Wall -Wextra -Wpedantic -Wshadow")
-    add_compile_options($<$<CXX_COMPILER_ID:MSVC>:/W4>)
-    add_compile_options($<$<CXX_COMPILER_ID:GNU,Clang>:${GNU_COMPILER_OPTIONS}>)
-
     # asio
     add_library(asio INTERFACE)
     target_include_directories(asio INTERFACE asio-1.30.2/include)
@@ -61,6 +56,14 @@ if(AUDIO_DRIVER_DEP_LIBS)
     target_compile_definitions(bettyaudio 
         PUBLIC $<$<PLATFORM_ID:Windows>:_CRT_SECURE_NO_WARNINGS>
         PUBLIC $<$<AND:$<NOT:$<PLATFORM_ID:Windows>>,$<BOOL:${DBUS_FOUND}>>:HAVE_DBUS>
+    )
+    
+    # Compiler-specific options for bettyaudio only
+    set(GNU_CLANG_WARNING_FLAGS -Wall -Wextra -Wpedantic -Wshadow)
+    
+    target_compile_options(bettyaudio PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>:/W4>
+        $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>:${GNU_CLANG_WARNING_FLAGS}>
     )
 
     # Tests
