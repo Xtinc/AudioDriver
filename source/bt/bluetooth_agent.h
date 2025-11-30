@@ -61,6 +61,7 @@ class BluetoothAgent
     std::string get_device_property(const char *device_path, const char *property);
     DBusMessage *call_method(const char *path, const char *interface, const char *method, int first_arg_type, ...);
 
+    void load_existing_devices();
     void update_dev_from_message(const char *object_path, DBusMessageIter *args);
     void update_device_property(const char *path, DBusMessageIter *iter);
     void update_device_property(BluetoothDevice &device, const char *key, DBusMessageIter *iter);

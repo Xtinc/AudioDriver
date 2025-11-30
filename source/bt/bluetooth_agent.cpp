@@ -71,7 +71,15 @@ bool BluetoothAgent::initialize()
     dbus_bus_add_match(connection_, "type='signal',interface='org.freedesktop.DBus.ObjectManager'", &err);
     if (dbus_error_is_set(&err))
     {
-        AUDIO_ERROR_PRINT("Failed to add signal match: %s - %s", err.name, err.message);
+        AUDIO_ERROR_PRINT("Failed to add ObjectManager signal match: %s - %s", err.name, err.message);
+        dbus_error_free(&err);
+        return false;
+    }
+
+    dbus_bus_add_match(connection_, "type='signal',interface='org.freedesktop.DBus.Properties'", &err);
+    if (dbus_error_is_set(&err))
+    {
+        AUDIO_ERROR_PRINT("Failed to add Properties signal match: %s - %s", err.name, err.message);
         dbus_error_free(&err);
         return false;
     }
@@ -101,6 +109,8 @@ bool BluetoothAgent::initialize()
     set_powered(true);
     set_pairable(true);
     set_discoverable(true);
+
+    load_existing_devices();
 
     return true;
 }
@@ -410,8 +420,22 @@ void BluetoothAgent::update_device_property(const char *path, DBusMessageIter *i
         return;
     }
 
-    BluetoothDevice device{};
-    device.path = path;
+    std::lock_guard<std::mutex> lock(devices_mutex_);
+
+    auto dev_iter =
+        std::find_if(devices_.begin(), devices_.end(), [path](const BluetoothDevice &dev) { return dev.path == path; });
+
+    bool is_new = (dev_iter == devices_.end());
+
+    if (is_new)
+    {
+        BluetoothDevice new_device{};
+        new_device.path = path;
+        devices_.push_back(new_device);
+        dev_iter = devices_.back();
+        AUDIO_INFO_PRINT("New device discovered: %s", path);
+    }
+
     DBusMessageIter dict_iter;
     dbus_message_iter_recurse(iter, &dict_iter);
 
@@ -424,20 +448,8 @@ void BluetoothAgent::update_device_property(const char *path, DBusMessageIter *i
         dbus_message_iter_get_basic(&entry_iter, &property_name);
         dbus_message_iter_next(&entry_iter);
 
-        update_device_property(device, property_name, &entry_iter);
+        update_device_property(*device_ptr, property_name, &entry_iter);
         dbus_message_iter_next(&dict_iter);
-    }
-
-    std::lock_guard<std::mutex> lock(devices_mutex_);
-    auto dev_iter =
-        std::find_if(devices_.begin(), devices_.end(), [path](const BluetoothDevice &dev) { return dev.path == path; });
-    if (dev_iter == devices_.end())
-    {
-        devices_.push_back(std::move(device));
-    }
-    else
-    {
-        *dev_iter = std::move(device);
     }
 }
 
@@ -525,10 +537,13 @@ void BluetoothAgent::handle_dev_add(DBusMessage *msg)
 
     const char *object_path;
     dbus_message_iter_get_basic(&args, &object_path);
-    if (strstr(object_path, "/dev_") == NULL)
+
+    if (strstr(object_path, "/org/bluez/") == NULL)
     {
         return;
     }
+
+    AUDIO_DEBUG_PRINT("Device path added: %s", object_path);
 
     dbus_message_iter_next(&args);
     update_dev_from_message(object_path, &args);
@@ -537,10 +552,13 @@ void BluetoothAgent::handle_dev_add(DBusMessage *msg)
 void BluetoothAgent::handle_dev_chg(DBusMessage *msg)
 {
     const char *object_path = dbus_message_get_path(msg);
-    if (strstr(object_path, "/dev_") == NULL)
+
+    if (strstr(object_path, "/org/bluez/") == NULL)
     {
         return;
     }
+
+    AUDIO_DEBUG_PRINT("Device properties changed: %s", object_path);
 
     DBusMessageIter iter;
     if (!dbus_message_iter_init(msg, &iter))
@@ -726,7 +744,8 @@ DBusHandlerResult BluetoothAgent::handle_display_passkey(DBusMessage *msg)
     if (dbus_message_get_args(msg, nullptr, DBUS_TYPE_OBJECT_PATH, &device_path, DBUS_TYPE_UINT32, &passkey,
                               DBUS_TYPE_UINT16, &entered, DBUS_TYPE_INVALID))
     {
-        AUDIO_INFO_PRINT("Display Passkey - Device: %s, Passkey: %06u (entered: %u digits)", device_path, passkey, entered);
+        AUDIO_INFO_PRINT("Display Passkey - Device: %s, Passkey: %06u (entered: %u digits)", device_path, passkey,
+                         entered);
         DBusMessage *reply = dbus_message_new_method_return(msg);
         dbus_connection_send(connection_, reply, nullptr);
         dbus_message_unref(reply);
