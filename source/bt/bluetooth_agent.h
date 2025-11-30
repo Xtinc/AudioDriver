@@ -78,6 +78,7 @@ class BluetoothAgent
 
   private:
     DBusConnection *connection_;
+    DBusConnection *event_connection_;
     std::string adapter_path_;
     mutable std::mutex devices_mutex_;
     std::vector<BluetoothDevice> devices_;

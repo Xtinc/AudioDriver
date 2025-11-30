@@ -36,13 +36,17 @@ static DBusHandlerResult message_handler_callback(DBusConnection *, DBusMessage 
 }
 
 BluetoothAgent::BluetoothAgent(const std::string &adapter_path)
-    : connection_(nullptr), adapter_path_(adapter_path), running_(false), scanning_(false)
+    : connection_(nullptr), event_connection_(nullptr), adapter_path_(adapter_path), running_(false), scanning_(false)
 {
 }
 
 BluetoothAgent::~BluetoothAgent()
 {
     stop_dbus_loop();
+    if (event_connection_)
+    {
+        dbus_connection_unref(event_connection_);
+    }
     if (connection_)
     {
         dbus_connection_unref(connection_);
@@ -57,7 +61,7 @@ bool BluetoothAgent::initialize()
     connection_ = dbus_bus_get(DBUS_BUS_SYSTEM, &err);
     if (dbus_error_is_set(&err))
     {
-        AUDIO_ERROR_PRINT("Failed to get system bus: %s - %s", err.name, err.message);
+        AUDIO_ERROR_PRINT("Failed to get system bus for main connection: %s - %s", err.name, err.message);
         dbus_error_free(&err);
         return false;
     }
@@ -68,7 +72,21 @@ bool BluetoothAgent::initialize()
         return false;
     }
 
-    dbus_bus_add_match(connection_, "type='signal',interface='org.freedesktop.DBus.ObjectManager'", &err);
+    event_connection_ = dbus_bus_get(DBUS_BUS_SYSTEM, &err);
+    if (dbus_error_is_set(&err))
+    {
+        AUDIO_ERROR_PRINT("Failed to get system bus for event connection: %s - %s", err.name, err.message);
+        dbus_error_free(&err);
+        return false;
+    }
+
+    if (!event_connection_)
+    {
+        AUDIO_ERROR_PRINT("Failed to get system bus: event connection is null");
+        return false;
+    }
+
+    dbus_bus_add_match(event_connection_, "type='signal',interface='org.freedesktop.DBus.ObjectManager'", &err);
     if (dbus_error_is_set(&err))
     {
         AUDIO_ERROR_PRINT("Failed to add ObjectManager signal match: %s - %s", err.name, err.message);
@@ -76,7 +94,7 @@ bool BluetoothAgent::initialize()
         return false;
     }
 
-    dbus_bus_add_match(connection_, "type='signal',interface='org.freedesktop.DBus.Properties'", &err);
+    dbus_bus_add_match(event_connection_, "type='signal',interface='org.freedesktop.DBus.Properties'", &err);
     if (dbus_error_is_set(&err))
     {
         AUDIO_ERROR_PRINT("Failed to add Properties signal match: %s - %s", err.name, err.message);
@@ -84,13 +102,13 @@ bool BluetoothAgent::initialize()
         return false;
     }
 
-    dbus_connection_add_filter(connection_, signal_filter_callback, this, nullptr);
+    dbus_connection_add_filter(event_connection_, signal_filter_callback, this, nullptr);
 
     DBusObjectPathVTable vtable;
     memset(&vtable, 0, sizeof(vtable));
     vtable.message_function = message_handler_callback;
 
-    if (!dbus_connection_register_object_path(connection_, AGENT_PATH, &vtable, this))
+    if (!dbus_connection_register_object_path(event_connection_, AGENT_PATH, &vtable, this))
     {
         AUDIO_ERROR_PRINT("Failed to register object path for agent");
         return false;
@@ -121,7 +139,7 @@ void BluetoothAgent::start_dbus_loop()
     dbus_thread_ = std::thread([this]() {
         while (running_)
         {
-            dbus_connection_read_write_dispatch(connection_, 100);
+            dbus_connection_read_write_dispatch(event_connection_, 100);
         }
     });
 }
@@ -200,25 +218,15 @@ bool BluetoothAgent::pair(const std::string &device_path)
 {
     AUDIO_INFO_PRINT("Pairing device: %s", device_path.c_str());
 
-    DBusMessage *msg = dbus_message_new_method_call(BLUEZ_SERVICE, device_path.c_str(), DEVICE_INTERFACE, "Pair");
-
-    if (!msg)
+    DBusMessage *reply = call_method(device_path.c_str(), DEVICE_INTERFACE, "Pair", DBUS_TYPE_INVALID);
+    if (reply)
     {
-        AUDIO_ERROR_PRINT("Failed to create Pair method call");
-        return false;
+        dbus_message_unref(reply);
+        AUDIO_INFO_PRINT("Device paired: %s", device_path.c_str());
+        return true;
     }
-
-    dbus_uint32_t serial;
-    if (!dbus_connection_send(connection_, msg, &serial))
-    {
-        AUDIO_ERROR_PRINT("Failed to send Pair method call");
-        dbus_message_unref(msg);
-        return false;
-    }
-
-    dbus_message_unref(msg);
-    AUDIO_INFO_PRINT("Pair request sent (serial: %u), waiting for agent callbacks...", serial);
-    return true;
+    AUDIO_ERROR_PRINT("Failed to pair device: %s", device_path.c_str());
+    return false;
 }
 
 bool BluetoothAgent::connect(const std::string &device_path)
@@ -658,7 +666,7 @@ bool BluetoothAgent::register_agent()
     }
 
     dbus_message_append_args(msg, DBUS_TYPE_OBJECT_PATH, &agent_path, DBUS_TYPE_STRING, &capability, DBUS_TYPE_INVALID);
-    DBusMessage *reply = dbus_connection_send_with_reply_and_block(connection_, msg, 5000, &err);
+    DBusMessage *reply = dbus_connection_send_with_reply_and_block(event_connection_, msg, 5000, &err);
     dbus_message_unref(msg);
 
     if (dbus_error_is_set(&err))
@@ -681,7 +689,7 @@ bool BluetoothAgent::register_agent()
     }
 
     dbus_message_append_args(msg, DBUS_TYPE_OBJECT_PATH, &agent_path, DBUS_TYPE_INVALID);
-    reply = dbus_connection_send_with_reply_and_block(connection_, msg, 5000, &err);
+    reply = dbus_connection_send_with_reply_and_block(event_connection_, msg, 5000, &err);
     dbus_message_unref(msg);
 
     if (dbus_error_is_set(&err))
@@ -780,7 +788,7 @@ DBusHandlerResult BluetoothAgent::handle_request_confirmation(DBusMessage *msg)
     DBusMessage *reply = dbus_message_new_method_return(msg);
     if (reply)
     {
-        dbus_connection_send(connection_, reply, nullptr);
+        dbus_connection_send(event_connection_, reply, nullptr);
         dbus_message_unref(reply);
         AUDIO_INFO_PRINT("Pairing automatically confirmed");
     }
