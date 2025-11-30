@@ -11,11 +11,22 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <thread>
+#include <atomic>
+#include <queue>
+#include <condition_variable>
+#include <mutex>
+
+// 异步操作任务结构
+struct AsyncTask {
+    std::function<void()> task;
+    std::string description;
+};
 
 class BluetoothController
 {
   public:
-    BluetoothController() : running_(false)
+    BluetoothController() : running_(false), task_running_(false)
     {
         commands_["help"] = [this](const std::vector<std::string> &args) { return cmd_help(args); };
         commands_["list"] = [this](const std::vector<std::string> &args) { return cmd_list(args); };
@@ -30,8 +41,7 @@ class BluetoothController
         commands_["discoverable"] = [this](const std::vector<std::string> &args) { return cmd_discoverable(args); };
         commands_["quit"] = [this](const std::vector<std::string> &args) { return cmd_quit(args); };
         commands_["exit"] = [this](const std::vector<std::string> &args) { return cmd_quit(args); };
-        commands_["yes"] = [this](const std::vector<std::string> &args) { return cmd_confirm_pairing(true); };
-        commands_["no"] = [this](const std::vector<std::string> &args) { return cmd_confirm_pairing(false); };
+        // 移除 yes/no 命令，因为不再需要手动确认
     }
 
     ~BluetoothController()
@@ -50,10 +60,35 @@ class BluetoothController
         }
 
         agent_->start_dbus_loop();
+        
+        // 启动后台任务处理线程
+        task_running_ = true;
+        task_thread_ = std::thread(&BluetoothController::task_worker, this);
+        
         running_ = true;
-
+        
         std::cout << "Bluetooth Controller initialized successfully" << std::endl;
         return true;
+    }
+
+    void shutdown()
+    {
+        if (agent_)
+        {
+            agent_->stop_dbus_loop();
+            agent_.reset();
+        }
+        
+        // 停止后台线程
+        task_running_ = false;
+        task_cv_.notify_all();
+        
+        if (task_thread_.joinable())
+        {
+            task_thread_.join();
+        }
+        
+        running_ = false;
     }
 
     void run()
@@ -64,14 +99,7 @@ class BluetoothController
         std::string input;
         while (running_)
         {
-            if (agent_->is_waiting_for_confirmation())
-            {
-                std::cout << "[pairing]# ";
-            }
-            else
-            {
-                std::cout << "[bluetooth]# ";
-            }
+            std::cout << "[bluetooth]# ";  // 简化提示符，不再需要配对状态
 
             if (!std::getline(std::cin, input))
             {
@@ -91,17 +119,56 @@ class BluetoothController
         }
     }
 
-    void shutdown()
+  private:
+    // 后台任务工作线程
+    void task_worker()
     {
-        if (agent_)
+        while (task_running_)
         {
-            agent_->stop_dbus_loop();
-            agent_.reset();
+            std::unique_lock<std::mutex> lock(task_mutex_);
+            
+            // 等待任务或退出信号
+            task_cv_.wait(lock, [this] { 
+                return !task_queue_.empty() || !task_running_; 
+            });
+            
+            if (!task_running_)
+                break;
+                
+            if (!task_queue_.empty())
+            {
+                AsyncTask task = task_queue_.front();
+                task_queue_.pop();
+                lock.unlock();
+                
+                // 执行任务
+                try 
+                {
+                    task.task();
+                }
+                catch (const std::exception& e)
+                {
+                    std::cout << "\nTask failed: " << e.what() << std::endl;
+                    print_prompt();
+                }
+            }
         }
-        running_ = false;
+    }
+    
+    // 添加异步任务
+    void add_async_task(const AsyncTask& task)
+    {
+        std::lock_guard<std::mutex> lock(task_mutex_);
+        task_queue_.push(task);
+        task_cv_.notify_one();
+    }
+    
+    // 打印提示符
+    void print_prompt()
+    {
+        std::cout << "[bluetooth]# " << std::flush;
     }
 
-  private:
     std::vector<std::string> parse_command(const std::string &input)
     {
         std::vector<std::string> tokens;
@@ -161,28 +228,8 @@ class BluetoothController
                   << "  remove MAC              Remove device\n"
                   << "  power on|off            Set adapter power state\n"
                   << "  pairable on|off         Set adapter pairable state\n"
-                  << "  discoverable on|off     Set adapter discoverable state\n";
-
-        if (agent_->is_waiting_for_confirmation())
-        {
-            std::cout << "\nPairing confirmation commands:\n"
-                      << "  yes                   Accept pairing\n"
-                      << "  no                    Reject pairing\n";
-        }
-
-        std::cout << "  quit|exit               Exit program\n" << std::endl;
-        return true;
-    }
-
-    bool cmd_confirm_pairing(bool confirm)
-    {
-        if (!agent_->is_waiting_for_confirmation())
-        {
-            std::cout << "No pairing confirmation pending" << std::endl;
-            return false;
-        }
-
-        agent_->set_user_confirmation(confirm);
+                  << "  discoverable on|off     Set adapter discoverable state\n"
+                  << "  quit|exit               Exit program\n" << std::endl;
         return true;
     }
 
@@ -320,12 +367,6 @@ class BluetoothController
             return false;
         }
 
-        if (agent_->is_waiting_for_confirmation())
-        {
-            std::cout << "Another pairing operation is in progress" << std::endl;
-            return false;
-        }
-
         std::string device_path = find_device_by_address(args[1]);
         if (device_path.empty())
         {
@@ -335,17 +376,20 @@ class BluetoothController
         }
 
         std::cout << "Attempting to pair with " << args[1] << "..." << std::endl;
-        std::cout << "Note: You may need to confirm pairing codes when prompted" << std::endl;
+        std::cout << "Pairing will be automatically confirmed" << std::endl;
 
-        if (agent_->pair(device_path))
-        {
-            std::cout << "Pairing successful with " << args[1] << std::endl;
-        }
-        else
-        {
-            std::cout << "Pairing failed with " << args[1] << std::endl;
-        }
-
+        // 创建异步配对任务
+        AsyncTask task;
+        task.description = "Pairing with " + args[1];
+        task.task = [this, device_path, mac_addr = args[1]]() {
+            bool success = agent_->pair(device_path);
+            
+            std::cout << "\n" << (success ? "Pairing successful" : "Pairing failed") 
+                      << " with " << mac_addr << std::endl;
+            print_prompt();
+        };
+        
+        add_async_task(task);
         return true;
     }
 
@@ -525,6 +569,13 @@ class BluetoothController
     std::unique_ptr<BluetoothAgent> agent_;
     bool running_;
     std::map<std::string, std::function<bool(const std::vector<std::string> &)>> commands_;
+    
+    // 后台任务相关
+    std::atomic<bool> task_running_;
+    std::thread task_thread_;
+    std::queue<AsyncTask> task_queue_;
+    std::mutex task_mutex_;
+    std::condition_variable task_cv_;
 };
 
 std::unique_ptr<BluetoothController> g_controller;

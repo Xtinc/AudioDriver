@@ -4,7 +4,6 @@
 
 #include "audio_message.h"
 #include <atomic>
-#include <future>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -52,9 +51,6 @@ class BluetoothAgent
 
     std::vector<BluetoothDevice> list() const;
 
-    void set_user_confirmation(bool confirm);
-    bool is_waiting_for_confirmation() const;
-
     void handle_dev_add(DBusMessage *msg);
     void handle_dev_chg(DBusMessage *msg);
     DBusHandlerResult handle_message(DBusMessage *msg);
@@ -86,10 +82,6 @@ class BluetoothAgent
     std::atomic<bool> running_;
     bool scanning_;
     std::thread dbus_thread_;
-    
-    std::mutex confirm_mutex_;
-    std::atomic<bool> waiting_for_confirmation_;
-    std::unique_ptr<std::promise<bool>> confirmation_promise_;
 };
 
 #endif

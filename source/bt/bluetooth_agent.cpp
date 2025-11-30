@@ -37,8 +37,7 @@ static DBusHandlerResult message_handler_callback(DBusConnection *, DBusMessage 
 }
 
 BluetoothAgent::BluetoothAgent(const std::string &adapter_path)
-    : connection_(nullptr), adapter_path_(adapter_path), running_(false), scanning_(false),
-      waiting_for_confirmation_(false)
+    : connection_(nullptr), adapter_path_(adapter_path), running_(false), scanning_(false)
 {
 }
 
@@ -747,59 +746,19 @@ DBusHandlerResult BluetoothAgent::handle_request_confirmation(DBusMessage *msg)
         return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
     }
 
-    AUDIO_INFO_PRINT("Pairing Confirmation - Device: %s, Passkey: %06u (Use 'yes/no' to confirm, 10s timeout)", device_path, passkey);
+    AUDIO_INFO_PRINT("Pairing Confirmation - Device: %s, Passkey: %06u (auto-accepting)", device_path, passkey);
 
-    waiting_for_confirmation_ = true;
-    bool confirmed = false;
-
-    std::future<bool> future;
-    {
-        std::lock_guard<std::mutex> lock(confirm_mutex_);
-        confirmation_promise_ = std::make_unique<std::promise<bool>>();
-        future = confirmation_promise_->get_future();
-    }
-
-    auto status = future.wait_for(std::chrono::seconds(10));
-    if (status == std::future_status::ready)
-    {
-        try 
-        {
-            confirmed = future.get();
-            AUDIO_INFO_PRINT("User %s pairing for device: %s", 
-                confirmed ? "accepted" : "rejected", device_path);
-        }
-        catch (const std::exception& e)
-        {
-            AUDIO_ERROR_PRINT("Exception getting confirmation result: %s", e.what());
-            confirmed = false;
-        }
-    }
-    else
-    {
-        AUDIO_INFO_PRINT("Pairing confirmation timeout, auto-rejecting device: %s", device_path);
-        confirmed = false;
-    }
-
-    waiting_for_confirmation_ = false;
-    {
-        std::lock_guard<std::mutex> lock(confirm_mutex_);
-        confirmation_promise_.reset();
-    }
-
-    DBusMessage *reply;
-    if (confirmed)
-    {
-        reply = dbus_message_new_method_return(msg);
-    }
-    else
-    {
-        reply = dbus_message_new_error(msg, "org.bluez.Error.Rejected", "Pairing rejected");
-    }
-
+    // 直接确认配对，不等待用户输入
+    DBusMessage *reply = dbus_message_new_method_return(msg);
     if (reply)
     {
         dbus_connection_send(connection_, reply, nullptr);
         dbus_message_unref(reply);
+        AUDIO_INFO_PRINT("Pairing automatically confirmed");
+    }
+    else
+    {
+        AUDIO_ERROR_PRINT("Failed to create confirmation reply");
     }
 
     return DBUS_HANDLER_RESULT_HANDLED;
@@ -842,21 +801,6 @@ DBusHandlerResult BluetoothAgent::handle_cancel(DBusMessage *msg)
     dbus_connection_send(connection_, reply, nullptr);
     dbus_message_unref(reply);
     return DBUS_HANDLER_RESULT_HANDLED;
-}
-
-void BluetoothAgent::set_user_confirmation(bool confirm)
-{
-    std::lock_guard<std::mutex> lock(confirm_mutex_);
-    if (confirmation_promise_)
-    {
-        confirmation_promise_->set_value(confirm);
-        AUDIO_DEBUG_PRINT("User confirmation set to: %s", confirm ? "accept" : "reject");
-    }
-}
-
-bool BluetoothAgent::is_waiting_for_confirmation() const
-{
-    return waiting_for_confirmation_;
 }
 
 #endif
