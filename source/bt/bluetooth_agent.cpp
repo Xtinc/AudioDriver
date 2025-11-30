@@ -10,6 +10,9 @@
 #define OBJECT_MANAGER_INTERFACE "org.freedesktop.DBus.ObjectManager"
 #define AGENT_PATH "/org/bluez/agent"
 #define AGENT_SERVICE "org.bluez.agent"
+#define DBUS_TIMEOUT_SHORT 5000
+#define DBUS_TIMEOUT_LONG 15000
+#define DBUS_POLL_INTERVAL 100
 
 #include <algorithm>
 #include <cstring>
@@ -22,6 +25,10 @@ static DBusHandlerResult signal_filter_callback(DBusConnection *, DBusMessage *m
     {
         agent->handle_dev_add(msg);
     }
+    else if (dbus_message_is_signal(msg, "org.freedesktop.DBus.ObjectManager", "InterfacesRemoved"))
+    {
+        agent->handle_dev_del(msg);
+    }
     else if (dbus_message_is_signal(msg, "org.freedesktop.DBus.Properties", "PropertiesChanged"))
     {
         agent->handle_dev_chg(msg);
@@ -33,6 +40,16 @@ static DBusHandlerResult message_handler_callback(DBusConnection *, DBusMessage 
 {
     BluetoothAgent *agent = static_cast<BluetoothAgent *>(user_data);
     return agent->handle_message(msg);
+}
+
+static void send_simple_reply(DBusConnection *conn, DBusMessage *msg)
+{
+    DBusMessage *reply = dbus_message_new_method_return(msg);
+    if (reply)
+    {
+        dbus_connection_send(conn, reply, nullptr);
+        dbus_message_unref(reply);
+    }
 }
 
 BluetoothAgent::BluetoothAgent(const std::string &adapter_path)
@@ -108,7 +125,7 @@ bool BluetoothAgent::initialize()
     memset(&vtable, 0, sizeof(vtable));
     vtable.message_function = message_handler_callback;
 
-    if (!dbus_connection_register_object_path(event_connection_, AGENT_PATH, &vtable, this))
+    if (!dbus_connection_register_object_path(connection_, AGENT_PATH, &vtable, this))
     {
         AUDIO_ERROR_PRINT("Failed to register object path for agent");
         return false;
@@ -139,7 +156,7 @@ void BluetoothAgent::start_dbus_loop()
     dbus_thread_ = std::thread([this]() {
         while (running_)
         {
-            dbus_connection_read_write_dispatch(event_connection_, 100);
+            dbus_connection_read_write_dispatch(event_connection_, DBUS_POLL_INTERVAL);
         }
     });
 }
@@ -218,15 +235,58 @@ bool BluetoothAgent::pair(const std::string &device_path)
 {
     AUDIO_INFO_PRINT("Pairing device: %s", device_path.c_str());
 
-    DBusMessage *reply = call_method(device_path.c_str(), DEVICE_INTERFACE, "Pair", DBUS_TYPE_INVALID);
+    DBusMessage *msg = dbus_message_new_method_call(BLUEZ_SERVICE, device_path.c_str(), DEVICE_INTERFACE, "Pair");
+    if (!msg)
+    {
+        AUDIO_ERROR_PRINT("Failed to create Pair method call");
+        return false;
+    }
+
+    DBusPendingCall *pending = nullptr;
+    if (!dbus_connection_send_with_reply(connection_, msg, &pending, DBUS_TIMEOUT_LONG))
+    {
+        AUDIO_ERROR_PRINT("Failed to send Pair method call");
+        dbus_message_unref(msg);
+        return false;
+    }
+
+    dbus_message_unref(msg);
+
+    if (!pending)
+    {
+        AUDIO_ERROR_PRINT("Pending call is null");
+        return false;
+    }
+
+    while (!dbus_pending_call_get_completed(pending))
+    {
+        dbus_connection_read_write_dispatch(connection_, DBUS_POLL_INTERVAL);
+    }
+
+    DBusMessage *reply = dbus_pending_call_steal_reply(pending);
+    dbus_pending_call_unref(pending);
+
+    bool success = false;
     if (reply)
     {
+        if (dbus_message_get_type(reply) == DBUS_MESSAGE_TYPE_ERROR)
+        {
+            const char *error_name = dbus_message_get_error_name(reply);
+            AUDIO_ERROR_PRINT("Failed to pair device: %s", error_name ? error_name : "unknown error");
+        }
+        else
+        {
+            AUDIO_INFO_PRINT("Device paired: %s", device_path.c_str());
+            success = true;
+        }
         dbus_message_unref(reply);
-        AUDIO_INFO_PRINT("Device paired: %s", device_path.c_str());
-        return true;
     }
-    AUDIO_ERROR_PRINT("Failed to pair device: %s", device_path.c_str());
-    return false;
+    else
+    {
+        AUDIO_ERROR_PRINT("No reply received for Pair request");
+    }
+
+    return success;
 }
 
 bool BluetoothAgent::connect(const std::string &device_path)
@@ -257,18 +317,67 @@ bool BluetoothAgent::disconnect(const std::string &device_path)
     return false;
 }
 
+bool BluetoothAgent::set_device_property(const char *device_path, const char *property, bool value)
+{
+    DBusError err;
+    dbus_error_init(&err);
+
+    DBusMessage *msg = dbus_message_new_method_call(BLUEZ_SERVICE, device_path, PROPERTIES_INTERFACE, "Set");
+    if (!msg)
+    {
+        return false;
+    }
+
+    DBusMessageIter iter, variant;
+    dbus_message_iter_init_append(msg, &iter);
+    const char *iface = DEVICE_INTERFACE;
+    dbus_message_iter_append_basic(&iter, DBUS_TYPE_STRING, &iface);
+    dbus_message_iter_append_basic(&iter, DBUS_TYPE_STRING, &property);
+
+    dbus_bool_t dbus_value = value ? TRUE : FALSE;
+    dbus_message_iter_open_container(&iter, DBUS_TYPE_VARIANT, "b", &variant);
+    dbus_message_iter_append_basic(&variant, DBUS_TYPE_BOOLEAN, &dbus_value);
+    dbus_message_iter_close_container(&iter, &variant);
+
+    DBusMessage *reply = dbus_connection_send_with_reply_and_block(connection_, msg, DBUS_TIMEOUT_SHORT, &err);
+    dbus_message_unref(msg);
+
+    bool success = !dbus_error_is_set(&err);
+    if (!success)
+    {
+        AUDIO_DEBUG_PRINT("Failed to set device property %s: %s", property, err.message);
+        dbus_error_free(&err);
+    }
+
+    if (reply)
+    {
+        dbus_message_unref(reply);
+    }
+    return success;
+}
+
 bool BluetoothAgent::remove(const std::string &device_path)
 {
     AUDIO_INFO_PRINT("Removing device: %s", device_path.c_str());
+    
+    set_device_property(device_path.c_str(), "Trusted", false);
+    
+    DBusMessage *reply = call_method(device_path.c_str(), DEVICE_INTERFACE, "Disconnect", DBUS_TYPE_INVALID);
+    if (reply)
+    {
+        dbus_message_unref(reply);
+    }
+    
     const char *path = device_path.c_str();
-    DBusMessage *reply = call_method(adapter_path_.c_str(), ADAPTER_INTERFACE, "RemoveDevice", DBUS_TYPE_OBJECT_PATH,
-                                     &path, DBUS_TYPE_INVALID);
+    reply = call_method(adapter_path_.c_str(), ADAPTER_INTERFACE, "RemoveDevice", DBUS_TYPE_OBJECT_PATH,
+                       &path, DBUS_TYPE_INVALID);
     if (reply)
     {
         dbus_message_unref(reply);
         AUDIO_INFO_PRINT("Device removed: %s", device_path.c_str());
         return true;
     }
+    
     AUDIO_ERROR_PRINT("Failed to remove device: %s", device_path.c_str());
     return false;
 }
@@ -302,7 +411,7 @@ bool BluetoothAgent::set_adapter_property(const char *property, bool value)
     dbus_message_iter_append_basic(&variant, DBUS_TYPE_BOOLEAN, &dbus_value);
     dbus_message_iter_close_container(&iter, &variant);
 
-    DBusMessage *reply = dbus_connection_send_with_reply_and_block(connection_, msg, 5000, &err);
+    DBusMessage *reply = dbus_connection_send_with_reply_and_block(connection_, msg, DBUS_TIMEOUT_SHORT, &err);
     dbus_message_unref(msg);
 
     bool success = !dbus_error_is_set(&err);
@@ -336,7 +445,7 @@ std::string BluetoothAgent::get_device_property(const char *device_path, const c
 
     DBusError err;
     dbus_error_init(&err);
-    DBusMessage *reply = dbus_connection_send_with_reply_and_block(connection_, msg, 5000, &err);
+    DBusMessage *reply = dbus_connection_send_with_reply_and_block(connection_, msg, DBUS_TIMEOUT_SHORT, &err);
     dbus_message_unref(msg);
 
     std::string result;
@@ -391,7 +500,7 @@ DBusMessage *BluetoothAgent::call_method(const char *path, const char *interface
         va_end(args);
     }
 
-    DBusMessage *reply = dbus_connection_send_with_reply_and_block(connection_, msg, 30000, &err);
+    DBusMessage *reply = dbus_connection_send_with_reply_and_block(connection_, msg, DBUS_TIMEOUT_LONG, &err);
     dbus_message_unref(msg);
 
     if (dbus_error_is_set(&err))
@@ -566,6 +675,35 @@ void BluetoothAgent::handle_dev_add(DBusMessage *msg)
     update_dev_from_message(object_path, &args);
 }
 
+void BluetoothAgent::handle_dev_del(DBusMessage *msg)
+{
+    DBusMessageIter args;
+    if (!dbus_message_iter_init(msg, &args) || dbus_message_iter_get_arg_type(&args) != DBUS_TYPE_OBJECT_PATH)
+    {
+        return;
+    }
+
+    const char *object_path;
+    dbus_message_iter_get_basic(&args, &object_path);
+
+    if (strstr(object_path, "/org/bluez/") == NULL)
+    {
+        return;
+    }
+
+    AUDIO_INFO_PRINT("Device removed from system: %s", object_path);
+
+    std::lock_guard<std::mutex> lock(devices_mutex_);
+    auto it = std::remove_if(devices_.begin(), devices_.end(),
+                             [object_path](const BluetoothDevice &dev) { return dev.path == object_path; });
+
+    if (it != devices_.end())
+    {
+        devices_.erase(it, devices_.end());
+        AUDIO_INFO_PRINT("Device removed from list: %s", object_path);
+    }
+}
+
 void BluetoothAgent::handle_dev_chg(DBusMessage *msg)
 {
     const char *object_path = dbus_message_get_path(msg);
@@ -636,9 +774,7 @@ DBusHandlerResult BluetoothAgent::handle_message(DBusMessage *msg)
     else if (dbus_message_is_method_call(msg, AGENT_INTERFACE, "Release"))
     {
         AUDIO_INFO_PRINT("Agent is being released by BlueZ");
-        DBusMessage *reply = dbus_message_new_method_return(msg);
-        dbus_connection_send(event_connection_, reply, nullptr); // 改为 event_connection_
-        dbus_message_unref(reply);
+        send_simple_reply(connection_, msg);
         return DBUS_HANDLER_RESULT_HANDLED;
     }
 
@@ -662,7 +798,7 @@ bool BluetoothAgent::register_agent()
     }
 
     dbus_message_append_args(msg, DBUS_TYPE_OBJECT_PATH, &agent_path, DBUS_TYPE_STRING, &capability, DBUS_TYPE_INVALID);
-    DBusMessage *reply = dbus_connection_send_with_reply_and_block(event_connection_, msg, 5000, &err);
+    DBusMessage *reply = dbus_connection_send_with_reply_and_block(connection_, msg, DBUS_TIMEOUT_SHORT, &err);
     dbus_message_unref(msg);
 
     if (dbus_error_is_set(&err))
@@ -685,7 +821,7 @@ bool BluetoothAgent::register_agent()
     }
 
     dbus_message_append_args(msg, DBUS_TYPE_OBJECT_PATH, &agent_path, DBUS_TYPE_INVALID);
-    reply = dbus_connection_send_with_reply_and_block(event_connection_, msg, 5000, &err);
+    reply = dbus_connection_send_with_reply_and_block(connection_, msg, DBUS_TIMEOUT_SHORT, &err);
     dbus_message_unref(msg);
 
     if (dbus_error_is_set(&err))
@@ -712,7 +848,7 @@ DBusHandlerResult BluetoothAgent::handle_request_pincode(DBusMessage *msg)
         AUDIO_INFO_PRINT("PIN Code Request - Device: %s, Sending PIN: %s", device_path, pincode);
         DBusMessage *reply = dbus_message_new_method_return(msg);
         dbus_message_append_args(reply, DBUS_TYPE_STRING, &pincode, DBUS_TYPE_INVALID);
-        dbus_connection_send(event_connection_, reply, nullptr); // 改为 event_connection_
+        dbus_connection_send(connection_, reply, nullptr);
         dbus_message_unref(reply);
         return DBUS_HANDLER_RESULT_HANDLED;
     }
@@ -727,9 +863,7 @@ DBusHandlerResult BluetoothAgent::handle_display_pincode(DBusMessage *msg)
                               DBUS_TYPE_INVALID))
     {
         AUDIO_INFO_PRINT("Display PIN Code - Device: %s, PIN: %s", device_path, pincode);
-        DBusMessage *reply = dbus_message_new_method_return(msg);
-        dbus_connection_send(event_connection_, reply, nullptr); // 改为 event_connection_
-        dbus_message_unref(reply);
+        send_simple_reply(connection_, msg);
         return DBUS_HANDLER_RESULT_HANDLED;
     }
     return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
@@ -744,7 +878,7 @@ DBusHandlerResult BluetoothAgent::handle_request_passkey(DBusMessage *msg)
         AUDIO_INFO_PRINT("Passkey Request - Device: %s, Sending Passkey: %06u", device_path, passkey);
         DBusMessage *reply = dbus_message_new_method_return(msg);
         dbus_message_append_args(reply, DBUS_TYPE_UINT32, &passkey, DBUS_TYPE_INVALID);
-        dbus_connection_send(event_connection_, reply, nullptr); // 改为 event_connection_
+        dbus_connection_send(connection_, reply, nullptr);
         dbus_message_unref(reply);
         return DBUS_HANDLER_RESULT_HANDLED;
     }
@@ -761,9 +895,7 @@ DBusHandlerResult BluetoothAgent::handle_display_passkey(DBusMessage *msg)
     {
         AUDIO_INFO_PRINT("Display Passkey - Device: %s, Passkey: %06u (entered: %u digits)", device_path, passkey,
                          entered);
-        DBusMessage *reply = dbus_message_new_method_return(msg);
-        dbus_connection_send(event_connection_, reply, nullptr); // 改为 event_connection_
-        dbus_message_unref(reply);
+        send_simple_reply(connection_, msg);
         return DBUS_HANDLER_RESULT_HANDLED;
     }
     return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
@@ -784,7 +916,7 @@ DBusHandlerResult BluetoothAgent::handle_request_confirmation(DBusMessage *msg)
     DBusMessage *reply = dbus_message_new_method_return(msg);
     if (reply)
     {
-        dbus_connection_send(event_connection_, reply, nullptr);
+        dbus_connection_send(connection_, reply, nullptr);
         dbus_message_unref(reply);
         AUDIO_INFO_PRINT("Pairing automatically confirmed");
     }
@@ -802,9 +934,7 @@ DBusHandlerResult BluetoothAgent::handle_request_authorization(DBusMessage *msg)
     if (dbus_message_get_args(msg, nullptr, DBUS_TYPE_OBJECT_PATH, &device_path, DBUS_TYPE_INVALID))
     {
         AUDIO_INFO_PRINT("Authorization Request - Device: %s (auto-accepting)", device_path);
-        DBusMessage *reply = dbus_message_new_method_return(msg);
-        dbus_connection_send(event_connection_, reply, nullptr); // 改为 event_connection_
-        dbus_message_unref(reply);
+        send_simple_reply(connection_, msg);
         return DBUS_HANDLER_RESULT_HANDLED;
     }
     return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
@@ -818,9 +948,7 @@ DBusHandlerResult BluetoothAgent::handle_authorize_service(DBusMessage *msg)
                               DBUS_TYPE_INVALID))
     {
         AUDIO_INFO_PRINT("Service Authorization - Device: %s, UUID: %s (auto-accepting)", device_path, uuid);
-        DBusMessage *reply = dbus_message_new_method_return(msg);
-        dbus_connection_send(event_connection_, reply, nullptr); // 改为 event_connection_
-        dbus_message_unref(reply);
+        send_simple_reply(connection_, msg);
         return DBUS_HANDLER_RESULT_HANDLED;
     }
     return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
@@ -829,9 +957,7 @@ DBusHandlerResult BluetoothAgent::handle_authorize_service(DBusMessage *msg)
 DBusHandlerResult BluetoothAgent::handle_cancel(DBusMessage *msg)
 {
     AUDIO_INFO_PRINT("Pairing operation cancelled");
-    DBusMessage *reply = dbus_message_new_method_return(msg);
-    dbus_connection_send(event_connection_, reply, nullptr); // 改为 event_connection_
-    dbus_message_unref(reply);
+    send_simple_reply(connection_, msg);
     return DBUS_HANDLER_RESULT_HANDLED;
 }
 
@@ -849,7 +975,7 @@ void BluetoothAgent::load_existing_devices()
 
     DBusError err;
     dbus_error_init(&err);
-    DBusMessage *reply = dbus_connection_send_with_reply_and_block(connection_, msg, 5000, &err);
+    DBusMessage *reply = dbus_connection_send_with_reply_and_block(connection_, msg, DBUS_TIMEOUT_SHORT, &err);
     dbus_message_unref(msg);
 
     if (dbus_error_is_set(&err))
@@ -883,7 +1009,6 @@ void BluetoothAgent::load_existing_devices()
         dbus_message_iter_recurse(&array_iter, &dict_entry_iter);
         dbus_message_iter_get_basic(&dict_entry_iter, &object_path);
 
-        // 检查是否是设备路径
         if (strstr(object_path, "/org/bluez/") != NULL)
         {
             dbus_message_iter_next(&dict_entry_iter);

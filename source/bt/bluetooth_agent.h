@@ -54,10 +54,12 @@ class BluetoothAgent
 
     void handle_dev_add(DBusMessage *msg);
     void handle_dev_chg(DBusMessage *msg);
+    void handle_dev_del(DBusMessage *msg);
     DBusHandlerResult handle_message(DBusMessage *msg);
 
   private:
     bool set_adapter_property(const char *property, bool value);
+    bool set_device_property(const char *device_path, const char *property, bool value);
     std::string get_device_property(const char *device_path, const char *property);
     DBusMessage *call_method(const char *path, const char *interface, const char *method, int first_arg_type, ...);
 

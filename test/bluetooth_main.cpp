@@ -33,7 +33,6 @@ class BluetoothController
         commands_["discoverable"] = [this](const std::vector<std::string> &args) { return cmd_discoverable(args); };
         commands_["quit"] = [this](const std::vector<std::string> &args) { return cmd_quit(args); };
         commands_["exit"] = [this](const std::vector<std::string> &args) { return cmd_quit(args); };
-        // 移除 yes/no 命令，因为不再需要手动确认
     }
 
     ~BluetoothController()
@@ -75,7 +74,7 @@ class BluetoothController
         std::string input;
         while (running_)
         {
-            std::cout << "[bluetooth]# "; // 简化提示符，不再需要配对状态
+            std::cout << "[bluetooth]# ";
 
             if (!std::getline(std::cin, input))
             {
@@ -214,7 +213,7 @@ class BluetoothController
             target_device = find_device_by_address(args[1]);
             if (target_device.empty())
             {
-                target_device = args[1]; // 可能是设备路径
+                target_device = args[1];
             }
         }
 
