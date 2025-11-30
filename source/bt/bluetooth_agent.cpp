@@ -432,7 +432,7 @@ void BluetoothAgent::update_device_property(const char *path, DBusMessageIter *i
         BluetoothDevice new_device{};
         new_device.path = path;
         devices_.push_back(new_device);
-        dev_iter = devices_.back();
+        dev_iter = devices_.end() - 1;
         AUDIO_INFO_PRINT("New device discovered: %s", path);
     }
 
@@ -448,7 +448,7 @@ void BluetoothAgent::update_device_property(const char *path, DBusMessageIter *i
         dbus_message_iter_get_basic(&entry_iter, &property_name);
         dbus_message_iter_next(&entry_iter);
 
-        update_device_property(*device_ptr, property_name, &entry_iter);
+        update_device_property(*dev_iter, property_name, &entry_iter);
         dbus_message_iter_next(&dict_iter);
     }
 }
@@ -818,6 +818,75 @@ DBusHandlerResult BluetoothAgent::handle_cancel(DBusMessage *msg)
     dbus_connection_send(connection_, reply, nullptr);
     dbus_message_unref(reply);
     return DBUS_HANDLER_RESULT_HANDLED;
+}
+
+void BluetoothAgent::load_existing_devices()
+{
+    AUDIO_INFO_PRINT("Loading existing devices...");
+
+    DBusMessage *msg = dbus_message_new_method_call(
+        BLUEZ_SERVICE,
+        "/",
+        OBJECT_MANAGER_INTERFACE,
+        "GetManagedObjects"
+    );
+
+    if (!msg)
+    {
+        AUDIO_ERROR_PRINT("Failed to create GetManagedObjects method call");
+        return;
+    }
+
+    DBusError err;
+    dbus_error_init(&err);
+    DBusMessage *reply = dbus_connection_send_with_reply_and_block(connection_, msg, 5000, &err);
+    dbus_message_unref(msg);
+
+    if (dbus_error_is_set(&err))
+    {
+        AUDIO_ERROR_PRINT("Failed to get managed objects: %s - %s", err.name, err.message);
+        dbus_error_free(&err);
+        return;
+    }
+
+    if (!reply)
+    {
+        AUDIO_ERROR_PRINT("No reply from GetManagedObjects");
+        return;
+    }
+
+    DBusMessageIter iter, array_iter;
+    if (!dbus_message_iter_init(reply, &iter) ||
+        dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_ARRAY)
+    {
+        dbus_message_unref(reply);
+        return;
+    }
+
+    dbus_message_iter_recurse(&iter, &array_iter);
+
+    int device_count = 0;
+    while (dbus_message_iter_get_arg_type(&array_iter) == DBUS_TYPE_DICT_ENTRY)
+    {
+        DBusMessageIter dict_entry_iter;
+        const char *object_path;
+
+        dbus_message_iter_recurse(&array_iter, &dict_entry_iter);
+        dbus_message_iter_get_basic(&dict_entry_iter, &object_path);
+
+        // 检查是否是设备路径
+        if (strstr(object_path, "/org/bluez/") != NULL)
+        {
+            dbus_message_iter_next(&dict_entry_iter);
+            update_dev_from_message(object_path, &dict_entry_iter);
+            device_count++;
+        }
+
+        dbus_message_iter_next(&array_iter);
+    }
+
+    dbus_message_unref(reply);
+    AUDIO_INFO_PRINT("Loaded %d existing devices", device_count);
 }
 
 #endif
