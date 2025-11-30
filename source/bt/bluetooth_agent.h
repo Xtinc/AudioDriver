@@ -4,6 +4,7 @@
 
 #include "audio_message.h"
 #include <atomic>
+#include <dbus/dbus.h>
 #include <memory>
 #include <mutex>
 #include <string>

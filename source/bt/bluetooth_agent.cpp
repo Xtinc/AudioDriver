@@ -11,7 +11,6 @@
 #define AGENT_PATH "/org/bluez/agent"
 #define AGENT_SERVICE "org.bluez.agent"
 
-#include <dbus/dbus.h>
 #include <algorithm>
 #include <cstring>
 #include <sstream>
@@ -748,7 +747,6 @@ DBusHandlerResult BluetoothAgent::handle_request_confirmation(DBusMessage *msg)
 
     AUDIO_INFO_PRINT("Pairing Confirmation - Device: %s, Passkey: %06u (auto-accepting)", device_path, passkey);
 
-    // 直接确认配对，不等待用户输入
     DBusMessage *reply = dbus_message_new_method_return(msg);
     if (reply)
     {

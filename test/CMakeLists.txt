@@ -19,3 +19,4 @@ add_executable(test_lms_filter test_lms_filter.cpp)
 target_link_libraries(test_lms_filter bettyaudio)
 
 add_executable(bluetoothctl bluetooth_main.cpp)
+target_link_libraries(bluetoothctl bettyaudio)
