@@ -562,8 +562,6 @@ void BluetoothAgent::handle_dev_add(DBusMessage *msg)
         return;
     }
 
-    AUDIO_DEBUG_PRINT("Device path added: %s", object_path);
-
     dbus_message_iter_next(&args);
     update_dev_from_message(object_path, &args);
 }
@@ -576,8 +574,6 @@ void BluetoothAgent::handle_dev_chg(DBusMessage *msg)
     {
         return;
     }
-
-    AUDIO_DEBUG_PRINT("Device properties changed: %s", object_path);
 
     DBusMessageIter iter;
     if (!dbus_message_iter_init(msg, &iter))
@@ -641,7 +637,7 @@ DBusHandlerResult BluetoothAgent::handle_message(DBusMessage *msg)
     {
         AUDIO_INFO_PRINT("Agent is being released by BlueZ");
         DBusMessage *reply = dbus_message_new_method_return(msg);
-        dbus_connection_send(connection_, reply, nullptr);
+        dbus_connection_send(event_connection_, reply, nullptr); // 改为 event_connection_
         dbus_message_unref(reply);
         return DBUS_HANDLER_RESULT_HANDLED;
     }
@@ -716,7 +712,7 @@ DBusHandlerResult BluetoothAgent::handle_request_pincode(DBusMessage *msg)
         AUDIO_INFO_PRINT("PIN Code Request - Device: %s, Sending PIN: %s", device_path, pincode);
         DBusMessage *reply = dbus_message_new_method_return(msg);
         dbus_message_append_args(reply, DBUS_TYPE_STRING, &pincode, DBUS_TYPE_INVALID);
-        dbus_connection_send(connection_, reply, nullptr);
+        dbus_connection_send(event_connection_, reply, nullptr); // 改为 event_connection_
         dbus_message_unref(reply);
         return DBUS_HANDLER_RESULT_HANDLED;
     }
@@ -732,7 +728,7 @@ DBusHandlerResult BluetoothAgent::handle_display_pincode(DBusMessage *msg)
     {
         AUDIO_INFO_PRINT("Display PIN Code - Device: %s, PIN: %s", device_path, pincode);
         DBusMessage *reply = dbus_message_new_method_return(msg);
-        dbus_connection_send(connection_, reply, nullptr);
+        dbus_connection_send(event_connection_, reply, nullptr); // 改为 event_connection_
         dbus_message_unref(reply);
         return DBUS_HANDLER_RESULT_HANDLED;
     }
@@ -748,7 +744,7 @@ DBusHandlerResult BluetoothAgent::handle_request_passkey(DBusMessage *msg)
         AUDIO_INFO_PRINT("Passkey Request - Device: %s, Sending Passkey: %06u", device_path, passkey);
         DBusMessage *reply = dbus_message_new_method_return(msg);
         dbus_message_append_args(reply, DBUS_TYPE_UINT32, &passkey, DBUS_TYPE_INVALID);
-        dbus_connection_send(connection_, reply, nullptr);
+        dbus_connection_send(event_connection_, reply, nullptr); // 改为 event_connection_
         dbus_message_unref(reply);
         return DBUS_HANDLER_RESULT_HANDLED;
     }
@@ -766,7 +762,7 @@ DBusHandlerResult BluetoothAgent::handle_display_passkey(DBusMessage *msg)
         AUDIO_INFO_PRINT("Display Passkey - Device: %s, Passkey: %06u (entered: %u digits)", device_path, passkey,
                          entered);
         DBusMessage *reply = dbus_message_new_method_return(msg);
-        dbus_connection_send(connection_, reply, nullptr);
+        dbus_connection_send(event_connection_, reply, nullptr); // 改为 event_connection_
         dbus_message_unref(reply);
         return DBUS_HANDLER_RESULT_HANDLED;
     }
@@ -807,7 +803,7 @@ DBusHandlerResult BluetoothAgent::handle_request_authorization(DBusMessage *msg)
     {
         AUDIO_INFO_PRINT("Authorization Request - Device: %s (auto-accepting)", device_path);
         DBusMessage *reply = dbus_message_new_method_return(msg);
-        dbus_connection_send(connection_, reply, nullptr);
+        dbus_connection_send(event_connection_, reply, nullptr); // 改为 event_connection_
         dbus_message_unref(reply);
         return DBUS_HANDLER_RESULT_HANDLED;
     }
@@ -823,7 +819,7 @@ DBusHandlerResult BluetoothAgent::handle_authorize_service(DBusMessage *msg)
     {
         AUDIO_INFO_PRINT("Service Authorization - Device: %s, UUID: %s (auto-accepting)", device_path, uuid);
         DBusMessage *reply = dbus_message_new_method_return(msg);
-        dbus_connection_send(connection_, reply, nullptr);
+        dbus_connection_send(event_connection_, reply, nullptr); // 改为 event_connection_
         dbus_message_unref(reply);
         return DBUS_HANDLER_RESULT_HANDLED;
     }
@@ -834,7 +830,7 @@ DBusHandlerResult BluetoothAgent::handle_cancel(DBusMessage *msg)
 {
     AUDIO_INFO_PRINT("Pairing operation cancelled");
     DBusMessage *reply = dbus_message_new_method_return(msg);
-    dbus_connection_send(connection_, reply, nullptr);
+    dbus_connection_send(event_connection_, reply, nullptr); // 改为 event_connection_
     dbus_message_unref(reply);
     return DBUS_HANDLER_RESULT_HANDLED;
 }
