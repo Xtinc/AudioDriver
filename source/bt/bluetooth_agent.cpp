@@ -199,15 +199,26 @@ bool BluetoothAgent::stop_scan()
 bool BluetoothAgent::pair(const std::string &device_path)
 {
     AUDIO_INFO_PRINT("Pairing device: %s", device_path.c_str());
-    DBusMessage *reply = call_method(device_path.c_str(), DEVICE_INTERFACE, "Pair", DBUS_TYPE_INVALID);
-    if (reply)
+
+    DBusMessage *msg = dbus_message_new_method_call(BLUEZ_SERVICE, device_path.c_str(), DEVICE_INTERFACE, "Pair");
+
+    if (!msg)
     {
-        dbus_message_unref(reply);
-        AUDIO_INFO_PRINT("Device paired: %s", device_path.c_str());
-        return true;
+        AUDIO_ERROR_PRINT("Failed to create Pair method call");
+        return false;
     }
-    AUDIO_ERROR_PRINT("Failed to pair device: %s", device_path.c_str());
-    return false;
+
+    dbus_uint32_t serial;
+    if (!dbus_connection_send(connection_, msg, &serial))
+    {
+        AUDIO_ERROR_PRINT("Failed to send Pair method call");
+        dbus_message_unref(msg);
+        return false;
+    }
+
+    dbus_message_unref(msg);
+    AUDIO_INFO_PRINT("Pair request sent (serial: %u), waiting for agent callbacks...", serial);
+    return true;
 }
 
 bool BluetoothAgent::connect(const std::string &device_path)
@@ -824,12 +835,7 @@ void BluetoothAgent::load_existing_devices()
 {
     AUDIO_INFO_PRINT("Loading existing devices...");
 
-    DBusMessage *msg = dbus_message_new_method_call(
-        BLUEZ_SERVICE,
-        "/",
-        OBJECT_MANAGER_INTERFACE,
-        "GetManagedObjects"
-    );
+    DBusMessage *msg = dbus_message_new_method_call(BLUEZ_SERVICE, "/", OBJECT_MANAGER_INTERFACE, "GetManagedObjects");
 
     if (!msg)
     {
@@ -856,8 +862,7 @@ void BluetoothAgent::load_existing_devices()
     }
 
     DBusMessageIter iter, array_iter;
-    if (!dbus_message_iter_init(reply, &iter) ||
-        dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_ARRAY)
+    if (!dbus_message_iter_init(reply, &iter) || dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_ARRAY)
     {
         dbus_message_unref(reply);
         return;
