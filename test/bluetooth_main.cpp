@@ -31,8 +31,8 @@ class BluetoothController
         commands_["power"] = [this](const std::vector<std::string> &args) { return cmd_power(args); };
         commands_["pairable"] = [this](const std::vector<std::string> &args) { return cmd_pairable(args); };
         commands_["discoverable"] = [this](const std::vector<std::string> &args) { return cmd_discoverable(args); };
-        commands_["accept"] = [this](const std::vector<std::string> &args) { return cmd_accept(args); };
-        commands_["reject"] = [this](const std::vector<std::string> &args) { return cmd_reject(args); };
+        commands_["yes"] = [this](const std::vector<std::string> &args) { return cmd_yes(args); };
+        commands_["no"] = [this](const std::vector<std::string> &args) { return cmd_no(args); };
         commands_["quit"] = [this](const std::vector<std::string> &args) { return cmd_quit(args); };
         commands_["exit"] = [this](const std::vector<std::string> &args) { return cmd_quit(args); };
     }
@@ -165,8 +165,8 @@ class BluetoothController
         case PairingRequestType::PIN_CODE:
             std::cout << "Type: Request PIN Code" << std::endl;
             std::cout << "\nPlease enter PIN code, then type:" << std::endl;
-            std::cout << "  accept <pincode>  - Accept with PIN code" << std::endl;
-            std::cout << "  reject            - Reject pairing" << std::endl;
+            std::cout << "  yes <pincode>  - Accept with PIN code" << std::endl;
+            std::cout << "  no             - Reject pairing" << std::endl;
             pending_request_ = request;
             has_pending_request_ = true;
             break;
@@ -174,8 +174,8 @@ class BluetoothController
         case PairingRequestType::PASSKEY:
             std::cout << "Type: Request Passkey" << std::endl;
             std::cout << "\nPlease enter 6-digit passkey (000000-999999), then type:" << std::endl;
-            std::cout << "  accept <passkey>  - Accept with passkey" << std::endl;
-            std::cout << "  reject            - Reject pairing" << std::endl;
+            std::cout << "  yes <passkey>  - Accept with passkey" << std::endl;
+            std::cout << "  no             - Reject pairing" << std::endl;
             pending_request_ = request;
             has_pending_request_ = true;
             break;
@@ -184,8 +184,8 @@ class BluetoothController
             std::cout << "Type: Confirm Pairing" << std::endl;
             std::cout << "Passkey: " << std::setfill('0') << std::setw(6) << request.passkey << std::endl;
             std::cout << "\nPlease verify the passkey matches on both devices, then type:" << std::endl;
-            std::cout << "  accept  - Confirm pairing" << std::endl;
-            std::cout << "  reject  - Reject pairing" << std::endl;
+            std::cout << "  yes  - Confirm pairing" << std::endl;
+            std::cout << "  no   - Reject pairing" << std::endl;
             pending_request_ = request;
             has_pending_request_ = true;
             break;
@@ -211,7 +211,7 @@ class BluetoothController
         print_prompt();
     }
 
-    bool cmd_accept(const std::vector<std::string> &args)
+    bool cmd_yes(const std::vector<std::string> &args)
     {
         std::lock_guard<std::mutex> lock(request_mutex_);
 
@@ -228,7 +228,7 @@ class BluetoothController
         case PairingRequestType::PIN_CODE:
             if (args.size() < 2)
             {
-                std::cout << "Usage: accept <pincode>" << std::endl;
+                std::cout << "Usage: yes <pincode>" << std::endl;
                 return false;
             }
             agent_->set_pincode_result(true, args[1]);
@@ -239,7 +239,7 @@ class BluetoothController
         case PairingRequestType::PASSKEY:
             if (args.size() < 2)
             {
-                std::cout << "Usage: accept <passkey>" << std::endl;
+                std::cout << "Usage: yes <passkey>" << std::endl;
                 return false;
             }
             try
@@ -280,7 +280,7 @@ class BluetoothController
         return success;
     }
 
-    bool cmd_reject(const std::vector<std::string> &args)
+    bool cmd_no(const std::vector<std::string> &args)
     {
         std::lock_guard<std::mutex> lock(request_mutex_);
 
@@ -331,8 +331,8 @@ class BluetoothController
                   << "  power on|off            Set adapter power state\n"
                   << "  pairable on|off         Set adapter pairable state\n"
                   << "  discoverable on|off     Set adapter discoverable state\n"
-                  << "  accept [code]           Accept pairing request (with PIN/passkey if needed)\n"
-                  << "  reject                  Reject pairing request\n"
+                  << "  yes [code]              Accept pairing (with PIN/passkey if needed)\n"
+                  << "  no                      Reject pairing\n"
                   << "  quit|exit               Exit program\n"
                   << std::endl;
         return true;

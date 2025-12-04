@@ -13,6 +13,7 @@
 #define DBUS_TIMEOUT_SHORT 5000
 #define DBUS_TIMEOUT_LONG 15000
 #define DBUS_POLL_INTERVAL 100
+#define PAIRING_TIMEOUT_SECONDS 15
 
 #include <algorithm>
 #include <cstring>
@@ -54,8 +55,7 @@ static void send_simple_reply(DBusConnection *conn, DBusMessage *msg)
 }
 
 BluetoothAgent::BluetoothAgent(const std::string &adapter_path)
-    : connection_(nullptr), event_connection_(nullptr), adapter_path_(adapter_path), running_(false), scanning_(false),
-      confirmation_set_(false), passkey_set_(false), pincode_set_(false)
+    : connection_(nullptr), event_connection_(nullptr), adapter_path_(adapter_path), running_(false), scanning_(false)
 {
 }
 
@@ -871,7 +871,6 @@ DBusHandlerResult BluetoothAgent::handle_request_pincode(DBusMessage *msg)
 
     AUDIO_INFO_PRINT("PIN Code Request - Device: %s, waiting for external input...", device_path);
 
-    // 通知外部程序
     PairingRequest request;
     request.type = PairingRequestType::PIN_CODE;
     request.device_path = device_path;
@@ -883,25 +882,17 @@ DBusHandlerResult BluetoothAgent::handle_request_pincode(DBusMessage *msg)
     }
     notify_pairing_request(request);
 
-    // 创建 promise 和 future
-    {
-        std::lock_guard<std::mutex> lock(confirmation_mutex_);
-        pincode_promise_ = std::make_unique<std::promise<std::pair<bool, std::string>>>();
-        pincode_set_ = false;
-    }
+    PincodeFuture future;
+    std::unique_lock<std::mutex> lock(confirmation_mutex_);
+    pincode_promise_ = std::make_unique<std::promise<PincodeResult>>();
+    future = pincode_promise_->get_future();
+    lock.unlock();
 
-    auto future = pincode_promise_->get_future();
+    auto status = future.wait_for(std::chrono::seconds(PAIRING_TIMEOUT_SECONDS));
 
-    // 等待外部设置或超时
-    std::string pincode;
-    if (wait_for_pincode(pincode, 10))
+    if (status != std::future_status::timeout)
     {
         auto result = future.get();
-        {
-            std::lock_guard<std::mutex> lock(confirmation_mutex_);
-            pincode_promise_.reset();
-        }
-
         if (result.first)
         {
             const char *pin = result.second.c_str();
@@ -910,19 +901,25 @@ DBusHandlerResult BluetoothAgent::handle_request_pincode(DBusMessage *msg)
             dbus_message_append_args(reply, DBUS_TYPE_STRING, &pin, DBUS_TYPE_INVALID);
             dbus_connection_send(connection_, reply, nullptr);
             dbus_message_unref(reply);
-            return DBUS_HANDLER_RESULT_HANDLED;
+        }
+        else
+        {
+            AUDIO_INFO_PRINT("PIN Code rejected");
+            DBusMessage *error = dbus_message_new_error(msg, "org.bluez.Error.Rejected", "PIN Code rejected");
+            dbus_connection_send(connection_, error, nullptr);
+            dbus_message_unref(error);
         }
     }
-
-    // 超时或拒绝
+    else
     {
-        std::lock_guard<std::mutex> lock(confirmation_mutex_);
-        pincode_promise_.reset();
+        AUDIO_INFO_PRINT("PIN Code timeout, rejecting by default");
+        DBusMessage *error = dbus_message_new_error(msg, "org.bluez.Error.Rejected", "PIN Code timeout");
+        dbus_connection_send(connection_, error, nullptr);
+        dbus_message_unref(error);
     }
-    AUDIO_INFO_PRINT("PIN Code rejected or timeout");
-    DBusMessage *error = dbus_message_new_error(msg, "org.bluez.Error.Rejected", "PIN Code rejected");
-    dbus_connection_send(connection_, error, nullptr);
-    dbus_message_unref(error);
+
+    lock.lock();
+    pincode_promise_.reset();
     return DBUS_HANDLER_RESULT_HANDLED;
 }
 
@@ -938,7 +935,6 @@ DBusHandlerResult BluetoothAgent::handle_display_pincode(DBusMessage *msg)
 
     AUDIO_INFO_PRINT("Display PIN Code - Device: %s, PIN: %s", device_path, pincode);
 
-    // 通知外部程序
     PairingRequest request;
     request.type = PairingRequestType::DISPLAY_PINCODE;
     request.device_path = device_path;
@@ -964,7 +960,6 @@ DBusHandlerResult BluetoothAgent::handle_request_passkey(DBusMessage *msg)
 
     AUDIO_INFO_PRINT("Passkey Request - Device: %s, waiting for external input...", device_path);
 
-    // 通知外部程序
     PairingRequest request;
     request.type = PairingRequestType::PASSKEY;
     request.device_path = device_path;
@@ -976,25 +971,17 @@ DBusHandlerResult BluetoothAgent::handle_request_passkey(DBusMessage *msg)
     }
     notify_pairing_request(request);
 
-    // 创建 promise 和 future
-    {
-        std::lock_guard<std::mutex> lock(confirmation_mutex_);
-        passkey_promise_ = std::make_unique<std::promise<std::pair<bool, uint32_t>>>();
-        passkey_set_ = false;
-    }
+    PasskeyFuture future;
+    std::unique_lock<std::mutex> lock(confirmation_mutex_);
+    passkey_promise_ = std::make_unique<std::promise<PasskeyResult>>();
+    future = passkey_promise_->get_future();
+    lock.unlock();
 
-    auto future = passkey_promise_->get_future();
+    auto status = future.wait_for(std::chrono::seconds(PAIRING_TIMEOUT_SECONDS));
 
-    // 等待外部设置或超时
-    uint32_t passkey = 0;
-    if (wait_for_passkey(passkey, 10))
+    if (status != std::future_status::timeout)
     {
         auto result = future.get();
-        {
-            std::lock_guard<std::mutex> lock(confirmation_mutex_);
-            passkey_promise_.reset();
-        }
-
         if (result.first)
         {
             dbus_uint32_t pk = result.second;
@@ -1003,19 +990,25 @@ DBusHandlerResult BluetoothAgent::handle_request_passkey(DBusMessage *msg)
             dbus_message_append_args(reply, DBUS_TYPE_UINT32, &pk, DBUS_TYPE_INVALID);
             dbus_connection_send(connection_, reply, nullptr);
             dbus_message_unref(reply);
-            return DBUS_HANDLER_RESULT_HANDLED;
+        }
+        else
+        {
+            AUDIO_INFO_PRINT("Passkey rejected");
+            DBusMessage *error = dbus_message_new_error(msg, "org.bluez.Error.Rejected", "Passkey rejected");
+            dbus_connection_send(connection_, error, nullptr);
+            dbus_message_unref(error);
         }
     }
-
-    // 超时或拒绝
+    else
     {
-        std::lock_guard<std::mutex> lock(confirmation_mutex_);
-        passkey_promise_.reset();
+        AUDIO_INFO_PRINT("Passkey timeout, rejecting by default");
+        DBusMessage *error = dbus_message_new_error(msg, "org.bluez.Error.Rejected", "Passkey timeout");
+        dbus_connection_send(connection_, error, nullptr);
+        dbus_message_unref(error);
     }
-    AUDIO_INFO_PRINT("Passkey rejected or timeout");
-    DBusMessage *error = dbus_message_new_error(msg, "org.bluez.Error.Rejected", "Passkey rejected");
-    dbus_connection_send(connection_, error, nullptr);
-    dbus_message_unref(error);
+
+    lock.lock();
+    passkey_promise_.reset();
     return DBUS_HANDLER_RESULT_HANDLED;
 }
 
@@ -1032,7 +1025,6 @@ DBusHandlerResult BluetoothAgent::handle_display_passkey(DBusMessage *msg)
 
     AUDIO_INFO_PRINT("Display Passkey - Device: %s, Passkey: %06u (entered: %u digits)", device_path, passkey, entered);
 
-    // 通知外部程序
     PairingRequest request;
     request.type = PairingRequestType::DISPLAY_PASSKEY;
     request.device_path = device_path;
@@ -1062,7 +1054,6 @@ DBusHandlerResult BluetoothAgent::handle_request_confirmation(DBusMessage *msg)
     AUDIO_INFO_PRINT("Pairing Confirmation - Device: %s, Passkey: %06u, waiting for external confirmation...",
                      device_path, passkey);
 
-    // 通知外部程序
     PairingRequest request;
     request.type = PairingRequestType::CONFIRMATION;
     request.device_path = device_path;
@@ -1075,24 +1066,17 @@ DBusHandlerResult BluetoothAgent::handle_request_confirmation(DBusMessage *msg)
     request.passkey = passkey;
     notify_pairing_request(request);
 
-    // 创建 promise 和 future
-    {
-        std::lock_guard<std::mutex> lock(confirmation_mutex_);
-        confirmation_promise_ = std::make_unique<std::promise<bool>>();
-        confirmation_set_ = false;
-    }
+    ConfirmationFuture future;
+    std::unique_lock<std::mutex> lock(confirmation_mutex_);
+    confirmation_promise_ = std::make_unique<std::promise<bool>>();
+    future = confirmation_promise_->get_future();
+    lock.unlock();
 
-    auto future = confirmation_promise_->get_future();
+    auto status = future.wait_for(std::chrono::seconds(PAIRING_TIMEOUT_SECONDS));
 
-    // 等待外部设置或超时
-    if (wait_for_confirmation(10))
+    if (status != std::future_status::timeout)
     {
         bool accept = future.get();
-        {
-            std::lock_guard<std::mutex> lock(confirmation_mutex_);
-            confirmation_promise_.reset();
-        }
-
         if (accept)
         {
             AUDIO_INFO_PRINT("Pairing confirmed by external program");
@@ -1102,19 +1086,25 @@ DBusHandlerResult BluetoothAgent::handle_request_confirmation(DBusMessage *msg)
                 dbus_connection_send(connection_, reply, nullptr);
                 dbus_message_unref(reply);
             }
-            return DBUS_HANDLER_RESULT_HANDLED;
+        }
+        else
+        {
+            AUDIO_INFO_PRINT("Pairing rejected by external program");
+            DBusMessage *error = dbus_message_new_error(msg, "org.bluez.Error.Rejected", "Pairing rejected");
+            dbus_connection_send(connection_, error, nullptr);
+            dbus_message_unref(error);
         }
     }
-
-    // 超时或拒绝
+    else
     {
-        std::lock_guard<std::mutex> lock(confirmation_mutex_);
-        confirmation_promise_.reset();
+        AUDIO_INFO_PRINT("Pairing confirmation timeout, rejecting by default");
+        DBusMessage *error = dbus_message_new_error(msg, "org.bluez.Error.Rejected", "Confirmation timeout");
+        dbus_connection_send(connection_, error, nullptr);
+        dbus_message_unref(error);
     }
-    AUDIO_INFO_PRINT("Pairing rejected or timeout");
-    DBusMessage *error = dbus_message_new_error(msg, "org.bluez.Error.Rejected", "Pairing rejected");
-    dbus_connection_send(connection_, error, nullptr);
-    dbus_message_unref(error);
+
+    lock.lock();
+    confirmation_promise_.reset();
     return DBUS_HANDLER_RESULT_HANDLED;
 }
 
@@ -1128,7 +1118,6 @@ DBusHandlerResult BluetoothAgent::handle_request_authorization(DBusMessage *msg)
 
     AUDIO_INFO_PRINT("Authorization Request - Device: %s (auto-accepting)", device_path);
 
-    // 通知外部程序
     PairingRequest request;
     request.type = PairingRequestType::AUTHORIZATION;
     request.device_path = device_path;
@@ -1163,7 +1152,6 @@ DBusHandlerResult BluetoothAgent::handle_cancel(DBusMessage *msg)
 {
     AUDIO_INFO_PRINT("Pairing operation cancelled");
 
-    // 取消所有待处理的 promise
     {
         std::lock_guard<std::mutex> lock(confirmation_mutex_);
         if (confirmation_promise_)
@@ -1174,38 +1162,31 @@ DBusHandlerResult BluetoothAgent::handle_cancel(DBusMessage *msg)
             }
             catch (...)
             {
-                // Promise 可能已经被设置
             }
-            confirmation_set_ = true;
             confirmation_promise_.reset();
         }
         if (passkey_promise_)
         {
             try
             {
-                passkey_promise_->set_value(std::make_pair(false, 0));
+                passkey_promise_->set_value(PasskeyResult(false, 0));
             }
             catch (...)
             {
-                // Promise 可能已经被设置
             }
-            passkey_set_ = true;
             passkey_promise_.reset();
         }
         if (pincode_promise_)
         {
             try
             {
-                pincode_promise_->set_value(std::make_pair(false, ""));
+                pincode_promise_->set_value(PincodeResult(false, ""));
             }
             catch (...)
             {
-                // Promise 可能已经被设置
             }
-            pincode_set_ = true;
             pincode_promise_.reset();
         }
-        confirmation_cv_.notify_all();
     }
 
     send_simple_reply(connection_, msg);
@@ -1244,9 +1225,14 @@ void BluetoothAgent::set_confirmation_result(bool accept)
     std::lock_guard<std::mutex> lock(confirmation_mutex_);
     if (confirmation_promise_)
     {
-        confirmation_promise_->set_value(accept);
-        confirmation_set_ = true;
-        confirmation_cv_.notify_one();
+        try
+        {
+            confirmation_promise_->set_value(accept);
+        }
+        catch (const std::future_error &)
+        {
+            AUDIO_ERROR_PRINT("Confirmation already set");
+        }
         AUDIO_INFO_PRINT("Confirmation result set: %s", accept ? "accepted" : "rejected");
     }
 }
@@ -1255,236 +1241,15 @@ void BluetoothAgent::set_passkey_result(bool accept, uint32_t passkey)
 {
     std::lock_guard<std::mutex> lock(confirmation_mutex_);
     if (passkey_promise_)
-    {
-        passkey_promise_->set_value(std::make_pair(accept, passkey));
-        passkey_set_ = true;
-        confirmation_cv_.notify_one();
-        AUDIO_INFO_PRINT("Passkey result set: %s, passkey: %u", accept ? "accepted" : "rejected", passkey);
-    }
-}
-
-void BluetoothAgent::set_pincode_result(bool accept, const std::string &pincode)
-{
-    std::lock_guard<std::mutex> lock(confirmation_mutex_);
-    if (pincode_promise_)
-    {
-        pincode_promise_->set_value(std::make_pair(accept, pincode));
-        pincode_set_ = true;
-        confirmation_cv_.notify_one();
-        AUDIO_INFO_PRINT("Pincode result set: %s, pincode: %s", accept ? "accepted" : "rejected", pincode.c_str());
-    }
-}
-
-bool BluetoothAgent::wait_for_confirmation(int timeout_seconds)
-{
-    std::unique_lock<std::mutex> lock(confirmation_mutex_);
-
-    auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
-
-    if (!confirmation_cv_.wait_until(lock, timeout, [this] { return confirmation_set_; }))
-    {
-        AUDIO_INFO_PRINT("Confirmation timeout, rejecting by default");
-        return false;
-    }
-
-    return true;
-}
-
-bool BluetoothAgent::wait_for_passkey(uint32_t &passkey, int timeout_seconds)
-{
-    std::unique_lock<std::mutex> lock(confirmation_mutex_);
-
-    auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
-
-    if (!confirmation_cv_.wait_until(lock, timeout, [this] { return passkey_set_; }))
-    {
-        AUDIO_INFO_PRINT("Passkey timeout, rejecting by default");
-        return false;
-    }
-
-    return true;
-}
-
-bool BluetoothAgent::wait_for_pincode(std::string &pincode, int timeout_seconds)
-{
-    std::unique_lock<std::mutex> lock(confirmation_mutex_);
-
-    auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
-
-    if (!confirmation_cv_.wait_until(lock, timeout, [this] { return pincode_set_; }))
-    {
-        AUDIO_INFO_PRINT("Pincode timeout, rejecting by default");
-        return false;
-    }
-
-    return true;
-}
-
-void BluetoothAgent::load_existing_devices()
-{
-    AUDIO_INFO_PRINT("Loading existing devices...");
-
-    DBusMessage *msg = dbus_message_new_method_call(BLUEZ_SERVICE, "/", OBJECT_MANAGER_INTERFACE, "GetManagedObjects");
-
-    if (!msg)
-    {
-        AUDIO_ERROR_PRINT("Failed to create GetManagedObjects method call");
-        return;
-    }
-
-    DBusError err;
-    dbus_error_init(&err);
-    DBusMessage *reply = dbus_connection_send_with_reply_and_block(connection_, msg, DBUS_TIMEOUT_SHORT, &err);
-    dbus_message_unref(msg);
-
-    if (dbus_error_is_set(&err))
-    {
-        AUDIO_ERROR_PRINT("Failed to get managed objects: %s - %s", err.name, err.message);
-        dbus_error_free(&err);
-        return;
-    }
-
-    if (!reply)
-    {
-        AUDIO_ERROR_PRINT("No reply from GetManagedObjects");
-        return;
-    }
-
-    DBusMessageIter iter, array_iter;
-    if (!dbus_message_iter_init(reply, &iter) || dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_ARRAY)
-    {
-        dbus_message_unref(reply);
-        return;
-    }
-
-    dbus_message_iter_recurse(&iter, &array_iter);
-
-    int device_count = 0;
-    while (dbus_message_iter_get_arg_type(&array_iter) == DBUS_TYPE_DICT_ENTRY)
-    {
-        DBusMessageIter dict_entry_iter;
-        const char *object_path;
-
-        dbus_message_iter_recurse(&array_iter, &dict_entry_iter);
-        dbus_message_iter_get_basic(&dict_entry_iter, &object_path);
-
-        if (strstr(object_path, "/org/bluez/") != NULL)
-        {
-            dbus_message_iter_next(&dict_entry_iter);
-            update_dev_from_message(object_path, &dict_entry_iter);
-            device_count++;
-        }
-
-        dbus_message_iter_next(&array_iter);
-    }
-
-    dbus_message_unref(reply);
-    AUDIO_INFO_PRINT("Loaded %d existing devices", device_count);
-}
-
-std::string BluetoothDevice::translate_uuid(const std::string &uuid)
-{
-    static const std::map<std::string, std::string> uuid_map = {
-        // Generic UUIDs
-        {"00001800-0000-1000-8000-00805f9b34fb", "Generic Access"},
-        {"00001801-0000-1000-8000-00805f9b34fb", "Generic Attribute"},
-
-        // Audio/Video UUIDs
-        {"0000110a-0000-1000-8000-00805f9b34fb", "A2DP Source"},
-        {"0000110b-0000-1000-8000-00805f9b34fb", "A2DP Sink"},
-        {"0000110c-0000-1000-8000-00805f9b34fb", "AVRCP Target"},
-        {"0000110d-0000-1000-8000-00805f9b34fb", "Advanced Audio"},
-        {"0000110e-0000-1000-8000-00805f9b34fb", "AVRCP Controller"},
-        {"0000110f-0000-1000-8000-00805f9b34fb", "AVRCP"},
-
-        // Telephony UUIDs
-        {"0000111e-0000-1000-8000-00805f9b34fb", "Handsfree"},
-        {"0000111f-0000-1000-8000-00805f9b34fb", "Handsfree Audio Gateway"},
-        {"00001108-0000-1000-8000-00805f9b34fb", "Headset"},
-        {"00001112-0000-1000-8000-00805f9b34fb", "Headset Audio Gateway"},
-        {"00001131-0000-1000-8000-00805f9b34fb", "Headset HS"},
-
-        // HID UUIDs
-        {"00001124-0000-1000-8000-00805f9b34fb", "HID"},
-        {"00001200-0000-1000-8000-00805f9b34fb", "PnP Information"},
-
-        // Serial Port UUIDs
-        {"00001101-0000-1000-8000-00805f9b34fb", "Serial Port"},
-
-        // Object Push UUIDs
-        {"00001105-0000-1000-8000-00805f9b34fb", "OBEX Object Push"},
-        {"00001106-0000-1000-8000-00805f9b34fb", "OBEX File Transfer"},
-
-        // Network UUIDs
-        {"00001115-0000-1000-8000-00805f9b34fb", "PANU"},
-        {"00001116-0000-1000-8000-00805f9b34fb", "NAP"},
-        {"00001117-0000-1000-8000-00805f9b34fb", "GN"},
-
-        // Other common UUIDs
-        {"0000112d-0000-1000-8000-00805f9b34fb", "SIM Access"},
-        {"0000112f-0000-1000-8000-00805f9b34fb", "Phonebook Access PCE"},
-        {"00001130-0000-1000-8000-00805f9b34fb", "Phonebook Access PSE"},
-        {"00001132-0000-1000-8000-00805f9b34fb", "Message Access Server"},
-        {"00001133-0000-1000-8000-00805f9b34fb", "Message Notification Server"},
-        {"00001134-0000-1000-8000-00805f9b34fb", "Message Access Profile"},
-    };
-
-    auto it = uuid_map.find(uuid);
-    if (it != uuid_map.end())
-    {
-        return it->second + " (" + uuid + ")";
-    }
-
-    return uuid;
-}
-
-void BluetoothAgent::set_pairing_request_callback(PairingRequestCallback callback)
-{
-    std::lock_guard<std::mutex> lock(callback_mutex_);
-    pairing_request_callback_ = callback;
-    AUDIO_INFO_PRINT("Pairing request callback registered");
-}
-
-void BluetoothAgent::notify_pairing_request(const PairingRequest &request)
-{
-    std::lock_guard<std::mutex> lock(callback_mutex_);
-    if (pairing_request_callback_)
     {
         try
         {
-            pairing_request_callback_(request);
+            passkey_promise_->set_value(PasskeyResult(accept, passkey));
         }
-        catch (const std::exception &e)
+        catch (const std::future_error &)
         {
-            AUDIO_ERROR_PRINT("Exception in pairing request callback: %s", e.what());
+            AUDIO_ERROR_PRINT("Passkey already set");
         }
-        catch (...)
-        {
-            AUDIO_ERROR_PRINT("Unknown exception in pairing request callback");
-        }
-    }
-}
-
-void BluetoothAgent::set_confirmation_result(bool accept)
-{
-    std::lock_guard<std::mutex> lock(confirmation_mutex_);
-    if (confirmation_promise_)
-    {
-        confirmation_promise_->set_value(accept);
-        confirmation_set_ = true;
-        confirmation_cv_.notify_one();
-        AUDIO_INFO_PRINT("Confirmation result set: %s", accept ? "accepted" : "rejected");
-    }
-}
-
-void BluetoothAgent::set_passkey_result(bool accept, uint32_t passkey)
-{
-    std::lock_guard<std::mutex> lock(confirmation_mutex_);
-    if (passkey_promise_)
-    {
-        passkey_promise_->set_value(std::make_pair(accept, passkey));
-        passkey_set_ = true;
-        confirmation_cv_.notify_one();
         AUDIO_INFO_PRINT("Passkey result set: %s, passkey: %u", accept ? "accepted" : "rejected", passkey);
     }
 }
@@ -1493,510 +1258,19 @@ void BluetoothAgent::set_pincode_result(bool accept, const std::string &pincode)
 {
     std::lock_guard<std::mutex> lock(confirmation_mutex_);
     if (pincode_promise_)
-    {
-        pincode_promise_->set_value(std::make_pair(accept, pincode));
-        pincode_set_ = true;
-        confirmation_cv_.notify_one();
-        AUDIO_INFO_PRINT("Pincode result set: %s, pincode: %s", accept ? "accepted" : "rejected", pincode.c_str());
-    }
-}
-
-bool BluetoothAgent::wait_for_confirmation(int timeout_seconds)
-{
-    std::unique_lock<std::mutex> lock(confirmation_mutex_);
-
-    auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
-
-    if (!confirmation_cv_.wait_until(lock, timeout, [this] { return confirmation_set_; }))
-    {
-        AUDIO_INFO_PRINT("Confirmation timeout, rejecting by default");
-        return false;
-    }
-
-    return true;
-}
-
-bool BluetoothAgent::wait_for_passkey(uint32_t &passkey, int timeout_seconds)
-{
-    std::unique_lock<std::mutex> lock(confirmation_mutex_);
-
-    auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
-
-    if (!confirmation_cv_.wait_until(lock, timeout, [this] { return passkey_set_; }))
-    {
-        AUDIO_INFO_PRINT("Passkey timeout, rejecting by default");
-        return false;
-    }
-
-    return true;
-}
-
-bool BluetoothAgent::wait_for_pincode(std::string &pincode, int timeout_seconds)
-{
-    std::unique_lock<std::mutex> lock(confirmation_mutex_);
-
-    auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
-
-    if (!confirmation_cv_.wait_until(lock, timeout, [this] { return pincode_set_; }))
-    {
-        AUDIO_INFO_PRINT("Pincode timeout, rejecting by default");
-        return false;
-    }
-
-    return true;
-}
-
-void BluetoothAgent::load_existing_devices()
-{
-    AUDIO_INFO_PRINT("Loading existing devices...");
-
-    DBusMessage *msg = dbus_message_new_method_call(BLUEZ_SERVICE, "/", OBJECT_MANAGER_INTERFACE, "GetManagedObjects");
-
-    if (!msg)
-    {
-        AUDIO_ERROR_PRINT("Failed to create GetManagedObjects method call");
-        return;
-    }
-
-    DBusError err;
-    dbus_error_init(&err);
-    DBusMessage *reply = dbus_connection_send_with_reply_and_block(connection_, msg, DBUS_TIMEOUT_SHORT, &err);
-    dbus_message_unref(msg);
-
-    if (dbus_error_is_set(&err))
-    {
-        AUDIO_ERROR_PRINT("Failed to get managed objects: %s - %s", err.name, err.message);
-        dbus_error_free(&err);
-        return;
-    }
-
-    if (!reply)
-    {
-        AUDIO_ERROR_PRINT("No reply from GetManagedObjects");
-        return;
-    }
-
-    DBusMessageIter iter, array_iter;
-    if (!dbus_message_iter_init(reply, &iter) || dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_ARRAY)
-    {
-        dbus_message_unref(reply);
-        return;
-    }
-
-    dbus_message_iter_recurse(&iter, &array_iter);
-
-    int device_count = 0;
-    while (dbus_message_iter_get_arg_type(&array_iter) == DBUS_TYPE_DICT_ENTRY)
-    {
-        DBusMessageIter dict_entry_iter;
-        const char *object_path;
-
-        dbus_message_iter_recurse(&array_iter, &dict_entry_iter);
-        dbus_message_iter_get_basic(&dict_entry_iter, &object_path);
-
-        if (strstr(object_path, "/org/bluez/") != NULL)
-        {
-            dbus_message_iter_next(&dict_entry_iter);
-            update_dev_from_message(object_path, &dict_entry_iter);
-            device_count++;
-        }
-
-        dbus_message_iter_next(&array_iter);
-    }
-
-    dbus_message_unref(reply);
-    AUDIO_INFO_PRINT("Loaded %d existing devices", device_count);
-}
-
-std::string BluetoothDevice::translate_uuid(const std::string &uuid)
-{
-    static const std::map<std::string, std::string> uuid_map = {
-        // Generic UUIDs
-        {"00001800-0000-1000-8000-00805f9b34fb", "Generic Access"},
-        {"00001801-0000-1000-8000-00805f9b34fb", "Generic Attribute"},
-
-        // Audio/Video UUIDs
-        {"0000110a-0000-1000-8000-00805f9b34fb", "A2DP Source"},
-        {"0000110b-0000-1000-8000-00805f9b34fb", "A2DP Sink"},
-        {"0000110c-0000-1000-8000-00805f9b34fb", "AVRCP Target"},
-        {"0000110d-0000-1000-8000-00805f9b34fb", "Advanced Audio"},
-        {"0000110e-0000-1000-8000-00805f9b34fb", "AVRCP Controller"},
-        {"0000110f-0000-1000-8000-00805f9b34fb", "AVRCP"},
-
-        // Telephony UUIDs
-        {"0000111e-0000-1000-8000-00805f9b34fb", "Handsfree"},
-        {"0000111f-0000-1000-8000-00805f9b34fb", "Handsfree Audio Gateway"},
-        {"00001108-0000-1000-8000-00805f9b34fb", "Headset"},
-        {"00001112-0000-1000-8000-00805f9b34fb", "Headset Audio Gateway"},
-        {"00001131-0000-1000-8000-00805f9b34fb", "Headset HS"},
-
-        // HID UUIDs
-        {"00001124-0000-1000-8000-00805f9b34fb", "HID"},
-        {"00001200-0000-1000-8000-00805f9b34fb", "PnP Information"},
-
-        // Serial Port UUIDs
-        {"00001101-0000-1000-8000-00805f9b34fb", "Serial Port"},
-
-        // Object Push UUIDs
-        {"00001105-0000-1000-8000-00805f9b34fb", "OBEX Object Push"},
-        {"00001106-0000-1000-8000-00805f9b34fb", "OBEX File Transfer"},
-
-        // Network UUIDs
-        {"00001115-0000-1000-8000-00805f9b34fb", "PANU"},
-        {"00001116-0000-1000-8000-00805f9b34fb", "NAP"},
-        {"00001117-0000-1000-8000-00805f9b34fb", "GN"},
-
-        // Other common UUIDs
-        {"0000112d-0000-1000-8000-00805f9b34fb", "SIM Access"},
-        {"0000112f-0000-1000-8000-00805f9b34fb", "Phonebook Access PCE"},
-        {"00001130-0000-1000-8000-00805f9b34fb", "Phonebook Access PSE"},
-        {"00001132-0000-1000-8000-00805f9b34fb", "Message Access Server"},
-        {"00001133-0000-1000-8000-00805f9b34fb", "Message Notification Server"},
-        {"00001134-0000-1000-8000-00805f9b34fb", "Message Access Profile"},
-    };
-
-    auto it = uuid_map.find(uuid);
-    if (it != uuid_map.end())
-    {
-        return it->second + " (" + uuid + ")";
-    }
-
-    return uuid;
-}
-
-void BluetoothAgent::set_pairing_request_callback(PairingRequestCallback callback)
-{
-    std::lock_guard<std::mutex> lock(callback_mutex_);
-    pairing_request_callback_ = callback;
-    AUDIO_INFO_PRINT("Pairing request callback registered");
-}
-
-void BluetoothAgent::notify_pairing_request(const PairingRequest &request)
-{
-    std::lock_guard<std::mutex> lock(callback_mutex_);
-    if (pairing_request_callback_)
     {
         try
         {
-            pairing_request_callback_(request);
+            pincode_promise_->set_value(PincodeResult(accept, pincode));
         }
-        catch (const std::exception &e)
+        catch (const std::future_error &)
         {
-            AUDIO_ERROR_PRINT("Exception in pairing request callback: %s", e.what());
+            AUDIO_ERROR_PRINT("Pincode already set");
         }
-        catch (...)
-        {
-            AUDIO_ERROR_PRINT("Unknown exception in pairing request callback");
-        }
-    }
-}
-
-void BluetoothAgent::set_confirmation_result(bool accept)
-{
-    std::lock_guard<std::mutex> lock(confirmation_mutex_);
-    if (confirmation_promise_)
-    {
-        confirmation_promise_->set_value(accept);
-        confirmation_set_ = true;
-        confirmation_cv_.notify_one();
-        AUDIO_INFO_PRINT("Confirmation result set: %s", accept ? "accepted" : "rejected");
-    }
-}
-
-void BluetoothAgent::set_passkey_result(bool accept, uint32_t passkey)
-{
-    std::lock_guard<std::mutex> lock(confirmation_mutex_);
-    if (passkey_promise_)
-    {
-        passkey_promise_->set_value(std::make_pair(accept, passkey));
-        passkey_set_ = true;
-        confirmation_cv_.notify_one();
-        AUDIO_INFO_PRINT("Passkey result set: %s, passkey: %u", accept ? "accepted" : "rejected", passkey);
-    }
-}
-
-void BluetoothAgent::set_pincode_result(bool accept, const std::string &pincode)
-{
-    std::lock_guard<std::mutex> lock(confirmation_mutex_);
-    if (pincode_promise_)
-    {
-        pincode_promise_->set_value(std::make_pair(accept, pincode));
-        pincode_set_ = true;
-        confirmation_cv_.notify_one();
         AUDIO_INFO_PRINT("Pincode result set: %s, pincode: %s", accept ? "accepted" : "rejected", pincode.c_str());
     }
 }
 
-bool BluetoothAgent::wait_for_confirmation(int timeout_seconds)
-{
-    std::unique_lock<std::mutex> lock(confirmation_mutex_);
-
-    auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
-
-    if (!confirmation_cv_.wait_until(lock, timeout, [this] { return confirmation_set_; }))
-    {
-        AUDIO_INFO_PRINT("Confirmation timeout, rejecting by default");
-        return false;
-    }
-
-    return true;
-}
-
-bool BluetoothAgent::wait_for_passkey(uint32_t &passkey, int timeout_seconds)
-{
-    std::unique_lock<std::mutex> lock(confirmation_mutex_);
-
-    auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
-
-    if (!confirmation_cv_.wait_until(lock, timeout, [this] { return passkey_set_; }))
-    {
-        AUDIO_INFO_PRINT("Passkey timeout, rejecting by default");
-        return false;
-    }
-
-    return true;
-}
-
-bool BluetoothAgent::wait_for_pincode(std::string &pincode, int timeout_seconds)
-{
-    std::unique_lock<std::mutex> lock(confirmation_mutex_);
-
-    auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
-
-    if (!confirmation_cv_.wait_until(lock, timeout, [this] { return pincode_set_; }))
-    {
-        AUDIO_INFO_PRINT("Pincode timeout, rejecting by default");
-        return false;
-    }
-
-    return true;
-}
-
-void BluetoothAgent::load_existing_devices()
-{
-    AUDIO_INFO_PRINT("Loading existing devices...");
-
-    DBusMessage *msg = dbus_message_new_method_call(BLUEZ_SERVICE, "/", OBJECT_MANAGER_INTERFACE, "GetManagedObjects");
-
-    if (!msg)
-    {
-        AUDIO_ERROR_PRINT("Failed to create GetManagedObjects method call");
-        return;
-    }
-
-    DBusError err;
-    dbus_error_init(&err);
-    DBusMessage *reply = dbus_connection_send_with_reply_and_block(connection_, msg, DBUS_TIMEOUT_SHORT, &err);
-    dbus_message_unref(msg);
-
-    if (dbus_error_is_set(&err))
-    {
-        AUDIO_ERROR_PRINT("Failed to get managed objects: %s - %s", err.name, err.message);
-        dbus_error_free(&err);
-        return;
-    }
-
-    if (!reply)
-    {
-        AUDIO_ERROR_PRINT("No reply from GetManagedObjects");
-        return;
-    }
-
-    DBusMessageIter iter, array_iter;
-    if (!dbus_message_iter_init(reply, &iter) || dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_ARRAY)
-    {
-        dbus_message_unref(reply);
-        return;
-    }
-
-    dbus_message_iter_recurse(&iter, &array_iter);
-
-    int device_count = 0;
-    while (dbus_message_iter_get_arg_type(&array_iter) == DBUS_TYPE_DICT_ENTRY)
-    {
-        DBusMessageIter dict_entry_iter;
-        const char *object_path;
-
-        dbus_message_iter_recurse(&array_iter, &dict_entry_iter);
-        dbus_message_iter_get_basic(&dict_entry_iter, &object_path);
-
-        if (strstr(object_path, "/org/bluez/") != NULL)
-        {
-            dbus_message_iter_next(&dict_entry_iter);
-            update_dev_from_message(object_path, &dict_entry_iter);
-            device_count++;
-        }
-
-        dbus_message_iter_next(&array_iter);
-    }
-
-    dbus_message_unref(reply);
-    AUDIO_INFO_PRINT("Loaded %d existing devices", device_count);
-}
-
-std::string BluetoothDevice::translate_uuid(const std::string &uuid)
-{
-    static const std::map<std::string, std::string> uuid_map = {
-        // Generic UUIDs
-        {"00001800-0000-1000-8000-00805f9b34fb", "Generic Access"},
-        {"00001801-0000-1000-8000-00805f9b34fb", "Generic Attribute"},
-
-        // Audio/Video UUIDs
-        {"0000110a-0000-1000-8000-00805f9b34fb", "A2DP Source"},
-        {"0000110b-0000-1000-8000-00805f9b34fb", "A2DP Sink"},
-        {"0000110c-0000-1000-8000-00805f9b34fb", "AVRCP Target"},
-        {"0000110d-0000-1000-8000-00805f9b34fb", "Advanced Audio"},
-        {"0000110e-0000-1000-8000-00805f9b34fb", "AVRCP Controller"},
-        {"0000110f-0000-1000-8000-00805f9b34fb", "AVRCP"},
-
-        // Telephony UUIDs
-        {"0000111e-0000-1000-8000-00805f9b34fb", "Handsfree"},
-        {"0000111f-0000-1000-8000-00805f9b34fb", "Handsfree Audio Gateway"},
-        {"00001108-0000-1000-8000-00805f9b34fb", "Headset"},
-        {"00001112-0000-1000-8000-00805f9b34fb", "Headset Audio Gateway"},
-        {"00001131-0000-1000-8000-00805f9b34fb", "Headset HS"},
-
-        // HID UUIDs
-        {"00001124-0000-1000-8000-00805f9b34fb", "HID"},
-        {"00001200-0000-1000-8000-00805f9b34fb", "PnP Information"},
-
-        // Serial Port UUIDs
-        {"00001101-0000-1000-8000-00805f9b34fb", "Serial Port"},
-
-        // Object Push UUIDs
-        {"00001105-0000-1000-8000-00805f9b34fb", "OBEX Object Push"},
-        {"00001106-0000-1000-8000-00805f9b34fb", "OBEX File Transfer"},
-
-        // Network UUIDs
-        {"00001115-0000-1000-8000-00805f9b34fb", "PANU"},
-        {"00001116-0000-1000-8000-00805f9b34fb", "NAP"},
-        {"00001117-0000-1000-8000-00805f9b34fb", "GN"},
-
-        // Other common UUIDs
-        {"0000112d-0000-1000-8000-00805f9b34fb", "SIM Access"},
-        {"0000112f-0000-1000-8000-00805f9b34fb", "Phonebook Access PCE"},
-        {"00001130-0000-1000-8000-00805f9b34fb", "Phonebook Access PSE"},
-        {"00001132-0000-1000-8000-00805f9b34fb", "Message Access Server"},
-        {"00001133-0000-1000-8000-00805f9b34fb", "Message Notification Server"},
-        {"00001134-0000-1000-8000-00805f9b34fb", "Message Access Profile"},
-    };
-
-    auto it = uuid_map.find(uuid);
-    if (it != uuid_map.end())
-    {
-        return it->second + " (" + uuid + ")";
-    }
-
-    return uuid;
-}
-
-void BluetoothAgent::set_pairing_request_callback(PairingRequestCallback callback)
-{
-    std::lock_guard<std::mutex> lock(callback_mutex_);
-    pairing_request_callback_ = callback;
-    AUDIO_INFO_PRINT("Pairing request callback registered");
-}
-
-void BluetoothAgent::notify_pairing_request(const PairingRequest &request)
-{
-    std::lock_guard<std::mutex> lock(callback_mutex_);
-    if (pairing_request_callback_)
-    {
-        try
-        {
-            pairing_request_callback_(request);
-        }
-        catch (const std::exception &e)
-        {
-            AUDIO_ERROR_PRINT("Exception in pairing request callback: %s", e.what());
-        }
-        catch (...)
-        {
-            AUDIO_ERROR_PRINT("Unknown exception in pairing request callback");
-        }
-    }
-}
-
-void BluetoothAgent::set_confirmation_result(bool accept)
-{
-    std::lock_guard<std::mutex> lock(confirmation_mutex_);
-    if (confirmation_promise_)
-    {
-        confirmation_promise_->set_value(accept);
-        confirmation_set_ = true;
-        confirmation_cv_.notify_one();
-        AUDIO_INFO_PRINT("Confirmation result set: %s", accept ? "accepted" : "rejected");
-    }
-}
-
-void BluetoothAgent::set_passkey_result(bool accept, uint32_t passkey)
-{
-    std::lock_guard<std::mutex> lock(confirmation_mutex_);
-    if (passkey_promise_)
-    {
-        passkey_promise_->set_value(std::make_pair(accept, passkey));
-        passkey_set_ = true;
-        confirmation_cv_.notify_one();
-        AUDIO_INFO_PRINT("Passkey result set: %s, passkey: %u", accept ? "accepted" : "rejected", passkey);
-    }
-}
-
-void BluetoothAgent::set_pincode_result(bool accept, const std::string &pincode)
-{
-    std::lock_guard<std::mutex> lock(confirmation_mutex_);
-    if (pincode_promise_)
-    {
-        pincode_promise_->set_value(std::make_pair(accept, pincode));
-        pincode_set_ = true;
-        confirmation_cv_.notify_one();
-        AUDIO_INFO_PRINT("Pincode result set: %s, pincode: %s", accept ? "accepted" : "rejected", pincode.c_str());
-    }
-}
-
-bool BluetoothAgent::wait_for_confirmation(int timeout_seconds)
-{
-    std::unique_lock<std::mutex> lock(confirmation_mutex_);
-
-    auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
-
-    if (!confirmation_cv_.wait_until(lock, timeout, [this] { return confirmation_set_; }))
-    {
-        AUDIO_INFO_PRINT("Confirmation timeout, rejecting by default");
-        return false;
-    }
-
-    return true;
-}
-
-bool BluetoothAgent::wait_for_passkey(uint32_t &passkey, int timeout_seconds)
-{
-    std::unique_lock<std::mutex> lock(confirmation_mutex_);
-
-    auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
-
-    if (!confirmation_cv_.wait_until(lock, timeout, [this] { return passkey_set_; }))
-    {
-        AUDIO_INFO_PRINT("Passkey timeout, rejecting by default");
-        return false;
-    }
-
-    return true;
-}
-
-bool BluetoothAgent::wait_for_pincode(std::string &pincode, int timeout_seconds)
-{
-    std::unique_lock<std::mutex> lock(confirmation_mutex_);
-
-    auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_seconds);
-
-    if (!confirmation_cv_.wait_until(lock, timeout, [this] { return pincode_set_; }))
-    {
-        AUDIO_INFO_PRINT("Pincode timeout, rejecting by default");
-        return false;
-    }
-
-    return true;
-}
 void BluetoothAgent::load_existing_devices()
 {
     AUDIO_INFO_PRINT("Loading existing devices...");
