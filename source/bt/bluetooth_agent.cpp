@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <map>
 #include <sstream>
 
 static DBusHandlerResult signal_filter_callback(DBusConnection *, DBusMessage *msg, void *user_data)
@@ -278,6 +279,11 @@ bool BluetoothAgent::pair(const std::string &device_path)
         {
             AUDIO_INFO_PRINT("Device paired: %s", device_path.c_str());
             success = true;
+
+            if (!set_trusted(device_path, true))
+            {
+                AUDIO_ERROR_PRINT("Failed to set device as trusted after pairing");
+            }
         }
         dbus_message_unref(reply);
     }
@@ -292,6 +298,7 @@ bool BluetoothAgent::pair(const std::string &device_path)
 bool BluetoothAgent::connect(const std::string &device_path)
 {
     AUDIO_INFO_PRINT("Connecting to device: %s", device_path.c_str());
+    set_trusted(device_path, true);
     DBusMessage *reply = call_method(device_path.c_str(), DEVICE_INTERFACE, "Connect", DBUS_TYPE_INVALID);
     if (reply)
     {
@@ -359,26 +366,40 @@ bool BluetoothAgent::set_device_property(const char *device_path, const char *pr
 bool BluetoothAgent::remove(const std::string &device_path)
 {
     AUDIO_INFO_PRINT("Removing device: %s", device_path.c_str());
-    
-    set_device_property(device_path.c_str(), "Trusted", false);
-    
+
+    // 移除前先取消信任
+    set_trusted(device_path, false);
+
     DBusMessage *reply = call_method(device_path.c_str(), DEVICE_INTERFACE, "Disconnect", DBUS_TYPE_INVALID);
     if (reply)
     {
         dbus_message_unref(reply);
     }
-    
+
     const char *path = device_path.c_str();
-    reply = call_method(adapter_path_.c_str(), ADAPTER_INTERFACE, "RemoveDevice", DBUS_TYPE_OBJECT_PATH,
-                       &path, DBUS_TYPE_INVALID);
+    reply = call_method(adapter_path_.c_str(), ADAPTER_INTERFACE, "RemoveDevice", DBUS_TYPE_OBJECT_PATH, &path,
+                        DBUS_TYPE_INVALID);
     if (reply)
     {
         dbus_message_unref(reply);
         AUDIO_INFO_PRINT("Device removed: %s", device_path.c_str());
         return true;
     }
-    
+
     AUDIO_ERROR_PRINT("Failed to remove device: %s", device_path.c_str());
+    return false;
+}
+
+bool BluetoothAgent::set_trusted(const std::string &device_path, bool trusted)
+{
+    AUDIO_INFO_PRINT("Setting device trusted to %s: %s", trusted ? "true" : "false", device_path.c_str());
+
+    if (set_device_property(device_path.c_str(), "Trusted", trusted))
+    {
+        AUDIO_INFO_PRINT("Device trusted set to %s: %s", trusted ? "true" : "false", device_path.c_str());
+        return true;
+    }
+    AUDIO_ERROR_PRINT("Failed to set device trusted: %s", device_path.c_str());
     return false;
 }
 
@@ -1021,6 +1042,62 @@ void BluetoothAgent::load_existing_devices()
 
     dbus_message_unref(reply);
     AUDIO_INFO_PRINT("Loaded %d existing devices", device_count);
+}
+
+std::string BluetoothDevice::translate_uuid(const std::string &uuid)
+{
+    static const std::map<std::string, std::string> uuid_map = {
+        // Generic UUIDs
+        {"00001800-0000-1000-8000-00805f9b34fb", "Generic Access"},
+        {"00001801-0000-1000-8000-00805f9b34fb", "Generic Attribute"},
+
+        // Audio/Video UUIDs
+        {"0000110a-0000-1000-8000-00805f9b34fb", "A2DP Source"},
+        {"0000110b-0000-1000-8000-00805f9b34fb", "A2DP Sink"},
+        {"0000110c-0000-1000-8000-00805f9b34fb", "AVRCP Target"},
+        {"0000110d-0000-1000-8000-00805f9b34fb", "Advanced Audio"},
+        {"0000110e-0000-1000-8000-00805f9b34fb", "AVRCP Controller"},
+        {"0000110f-0000-1000-8000-00805f9b34fb", "AVRCP"},
+
+        // Telephony UUIDs
+        {"0000111e-0000-1000-8000-00805f9b34fb", "Handsfree"},
+        {"0000111f-0000-1000-8000-00805f9b34fb", "Handsfree Audio Gateway"},
+        {"00001108-0000-1000-8000-00805f9b34fb", "Headset"},
+        {"00001112-0000-1000-8000-00805f9b34fb", "Headset Audio Gateway"},
+        {"00001131-0000-1000-8000-00805f9b34fb", "Headset HS"},
+
+        // HID UUIDs
+        {"00001124-0000-1000-8000-00805f9b34fb", "HID"},
+        {"00001200-0000-1000-8000-00805f9b34fb", "PnP Information"},
+
+        // Serial Port UUIDs
+        {"00001101-0000-1000-8000-00805f9b34fb", "Serial Port"},
+
+        // Object Push UUIDs
+        {"00001105-0000-1000-8000-00805f9b34fb", "OBEX Object Push"},
+        {"00001106-0000-1000-8000-00805f9b34fb", "OBEX File Transfer"},
+
+        // Network UUIDs
+        {"00001115-0000-1000-8000-00805f9b34fb", "PANU"},
+        {"00001116-0000-1000-8000-00805f9b34fb", "NAP"},
+        {"00001117-0000-1000-8000-00805f9b34fb", "GN"},
+
+        // Other common UUIDs
+        {"0000112d-0000-1000-8000-00805f9b34fb", "SIM Access"},
+        {"0000112f-0000-1000-8000-00805f9b34fb", "Phonebook Access PCE"},
+        {"00001130-0000-1000-8000-00805f9b34fb", "Phonebook Access PSE"},
+        {"00001132-0000-1000-8000-00805f9b34fb", "Message Access Server"},
+        {"00001133-0000-1000-8000-00805f9b34fb", "Message Notification Server"},
+        {"00001134-0000-1000-8000-00805f9b34fb", "Message Access Profile"},
+    };
+
+    auto it = uuid_map.find(uuid);
+    if (it != uuid_map.end())
+    {
+        return it->second + " (" + uuid + ")";
+    }
+
+    return uuid;
 }
 
 #endif

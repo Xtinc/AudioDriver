@@ -245,7 +245,7 @@ class BluetoothController
             std::cout << "  UUIDs:\n";
             for (const auto &uuid : dev.uuids)
             {
-                std::cout << "    " << uuid << "\n";
+                std::cout << "    " << BluetoothDevice::translate_uuid(uuid) << "\n";
             }
         }
         std::cout << std::endl;

@@ -25,6 +25,7 @@ struct BluetoothDevice
     bool trusted;
     bool blocked;
     std::vector<std::string> uuids;
+    static std::string translate_uuid(const std::string &uuid);
 };
 
 class BluetoothAgent
@@ -49,6 +50,7 @@ class BluetoothAgent
     bool connect(const std::string &device_path);
     bool disconnect(const std::string &device_path);
     bool remove(const std::string &device_path);
+    bool set_trusted(const std::string &device_path, bool trusted = true);
 
     std::vector<BluetoothDevice> list() const;
 
