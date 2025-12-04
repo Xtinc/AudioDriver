@@ -18,7 +18,7 @@
 class BluetoothController
 {
   public:
-    BluetoothController() : running_(false)
+    BluetoothController() : running_(false), has_pending_request_(false)
     {
         commands_["help"] = [this](const std::vector<std::string> &args) { return cmd_help(args); };
         commands_["list"] = [this](const std::vector<std::string> &args) { return cmd_list(args); };
@@ -31,6 +31,8 @@ class BluetoothController
         commands_["power"] = [this](const std::vector<std::string> &args) { return cmd_power(args); };
         commands_["pairable"] = [this](const std::vector<std::string> &args) { return cmd_pairable(args); };
         commands_["discoverable"] = [this](const std::vector<std::string> &args) { return cmd_discoverable(args); };
+        commands_["accept"] = [this](const std::vector<std::string> &args) { return cmd_accept(args); };
+        commands_["reject"] = [this](const std::vector<std::string> &args) { return cmd_reject(args); };
         commands_["quit"] = [this](const std::vector<std::string> &args) { return cmd_quit(args); };
         commands_["exit"] = [this](const std::vector<std::string> &args) { return cmd_quit(args); };
     }
@@ -49,6 +51,10 @@ class BluetoothController
             std::cerr << "Failed to initialize Bluetooth agent" << std::endl;
             return false;
         }
+
+        // 注册配对请求回调
+        agent_->set_pairing_request_callback(
+            [this](const PairingRequest &request) { handle_pairing_request(request); });
 
         agent_->start_dbus_loop();
         running_ = true;
@@ -145,6 +151,171 @@ class BluetoothController
         return (it != devices.end()) ? it->path : "";
     }
 
+    void handle_pairing_request(const PairingRequest &request)
+    {
+        std::lock_guard<std::mutex> lock(request_mutex_);
+
+        std::cout << "\n\n========================================" << std::endl;
+        std::cout << "PAIRING REQUEST" << std::endl;
+        std::cout << "========================================" << std::endl;
+        std::cout << "Device: " << request.device_name << " (" << request.device_address << ")" << std::endl;
+
+        switch (request.type)
+        {
+        case PairingRequestType::PIN_CODE:
+            std::cout << "Type: Request PIN Code" << std::endl;
+            std::cout << "\nPlease enter PIN code, then type:" << std::endl;
+            std::cout << "  accept <pincode>  - Accept with PIN code" << std::endl;
+            std::cout << "  reject            - Reject pairing" << std::endl;
+            pending_request_ = request;
+            has_pending_request_ = true;
+            break;
+
+        case PairingRequestType::PASSKEY:
+            std::cout << "Type: Request Passkey" << std::endl;
+            std::cout << "\nPlease enter 6-digit passkey (000000-999999), then type:" << std::endl;
+            std::cout << "  accept <passkey>  - Accept with passkey" << std::endl;
+            std::cout << "  reject            - Reject pairing" << std::endl;
+            pending_request_ = request;
+            has_pending_request_ = true;
+            break;
+
+        case PairingRequestType::CONFIRMATION:
+            std::cout << "Type: Confirm Pairing" << std::endl;
+            std::cout << "Passkey: " << std::setfill('0') << std::setw(6) << request.passkey << std::endl;
+            std::cout << "\nPlease verify the passkey matches on both devices, then type:" << std::endl;
+            std::cout << "  accept  - Confirm pairing" << std::endl;
+            std::cout << "  reject  - Reject pairing" << std::endl;
+            pending_request_ = request;
+            has_pending_request_ = true;
+            break;
+
+        case PairingRequestType::DISPLAY_PASSKEY:
+            std::cout << "Type: Display Passkey" << std::endl;
+            std::cout << "Passkey: " << std::setfill('0') << std::setw(6) << request.passkey << std::endl;
+            std::cout << "\nPlease enter this passkey on the other device." << std::endl;
+            break;
+
+        case PairingRequestType::DISPLAY_PINCODE:
+            std::cout << "Type: Display PIN Code" << std::endl;
+            std::cout << "\nPairing in progress..." << std::endl;
+            break;
+
+        case PairingRequestType::AUTHORIZATION:
+            std::cout << "Type: Authorization Request" << std::endl;
+            std::cout << "\nDevice is requesting authorization." << std::endl;
+            break;
+        }
+
+        std::cout << "========================================\n" << std::endl;
+        print_prompt();
+    }
+
+    bool cmd_accept(const std::vector<std::string> &args)
+    {
+        std::lock_guard<std::mutex> lock(request_mutex_);
+
+        if (!has_pending_request_)
+        {
+            std::cout << "No pending pairing request" << std::endl;
+            return false;
+        }
+
+        bool success = false;
+
+        switch (pending_request_.type)
+        {
+        case PairingRequestType::PIN_CODE:
+            if (args.size() < 2)
+            {
+                std::cout << "Usage: accept <pincode>" << std::endl;
+                return false;
+            }
+            agent_->set_pincode_result(true, args[1]);
+            std::cout << "PIN code sent: " << args[1] << std::endl;
+            success = true;
+            break;
+
+        case PairingRequestType::PASSKEY:
+            if (args.size() < 2)
+            {
+                std::cout << "Usage: accept <passkey>" << std::endl;
+                return false;
+            }
+            try
+            {
+                uint32_t passkey = std::stoul(args[1]);
+                if (passkey > 999999)
+                {
+                    std::cout << "Passkey must be between 000000 and 999999" << std::endl;
+                    return false;
+                }
+                agent_->set_passkey_result(true, passkey);
+                std::cout << "Passkey sent: " << std::setfill('0') << std::setw(6) << passkey << std::endl;
+                success = true;
+            }
+            catch (...)
+            {
+                std::cout << "Invalid passkey format" << std::endl;
+                return false;
+            }
+            break;
+
+        case PairingRequestType::CONFIRMATION:
+            agent_->set_confirmation_result(true);
+            std::cout << "Pairing confirmed" << std::endl;
+            success = true;
+            break;
+
+        default:
+            std::cout << "This request type does not require acceptance" << std::endl;
+            return false;
+        }
+
+        if (success)
+        {
+            has_pending_request_ = false;
+        }
+
+        return success;
+    }
+
+    bool cmd_reject(const std::vector<std::string> &args)
+    {
+        std::lock_guard<std::mutex> lock(request_mutex_);
+
+        if (!has_pending_request_)
+        {
+            std::cout << "No pending pairing request" << std::endl;
+            return false;
+        }
+
+        switch (pending_request_.type)
+        {
+        case PairingRequestType::PIN_CODE:
+            agent_->set_pincode_result(false, "");
+            std::cout << "PIN code request rejected" << std::endl;
+            break;
+
+        case PairingRequestType::PASSKEY:
+            agent_->set_passkey_result(false, 0);
+            std::cout << "Passkey request rejected" << std::endl;
+            break;
+
+        case PairingRequestType::CONFIRMATION:
+            agent_->set_confirmation_result(false);
+            std::cout << "Pairing confirmation rejected" << std::endl;
+            break;
+
+        default:
+            std::cout << "This request type cannot be rejected" << std::endl;
+            return false;
+        }
+
+        has_pending_request_ = false;
+        return true;
+    }
+
     // Command handlers
     bool cmd_help(const std::vector<std::string> &args)
     {
@@ -160,6 +331,8 @@ class BluetoothController
                   << "  power on|off            Set adapter power state\n"
                   << "  pairable on|off         Set adapter pairable state\n"
                   << "  discoverable on|off     Set adapter discoverable state\n"
+                  << "  accept [code]           Accept pairing request (with PIN/passkey if needed)\n"
+                  << "  reject                  Reject pairing request\n"
                   << "  quit|exit               Exit program\n"
                   << std::endl;
         return true;
@@ -308,7 +481,7 @@ class BluetoothController
         }
 
         std::cout << "Attempting to pair with " << args[1] << "..." << std::endl;
-        std::cout << "Pairing will be automatically confirmed" << std::endl;
+        std::cout << "Please respond to any pairing requests that appear." << std::endl;
 
         return agent_->pair(device_path);
     }
@@ -489,6 +662,11 @@ class BluetoothController
     std::unique_ptr<BluetoothAgent> agent_;
     bool running_;
     std::map<std::string, std::function<bool(const std::vector<std::string> &)>> commands_;
+
+    // 配对请求相关
+    std::mutex request_mutex_;
+    PairingRequest pending_request_;
+    bool has_pending_request_;
 };
 
 std::unique_ptr<BluetoothController> g_controller;
