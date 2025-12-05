@@ -620,11 +620,10 @@ void OAStream::reset_self()
 // IAStream
 IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs,
                    unsigned int _ch, bool auto_reset)
-    : token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(_ch), enable_reset(auto_reset),
-      spf_ch(_ch), imap(_ch == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP), usr_name(_name), ias_ready(false),
-      exec_timer(BG_SERVICE), exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE),
-      reset_strand(asio::make_strand(BG_SERVICE)), volume(50), muted(false),
-      usr_cb{nullptr, 0, UsrCallBackMode::PROCESSED, nullptr}, cb_timer(BG_SERVICE),
+    : token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(_ch), enable_reset(auto_reset), spf_ch(_ch),
+      imap(_ch == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP), usr_name(_name), ias_ready(false), exec_timer(BG_SERVICE),
+      exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE), reset_strand(asio::make_strand(BG_SERVICE)),
+      volume(50), muted(false), usr_cb{nullptr, 0, UsrCallBackMode::PROCESSED, nullptr}, cb_timer(BG_SERVICE),
       cb_strand(asio::make_strand(BG_SERVICE))
 {
     auto ret = create_device(_name);
@@ -642,10 +641,10 @@ IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
 
 IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs,
                    unsigned int dev_ch, AudioChannelMap _imap)
-    : token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(2), enable_reset(false),
-      spf_ch(dev_ch), imap(_imap), usr_name(_name), ias_ready(false), exec_timer(BG_SERVICE),
-      exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE), reset_strand(asio::make_strand(BG_SERVICE)),
-      volume(50), muted(false), usr_cb{nullptr, 0, UsrCallBackMode::PROCESSED, nullptr}, cb_timer(BG_SERVICE),
+    : token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(2), enable_reset(false), spf_ch(dev_ch), imap(_imap),
+      usr_name(_name), ias_ready(false), exec_timer(BG_SERVICE), exec_strand(asio::make_strand(BG_SERVICE)),
+      reset_timer(BG_SERVICE), reset_strand(asio::make_strand(BG_SERVICE)), volume(50), muted(false),
+      usr_cb{nullptr, 0, UsrCallBackMode::PROCESSED, nullptr}, cb_timer(BG_SERVICE),
       cb_strand(asio::make_strand(BG_SERVICE))
 {
     DBG_ASSERT_GE(dev_ch, 2);
@@ -768,7 +767,7 @@ RetCode IAStream::stop()
     return idevice->stop();
 }
 
-RetCode IAStream::initialize_network(const std::shared_ptr<NetWorker> &nw)
+RetCode IAStream::initialize_network(const std::shared_ptr<NetWorker> &nw, AudioCodecType codec)
 {
     if (!nw)
     {
@@ -776,7 +775,7 @@ RetCode IAStream::initialize_network(const std::shared_ptr<NetWorker> &nw)
     }
 
     networker = nw;
-    return nw->register_sender(token, ch, fs);
+    return nw->register_sender(token, ch, fs, codec);
 }
 
 RetCode IAStream::connect(const std::shared_ptr<OAStream> &oas)
@@ -1161,9 +1160,8 @@ RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared
         return {RetCode::FAILED, "Stream already exists"};
     }
 
-    auto *raw_sender =
-        new IAStream(static_cast<unsigned char>(token + preemptive), AudioDeviceName(name, cycles),
-                     enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2, false);
+    auto *raw_sender = new IAStream(static_cast<unsigned char>(token + preemptive), AudioDeviceName(name, cycles),
+                                    enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2, false);
 
     auto audio_sender = std::shared_ptr<IAStream>(raw_sender, [self = shared_from_this(), name](const IAStream *ptr) {
         self->preemptive.fetch_sub(1, std::memory_order_relaxed);
@@ -1231,80 +1229,4 @@ RetCode AudioPlayer::set_volume(unsigned int vol)
     }
 
     return RetCode::OK;
-}
-
-RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared_ptr<NetWorker> &networker,
-                          uint8_t remote_token, const std::string &remote_ip, uint16_t port)
-{
-    if (!networker)
-    {
-        return {RetCode::FAILED, "NetWorker not provided"};
-    }
-
-    if (remote_ip.empty())
-    {
-        return {RetCode::FAILED, "Remote IP not provided"};
-    }
-
-    if (preemptive > 5)
-    {
-        return {RetCode::FAILED, "Too many player streams"};
-    }
-
-    auto *raw_sender =
-        new IAStream(static_cast<unsigned char>(token + preemptive), AudioDeviceName(name, cycles),
-                     enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2, false);
-
-    auto audio_sender = std::shared_ptr<IAStream>(raw_sender, [self = shared_from_this(), name](const IAStream *ptr) {
-        self->preemptive.fetch_sub(1, std::memory_order_relaxed);
-        std::lock_guard<std::mutex> grd(self->mtx);
-        auto iter = self->sounds.find(name);
-        if (iter != self->sounds.cend())
-        {
-            self->sounds.erase(iter);
-        }
-
-        delete ptr;
-    });
-    preemptive.fetch_add(1, std::memory_order_relaxed);
-
-    auto init_result = audio_sender->initialize_network(networker);
-    if (!init_result)
-    {
-        AUDIO_ERROR_PRINT("Failed to initialize network for sender: %s", init_result.what());
-        return init_result;
-    }
-
-    auto add_result = networker->add_destination(audio_sender->token, remote_token, remote_ip, port);
-    if (!add_result)
-    {
-        AUDIO_ERROR_PRINT("Failed to add destination %s for token %u: %s", remote_ip.c_str(), remote_token,
-                          add_result.what());
-        return add_result;
-    }
-
-    {
-        std::lock_guard<std::mutex> grd(mtx);
-        if (sounds.find(name) != sounds.cend())
-        {
-            networker->del_destination(audio_sender->token, remote_token, remote_ip, port);
-            return {RetCode::FAILED, "Stream already exists"};
-        }
-        sounds.emplace(name, audio_sender);
-    }
-
-    audio_sender->set_volume(volume.load());
-
-    auto start_result = audio_sender->start();
-    if (!start_result)
-    {
-        std::lock_guard<std::mutex> grd(mtx);
-        networker->del_destination(audio_sender->token, remote_token, remote_ip, port);
-        AUDIO_ERROR_PRINT("Failed to start streaming: %s", start_result.what());
-        return start_result;
-    }
-
-    AUDIO_INFO_PRINT("Started remote playback of %s to %s for token %u", name.c_str(), remote_ip.c_str(), remote_token);
-
-    return {RetCode::OK, "Remote playback started"};
 }

@@ -42,8 +42,16 @@ struct SourceUUID
 };
 
 constexpr uint8_t NET_AUDIO_MAGIC = 0xBD;
+constexpr uint8_t NET_AUDIO_MAGIC_OPUS = 0xBD;
+constexpr uint8_t NET_AUDIO_MAGIC_PCM = 0xBE;
 constexpr unsigned int NETWORK_MAX_FRAMES = enum2val(AudioPeriodSize::INR_40MS) * enum2val(AudioBandWidth::Full) / 1000;
 constexpr unsigned int NETWORK_MAX_BUFFER_SIZE = NETWORK_MAX_FRAMES * 4 + 320;
+
+enum class AudioCodecType : uint8_t
+{
+    OPUS = 0,
+    PCM = 1
+};
 
 struct NetStatInfos
 {
@@ -124,7 +132,7 @@ struct KFifo
 
 struct DataPacket
 {
-    uint8_t magic_num;    // 1 byte  - offset 0
+    uint8_t magic_num;    // 1 byte  - offset 0  (0xBD=OPUS, 0xBE=PCM)
     uint8_t sender_id;    // 1 byte  - offset 1
     uint8_t receiver_id;  // 1 byte  - offset 2
     uint8_t channels;     // 1 byte  - offset 3
@@ -165,12 +173,21 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
         unsigned int channels;
         unsigned int sample_rate;
         unsigned int isequence;
+        AudioCodecType codec_type;
 
-        SenderContext(unsigned int ch, unsigned int sr) : encoder(nullptr), channels(ch), sample_rate(sr), isequence(0)
+        SenderContext(unsigned int ch, unsigned int sr, AudioCodecType codec = AudioCodecType::OPUS)
+            : encoder(nullptr), channels(ch), sample_rate(sr), isequence(0), codec_type(codec)
         {
-            int error;
-            encoder = opus_encoder_create(sr, ch, OPUS_APPLICATION_AUDIO, &error);
-            if (error == OPUS_OK && encoder)
+            if (codec == AudioCodecType::OPUS)
+            {
+                int error;
+                encoder = opus_encoder_create(sr, ch, OPUS_APPLICATION_AUDIO, &error);
+                if (error == OPUS_OK && encoder)
+                {
+                    encode_buffer = std::make_unique<uint8_t[]>(NETWORK_MAX_BUFFER_SIZE);
+                }
+            }
+            else
             {
                 encode_buffer = std::make_unique<uint8_t[]>(NETWORK_MAX_BUFFER_SIZE);
             }
@@ -190,7 +207,7 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
         SenderContext(SenderContext &&other) noexcept
             : encoder(other.encoder), encode_buffer(std::move(other.encode_buffer)),
               destinations(std::move(other.destinations)), channels(other.channels), sample_rate(other.sample_rate),
-              isequence(other.isequence)
+              isequence(other.isequence), codec_type(other.codec_type)
         {
             other.encoder = nullptr;
         }
@@ -205,6 +222,7 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
                 channels = other.channels;
                 sample_rate = other.sample_rate;
                 isequence = other.isequence;
+                codec_type = other.codec_type;
 
                 other.encoder = nullptr;
             }
@@ -269,7 +287,8 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
 
     RetCode start();
     RetCode stop();
-    RetCode register_sender(uint8_t sender_id, unsigned int channels, unsigned int sample_rate);
+    RetCode register_sender(uint8_t sender_id, unsigned int channels, unsigned int sample_rate,
+                            AudioCodecType codec = AudioCodecType::OPUS);
     RetCode unregister_sender(uint8_t sender_id);
     RetCode send_audio(uint8_t sender_id, const int16_t *data, unsigned int frames);
 
@@ -289,7 +308,8 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
                                    SourceUUID source_id);
 
     void send_data_packet(const Destination &dest, uint8_t sender_id, uint8_t receiver_id, uint32_t sequence,
-                          uint64_t timestamp, const uint8_t *data, size_t size, uint8_t channels, uint32_t sample_rate);
+                          uint64_t timestamp, const uint8_t *data, size_t size, uint8_t channels, uint32_t sample_rate,
+                          AudioCodecType codec_type);
 
   private:
     int retry_count;

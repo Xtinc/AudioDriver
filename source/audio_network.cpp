@@ -390,7 +390,8 @@ RetCode NetWorker::unregister_receiver(uint8_t token)
     return {RetCode::OK, "Receiver unregistered"};
 }
 
-RetCode NetWorker::register_sender(uint8_t sender_id, unsigned int channels, unsigned int sample_rate)
+RetCode NetWorker::register_sender(uint8_t sender_id, unsigned int channels, unsigned int sample_rate,
+                                   AudioCodecType codec)
 {
     if (!send_socket || !send_socket->is_open())
     {
@@ -403,12 +404,21 @@ RetCode NetWorker::register_sender(uint8_t sender_id, unsigned int channels, uns
         return {RetCode::FAILED, "Sender ID already exists"};
     }
 
-    auto result = senders.emplace(sender_id, SenderContext(channels, sample_rate));
-    if (!result.second || !result.first->second.encoder)
+    auto result = senders.emplace(sender_id, SenderContext(channels, sample_rate, codec));
+    if (!result.second)
+    {
+        senders.erase(sender_id);
+        return {RetCode::FAILED, "Failed to create sender context"};
+    }
+
+    if (codec == AudioCodecType::OPUS && !result.first->second.encoder)
     {
         senders.erase(sender_id);
         return {RetCode::FAILED, "Failed to create Opus encoder"};
     }
+
+    AUDIO_INFO_PRINT("Registered sender %u with codec type: %s", sender_id,
+                     codec == AudioCodecType::OPUS ? "OPUS" : "PCM");
 
     return {RetCode::OK, "Sender registered"};
 }
@@ -519,17 +529,41 @@ RetCode NetWorker::send_audio(uint8_t sender_id, const int16_t *data, unsigned i
     }
 
     auto &context = it->second;
-    if (!context.encoder || !context.encode_buffer)
+    if (!context.encode_buffer)
     {
-        return {RetCode::FAILED, "Encoder not available"};
+        return {RetCode::FAILED, "Buffer not available"};
     }
 
-    // Encode using raw Opus API
-    int encoded_size = opus_encode(context.encoder, data, frames, context.encode_buffer.get(), NETWORK_MAX_BUFFER_SIZE);
-    if (encoded_size < 0)
+    const uint8_t *payload_data = nullptr;
+    size_t payload_size = 0;
+
+    if (context.codec_type == AudioCodecType::OPUS)
     {
-        AUDIO_ERROR_PRINT("Opus encoding failed: %s", opus_strerror(encoded_size));
-        return {RetCode::EPARAM, "Failed to encode audio data"};
+        if (!context.encoder)
+        {
+            return {RetCode::FAILED, "Encoder not available"};
+        }
+
+        int encoded_size =
+            opus_encode(context.encoder, data, frames, context.encode_buffer.get(), NETWORK_MAX_BUFFER_SIZE);
+        if (encoded_size < 0)
+        {
+            AUDIO_ERROR_PRINT("Opus encoding failed: %s", opus_strerror(encoded_size));
+            return {RetCode::EPARAM, "Failed to encode audio data"};
+        }
+        payload_data = context.encode_buffer.get();
+        payload_size = static_cast<size_t>(encoded_size);
+    }
+    else // PCM
+    {
+        size_t pcm_size = frames * context.channels * sizeof(int16_t);
+        if (pcm_size > NETWORK_MAX_BUFFER_SIZE)
+        {
+            return {RetCode::FAILED, "PCM data too large"};
+        }
+        std::memcpy(context.encode_buffer.get(), data, pcm_size);
+        payload_data = context.encode_buffer.get();
+        payload_size = pcm_size;
     }
 
     uint32_t sequence = context.isequence++;
@@ -540,9 +574,8 @@ RetCode NetWorker::send_audio(uint8_t sender_id, const int16_t *data, unsigned i
     // Send data packets to all destinations
     for (const auto &dest : context.destinations)
     {
-        send_data_packet(dest, sender_id, dest.receiver_token, sequence, timestamp, context.encode_buffer.get(),
-                         static_cast<size_t>(encoded_size), static_cast<uint8_t>(context.channels),
-                         context.sample_rate);
+        send_data_packet(dest, sender_id, dest.receiver_token, sequence, timestamp, payload_data, payload_size,
+                         static_cast<uint8_t>(context.channels), context.sample_rate, context.codec_type);
     }
 
     return {RetCode::OK, "Data sent"};
@@ -572,9 +605,9 @@ void NetWorker::handle_receive(const asio::error_code &error, std::size_t bytes_
     }
 
     auto magic_num = static_cast<uint8_t>(receive_buffer.get()[0]);
-    if (bytes_transferred >= sizeof(DataPacket) && magic_num == NET_AUDIO_MAGIC)
+    if (bytes_transferred >= sizeof(DataPacket) &&
+        (magic_num == NET_AUDIO_MAGIC_OPUS || magic_num == NET_AUDIO_MAGIC_PCM))
     {
-
         auto data_header = reinterpret_cast<const DataPacket *>(receive_buffer.get());
         const auto *payload = reinterpret_cast<const uint8_t *>(receive_buffer.get() + sizeof(DataPacket));
         size_t payload_size = bytes_transferred - sizeof(DataPacket);
@@ -630,6 +663,7 @@ void NetWorker::process_and_deliver_audio(const DataPacket *header, const uint8_
     auto sample_rate = header->sample_rate;
     auto sequence = header->sequence;
     auto timestamp = header->timestamp;
+    auto codec_type = (header->magic_num == NET_AUDIO_MAGIC_PCM) ? AudioCodecType::PCM : AudioCodecType::OPUS;
 
     auto &decoder_context = get_decoder(source_id, channels, sample_rate);
     NetStatInfos stats{};
@@ -641,27 +675,38 @@ void NetWorker::process_and_deliver_audio(const DataPacket *header, const uint8_
                          stats.average_jitter, stats.packets_received, stats.packets_lost, stats.packets_out_of_order);
     }
 
-    if (!decoder_context.decoder || !decoder_context.decode_buffer)
+    int decoded_frames = 0;
+    const int16_t *audio_data = nullptr;
+
+    if (codec_type == AudioCodecType::OPUS)
     {
-        AUDIO_ERROR_PRINT("Decoder not available for sender %u (session 0x%08X|0x%08X)", source_id.sender_token,
-                          source_id.sender_ip, source_id.gateway_ip);
-        return;
-    }
-    int decoded_frames = opus_decode(decoder_context.decoder, opus_data, static_cast<opus_int32>(opus_size),
+        if (!decoder_context.decoder || !decoder_context.decode_buffer)
+        {
+            AUDIO_ERROR_PRINT("Decoder not available for sender %u (session 0x%08X|0x%08X)", source_id.sender_token,
+                              source_id.sender_ip, source_id.gateway_ip);
+            return;
+        }
+        decoded_frames = opus_decode(decoder_context.decoder, opus_data, static_cast<opus_int32>(opus_size),
                                      decoder_context.decode_buffer.get(), NETWORK_MAX_FRAMES, 0);
-    if (decoded_frames < 0)
+        if (decoded_frames < 0)
+        {
+            AUDIO_ERROR_PRINT("Failed to decode Opus data from sender %u (session 0x%08X|0x%08X): %s",
+                              source_id.sender_token, source_id.sender_ip, source_id.gateway_ip,
+                              opus_strerror(decoded_frames));
+            return;
+        }
+        audio_data = decoder_context.decode_buffer.get();
+    }
+    else // PCM
     {
-        AUDIO_ERROR_PRINT("Failed to decode Opus data from sender %u (session 0x%08X|0x%08X): %s",
-                          source_id.sender_token, source_id.sender_ip, source_id.gateway_ip,
-                          opus_strerror(decoded_frames));
-        return;
+        decoded_frames = static_cast<int>(opus_size / (channels * sizeof(int16_t)));
+        audio_data = reinterpret_cast<const int16_t *>(opus_data);
     }
 
     auto receiver_it = receivers.find(receiver_id);
     if (receiver_it != receivers.end())
     {
-        receiver_it->second(channels, static_cast<unsigned int>(decoded_frames), sample_rate,
-                            decoder_context.decode_buffer.get(), source_id);
+        receiver_it->second(channels, static_cast<unsigned int>(decoded_frames), sample_rate, audio_data, source_id);
     }
     else
     {
@@ -671,7 +716,7 @@ void NetWorker::process_and_deliver_audio(const DataPacket *header, const uint8_
 
 void NetWorker::send_data_packet(const Destination &dest, uint8_t sender_id, uint8_t receiver_id, uint32_t sequence,
                                  uint64_t timestamp, const uint8_t *data, size_t size, uint8_t channels,
-                                 uint32_t sample_rate)
+                                 uint32_t sample_rate, AudioCodecType codec_type)
 {
     if (!running || !data || size == 0)
     {
@@ -679,7 +724,7 @@ void NetWorker::send_data_packet(const Destination &dest, uint8_t sender_id, uin
     }
 
     DataPacket header{};
-    header.magic_num = NET_AUDIO_MAGIC;
+    header.magic_num = (codec_type == AudioCodecType::PCM) ? NET_AUDIO_MAGIC_PCM : NET_AUDIO_MAGIC_OPUS;
     header.sender_id = sender_id;
     header.receiver_id = receiver_id;
     header.channels = channels;

@@ -246,9 +246,11 @@ enum class AudioPeriodSize : unsigned int
  */
 enum class StreamFlags : unsigned int
 {
-    None = 0x00,    /**< No special options */
-    Network = 0x01, /**< Enable network functionality */
-    Reset = 0x02    /**< Enable auto reset */
+    None = 0x00,      /**< No special options */
+    Network = 0x01,   /**< Enable network functionality */
+    Reset = 0x02,     /**< Enable auto reset */
+    CodecOPUS = 0x04, /**< Use OPUS codec for network transmission (default) */
+    CodecPCM = 0x08   /**< Use PCM codec for network transmission (lossless) */
 };
 
 /**
@@ -709,14 +711,11 @@ class AudioCenter
      * @brief Plays an audio file through an output stream
      *
      * @param name Path to the audio file
-     * @param cycles Number of times to play the file (0 = infinite)
+     * @param cycles Number of times to play the file
      * @param otoken Output token
-     * @param ip IP address for network playback (empty string for local)
-     * @param port Network port to use
      * @return RetCode indicating success or failure
      */
-    RetCode play(const std::string &name, int cycles, OToken otoken, const std::string &ip = "",
-                 unsigned short port = NETWORK_AUDIO_TRANS_PORT);
+    RetCode play(const std::string &name, int cycles, OToken otoken);
 
     /**
      * @brief Stops playing an audio file

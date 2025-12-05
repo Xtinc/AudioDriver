@@ -67,13 +67,21 @@ RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBand
 
     if (enable_network && net_mgr)
     {
-        auto ret = ias_map[token.tok]->initialize_network(net_mgr);
+        AudioCodecType codec = AudioCodecType::PCM;
+
+        if (has_flag(flags, StreamFlags::CodecOPUS))
+        {
+            codec = AudioCodecType::OPUS;
+        }
+
+        auto ret = ias_map[token.tok]->initialize_network(net_mgr, codec);
         if (!ret)
         {
             AUDIO_ERROR_PRINT("Failed to initialize network for input stream %u: %s", token.tok, ret.what());
             return ret;
         }
-        AUDIO_DEBUG_PRINT("Network initialized for input stream %u", token.tok);
+        AUDIO_INFO_PRINT("Network initialized for input stream %u with codec: %s", token.tok,
+                         codec == AudioCodecType::OPUS ? "OPUS" : "PCM");
     }
 
     return RetCode::OK;
@@ -135,13 +143,25 @@ RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBand
 
     if (enable_network && net_mgr)
     {
-        auto ret = ias_map[token.tok]->initialize_network(net_mgr);
+        AudioCodecType codec = AudioCodecType::PCM;
+
+        if (has_flag(flags, StreamFlags::CodecPCM))
+        {
+            codec = AudioCodecType::PCM;
+        }
+        else if (has_flag(flags, StreamFlags::CodecOPUS))
+        {
+            codec = AudioCodecType::OPUS;
+        }
+
+        auto ret = ias_map[token.tok]->initialize_network(net_mgr, codec);
         if (!ret)
         {
             AUDIO_ERROR_PRINT("Failed to initialize network for input stream %u: %s", token.tok, ret.what());
             return ret;
         }
-        AUDIO_DEBUG_PRINT("Network initialized for input stream %u", token.tok);
+        AUDIO_INFO_PRINT("Network initialized for input stream %u with codec: %s", token.tok,
+                         codec == AudioCodecType::OPUS ? "OPUS" : "PCM");
     }
 
     return RetCode::OK;
@@ -299,7 +319,7 @@ RetCode AudioCenter::create(IToken itoken, OToken otoken, StreamFlags flags)
         AUDIO_ERROR_PRINT("Output stream %u not available", otoken.tok);
         return RetCode::EPARAM;
     }
-    
+
     if (ias_map.find(itoken.tok) != ias_map.end())
     {
         AUDIO_ERROR_PRINT("Input token already exists: %u", itoken.tok);
@@ -330,7 +350,7 @@ RetCode AudioCenter::create(IToken itoken, OToken otoken, StreamFlags flags)
 
         if (has_flag(flags, StreamFlags::Network) && net_mgr)
         {
-            auto ret = new_stream->initialize_network(net_mgr);
+            auto ret = new_stream->initialize_network(net_mgr, AudioCodecType::OPUS);
             if (!ret)
             {
                 AUDIO_ERROR_PRINT("Failed to initialize network for input stream %u: %s", itoken.tok, ret.what());
@@ -383,7 +403,7 @@ RetCode AudioCenter::prepare(bool enable_usb_detection)
                                                enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2));
     if (net_mgr)
     {
-        ias_map[USR_DUMMY_IN.tok]->initialize_network(net_mgr);
+        ias_map[USR_DUMMY_IN.tok]->initialize_network(net_mgr, AudioCodecType::OPUS);
         oas_map[USR_DUMMY_OUT.tok]->initialize_network(net_mgr);
     }
 
@@ -834,8 +854,7 @@ RetCode AudioCenter::mute(IToken itoken, OToken otoken, bool enable, const std::
     return enable ? oas->second->mute(itoken.tok, ip) : oas->second->unmute(itoken.tok, ip);
 }
 
-RetCode AudioCenter::play(const std::string &name, int cycles, OToken otoken, const std::string &ip,
-                          unsigned short port)
+RetCode AudioCenter::play(const std::string &name, int cycles, OToken otoken)
 {
     if (center_state.load() != State::READY)
     {
@@ -847,24 +866,6 @@ RetCode AudioCenter::play(const std::string &name, int cycles, OToken otoken, co
     {
         AUDIO_ERROR_PRINT("Invalid remote token: %u", otoken.tok);
         return {RetCode::EPARAM, "Invalid remote token"};
-    }
-
-    if (!ip.empty())
-    {
-        if (!net_mgr)
-        {
-            AUDIO_ERROR_PRINT("Network manager not initialized");
-            return {RetCode::FAILED, "Network manager not initialized"};
-        }
-
-        AUDIO_INFO_PRINT("Try to play file %s -> %u from %s", name.c_str(), otoken.tok, ip.c_str());
-        auto ret = player->play(name, cycles, net_mgr, otoken.tok, ip, port);
-        if (!ret)
-        {
-            AUDIO_ERROR_PRINT("Failed to play file %s to %s for token %u: %s", name.c_str(), ip.c_str(), otoken.tok,
-                              ret.what());
-        }
-        return ret;
     }
 
     auto oas = oas_map.find(otoken.tok);
