@@ -2,8 +2,11 @@
 #include "audio_interface.h"
 #include "audio_monitor.h"
 #include "audio_network.h"
+#include "audio_remote_interface.h"
+#include "audio_rpc.h"
 #include "audio_stream.h"
 #include <iomanip>
+#include <sstream>
 
 // AudioCenter
 AudioCenter::AudioCenter(bool enable_network, const std::string &local_ip, unsigned short port)
@@ -20,12 +23,27 @@ AudioCenter::AudioCenter(bool enable_network, const std::string &local_ip, unsig
 
 AudioCenter::~AudioCenter()
 {
-    auto ret = stop();
-    if (!ret)
+    // Stop audio processing first
+    if (center_state.load() == State::READY)
     {
-        AUDIO_ERROR_PRINT("Failed to stop AudioCenter: %s", ret.what());
+        auto ret = stop();
+        if (!ret)
+        {
+            AUDIO_ERROR_PRINT("Failed to stop AudioCenter: %s", ret.what());
+        }
     }
 
+    // Disable RPC service
+    if (rpc_service)
+    {
+        auto ret = disable_rpc();
+        if (!ret)
+        {
+            AUDIO_ERROR_PRINT("Failed to disable RPC: %s", ret.what());
+        }
+    }
+
+    // Unregister monitor callback
     monitor->UnregisterCallback();
 }
 
@@ -922,4 +940,194 @@ RetCode AudioCenter::set_player_volume(unsigned int vol)
         AUDIO_ERROR_PRINT("Failed to set player volume: %s", ret.what());
     }
     return ret;
+}
+
+RetCode AudioCenter::enable_rpc(unsigned short rpc_port)
+{
+    if (rpc_service)
+    {
+        return {RetCode::NOACTION, "RPC service already enabled"};
+    }
+
+    try
+    {
+        rpc_service = std::make_shared<RPCService>(BG_SERVICE, rpc_port);
+        setup_rpc_handlers();
+        return rpc_service->start();
+    }
+    catch (const std::exception &e)
+    {
+        AUDIO_ERROR_PRINT("Failed to enable RPC service: %s", e.what());
+        rpc_service.reset();
+        return {RetCode::EXCEPTION, "Failed to enable RPC service"};
+    }
+}
+
+RetCode AudioCenter::disable_rpc()
+{
+    if (!rpc_service)
+    {
+        return {RetCode::NOACTION, "RPC service not enabled"};
+    }
+
+    auto ret = rpc_service->stop();
+    rpc_service.reset();
+    return ret;
+}
+
+void AudioCenter::setup_rpc_handlers()
+{
+    if (!rpc_service)
+    {
+        AUDIO_ERROR_PRINT("RPC service not enabled");
+        return;
+    }
+
+    rpc_service->register_handler(RPCCommand::CONNECT, [this](const std::vector<uint8_t> &payload) -> RetCode {
+        if (payload.size() < 4)
+        {
+            return RetCode::EPARAM;
+        }
+
+        uint8_t itoken = payload[0];
+        uint8_t otoken = payload[1];
+        uint16_t port;
+        std::memcpy(&port, &payload[2], sizeof(uint16_t));
+
+        std::string ip(payload.begin() + 4, payload.end());
+        return connect(IToken(itoken), OToken(otoken), ip, port);
+    });
+
+    rpc_service->register_handler(RPCCommand::DISCONNECT, [this](const std::vector<uint8_t> &payload) -> RetCode {
+        if (payload.size() < 4)
+        {
+            return RetCode::EPARAM;
+        }
+
+        uint8_t itoken = payload[0];
+        uint8_t otoken = payload[1];
+        uint16_t port;
+        std::memcpy(&port, &payload[2], sizeof(uint16_t));
+
+        std::string ip(payload.begin() + 4, payload.end());
+        return disconnect(IToken(itoken), OToken(otoken), ip, port);
+    });
+
+    rpc_service->register_handler(RPCCommand::SET_VOLUME, [this](const std::vector<uint8_t> &payload) -> RetCode {
+        if (payload.size() < 5)
+        {
+            return RetCode::EPARAM;
+        }
+
+        uint8_t token = payload[0];
+        uint32_t volume;
+        std::memcpy(&volume, &payload[1], sizeof(uint32_t));
+        return set_volume(AudioToken(token), volume);
+    });
+
+    rpc_service->register_handler(RPCCommand::MUTE, [this](const std::vector<uint8_t> &payload) -> RetCode {
+        if (payload.size() < 3)
+        {
+            return RetCode::EPARAM;
+        }
+
+        uint8_t first_token = payload[0];
+        uint8_t second_token = payload[1];
+        uint8_t enable = payload[2];
+        std::string ip(payload.begin() + 3, payload.end());
+
+        if (second_token == 0xFF)
+        {
+            return mute(AudioToken(first_token), enable != 0);
+        }
+        else
+        {
+            return mute(IToken(first_token), OToken(second_token), enable != 0, ip);
+        }
+    });
+
+    rpc_service->register_handler(RPCCommand::PLAY, [this](const std::vector<uint8_t> &payload) -> RetCode {
+        if (payload.size() < 5)
+        {
+            return RetCode::EPARAM;
+        }
+
+        uint8_t otoken = payload[0];
+        int32_t cycles;
+        std::memcpy(&cycles, &payload[1], sizeof(int32_t));
+        std::string name(payload.begin() + 5, payload.end());
+
+        return play(name, cycles, OToken(otoken));
+    });
+
+    rpc_service->register_handler(RPCCommand::STOP_PLAY, [this](const std::vector<uint8_t> &payload) -> RetCode {
+        if (payload.empty())
+        {
+            return RetCode::EPARAM;
+        }
+
+        std::string path(payload.begin(), payload.end());
+        return stop(path);
+    });
+
+    rpc_service->register_handler(RPCCommand::SET_PLAYER_VOLUME,
+                                  [this](const std::vector<uint8_t> &payload) -> RetCode {
+                                      if (payload.size() < sizeof(uint32_t))
+                                      {
+                                          return RetCode::EPARAM;
+                                      }
+
+                                      uint32_t volume;
+                                      std::memcpy(&volume, payload.data(), sizeof(uint32_t));
+                                      return set_player_volume(volume);
+                                  });
+
+    AUDIO_INFO_PRINT("RPC handlers registered");
+}
+
+AudioRemoteClient::AudioRemoteClient(const std::string &server_ip, unsigned short server_port)
+    : rpc_client(std::make_unique<RPCClient>(BG_SERVICE, server_ip, server_port))
+{
+}
+
+AudioRemoteClient::~AudioRemoteClient() = default;
+
+RetCode AudioRemoteClient::connect_stream(IToken itoken, OToken otoken, const std::string &ip, unsigned short port)
+{
+    return rpc_client->connect_stream(itoken, otoken, ip, port);
+}
+
+RetCode AudioRemoteClient::disconnect_stream(IToken itoken, OToken otoken, const std::string &ip, unsigned short port)
+{
+    return rpc_client->disconnect_stream(itoken, otoken, ip, port);
+}
+
+RetCode AudioRemoteClient::set_volume(AudioToken token, unsigned int volume)
+{
+    return rpc_client->set_volume(token, volume);
+}
+
+RetCode AudioRemoteClient::mute(AudioToken token, bool enable)
+{
+    return rpc_client->mute(token, enable);
+}
+
+RetCode AudioRemoteClient::mute(IToken itoken, OToken otoken, bool enable, const std::string &ip)
+{
+    return rpc_client->mute(itoken, otoken, enable, ip);
+}
+
+RetCode AudioRemoteClient::play(const std::string &name, int cycles, OToken otoken)
+{
+    return rpc_client->play(name, cycles, otoken);
+}
+
+RetCode AudioRemoteClient::stop_play(const std::string &path)
+{
+    return rpc_client->stop_play(path);
+}
+
+RetCode AudioRemoteClient::set_player_volume(unsigned int volume)
+{
+    return rpc_client->set_player_volume(volume);
 }

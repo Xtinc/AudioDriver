@@ -37,6 +37,7 @@
 
 constexpr unsigned char USER_MAX_AUDIO_TOKEN = 201;
 constexpr unsigned short NETWORK_AUDIO_TRANS_PORT = 52282;
+constexpr unsigned short NETWORK_AUDIO_SERVICE_PORT = 52280;
 
 typedef int16_t PCM_TYPE;
 typedef std::pair<std::string, unsigned int> AudioDeviceName;
@@ -486,6 +487,8 @@ class OAStream;
 class NetWorker;
 class AudioPlayer;
 class AudioMonitor;
+class RPCService;
+class RPCClient;
 
 /**
  * @class AudioCenter
@@ -501,8 +504,8 @@ class AudioCenter
     /**
      * @brief Constructor for AudioCenter
      * @param enable_network Whether to enable network functionality
-     * @param port Network port to use (ignored if enable_network is false)
      * @param local_ip Local IP address to use for network identification (empty for default)
+     * @param port Network port to use (ignored if enable_network is false)
      */
     AudioCenter(bool enable_network = false, const std::string &local_ip = "127.0.0.1",
                 unsigned short port = NETWORK_AUDIO_TRANS_PORT);
@@ -735,6 +738,19 @@ class AudioCenter
      */
     RetCode set_player_volume(unsigned int vol);
 
+    /**
+     * @brief Enable remote procedure call service
+     * @param rpc_port Port for RPC service
+     * @return RetCode indicating success or failure
+     */
+    RetCode enable_rpc(unsigned short rpc_port = NETWORK_AUDIO_SERVICE_PORT);
+
+    /**
+     * @brief Disable remote procedure call service
+     * @return RetCode indicating success or failure
+     */
+    RetCode disable_rpc();
+
   private:
     /**
      * @enum State
@@ -751,10 +767,13 @@ class AudioCenter
     std::map<unsigned char, std::shared_ptr<IAStream>> ias_map; /**< Map of input streams */
     std::map<unsigned char, std::shared_ptr<OAStream>> oas_map; /**< Map of output streams */
 
-    std::unique_ptr<INIReader> config;     /**< Configuration manager */
-    std::shared_ptr<NetWorker> net_mgr;    /**< Network manager */
-    std::unique_ptr<AudioMonitor> monitor; /**< Audio device monitor */
-    std::shared_ptr<AudioPlayer> player;   /**< Audio player */
+    void setup_rpc_handlers();
+
+    std::unique_ptr<INIReader> config;       /**< Configuration manager */
+    std::shared_ptr<NetWorker> net_mgr;      /**< Network manager */
+    std::unique_ptr<AudioMonitor> monitor;   /**< Audio device monitor */
+    std::shared_ptr<AudioPlayer> player;     /**< Audio player */
+    std::shared_ptr<RPCService> rpc_service; /**< RPC service */
 };
 
 #endif
