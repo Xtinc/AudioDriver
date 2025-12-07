@@ -1,7 +1,7 @@
 #include "audio_rpc.h"
-#include "audio_monitor.h"
 #include <algorithm>
 #include <cstring>
+#include <thread>
 
 using asio::ip::tcp;
 static constexpr size_t RPC_HEADER_SIZE = sizeof(RPCRequest::Header);
