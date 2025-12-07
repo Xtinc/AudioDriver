@@ -138,7 +138,7 @@ struct DataPacket
     uint8_t channels;     // 1 byte  - offset 3
     uint32_t sample_rate; // 4 bytes - offset 4 (aligned)
     uint32_t sequence;    // 4 bytes - offset 8 (aligned)
-    uint32_t session_id;  // 4 bytes - offset 12 (aligned)
+    uint32_t session_ip;  // 4 bytes - offset 12 (aligned)
     uint64_t timestamp;   // 8 bytes - offset 16 (aligned)
 };
 
@@ -146,7 +146,7 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
 {
   public:
     using ReceiveCallback = std::function<void(unsigned int channels, unsigned int frames, unsigned int sample_rate,
-                                               const int16_t *data, SourceUUID session_id)>;
+                                               const int16_t *data, SourceUUID ssid)>;
     using ReceiverContext = ReceiveCallback;
 
   private:

@@ -987,7 +987,7 @@ RetCode IAStream::process_data()
     {
         if (auto np = dest.lock())
         {
-            np->direct_push(ch, ps, fs, src, SourceUUID{token, 0, 0});
+            np->direct_push(ch, ps, fs, src, SourceUUID{0, 0, token});
         }
     }
 

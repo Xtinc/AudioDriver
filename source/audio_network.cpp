@@ -611,9 +611,9 @@ void NetWorker::handle_receive(const asio::error_code &error, std::size_t bytes_
         auto data_header = reinterpret_cast<const DataPacket *>(receive_buffer.get());
         const auto *payload = reinterpret_cast<const uint8_t *>(receive_buffer.get() + sizeof(DataPacket));
         size_t payload_size = bytes_transferred - sizeof(DataPacket);
-        auto sender_id = sender_endpoint.address().is_v4() ? sender_endpoint.address().to_v4().to_uint() : 0;
+        auto gateway_ip = sender_endpoint.address().is_v4() ? sender_endpoint.address().to_v4().to_uint() : 0;
         process_and_deliver_audio(data_header, payload, payload_size,
-                                  SourceUUID{data_header->session_id, sender_id, data_header->sender_id});
+                                  SourceUUID{data_header->session_ip, gateway_ip, data_header->sender_id});
     }
 
     if (running)
@@ -651,7 +651,7 @@ NetWorker::DecoderContext &NetWorker::get_decoder(SourceUUID sid, unsigned int c
 }
 
 void NetWorker::process_and_deliver_audio(const DataPacket *header, const uint8_t *opus_data, size_t opus_size,
-                                          SourceUUID source_id)
+                                          SourceUUID ssid)
 {
     if (!opus_data || opus_size == 0)
     {
@@ -665,13 +665,13 @@ void NetWorker::process_and_deliver_audio(const DataPacket *header, const uint8_
     auto timestamp = header->timestamp;
     auto codec_type = (header->magic_num == NET_AUDIO_MAGIC_PCM) ? AudioCodecType::PCM : AudioCodecType::OPUS;
 
-    auto &decoder_context = get_decoder(source_id, channels, sample_rate);
+    auto &decoder_context = get_decoder(ssid, channels, sample_rate);
     NetStatInfos stats{};
     if (decoder_context.update_stats(sequence, timestamp, stats) && stats.packets_received > 0)
     {
         AUDIO_INFO_PRINT("NETSTATS(0x%08X|0x%08X:%u) : [loss] %.2f%%, [jitter] %.2fms, [received] %u, [lost] %u, "
                          "[out-of-order] %u",
-                         source_id.sender_ip, source_id.gateway_ip, source_id.sender_token, stats.packet_loss_rate,
+                         ssid.sender_ip, ssid.gateway_ip, ssid.sender_token, stats.packet_loss_rate,
                          stats.average_jitter, stats.packets_received, stats.packets_lost, stats.packets_out_of_order);
     }
 
@@ -682,8 +682,8 @@ void NetWorker::process_and_deliver_audio(const DataPacket *header, const uint8_
     {
         if (!decoder_context.decoder || !decoder_context.decode_buffer)
         {
-            AUDIO_ERROR_PRINT("Decoder not available for sender %u (session 0x%08X|0x%08X)", source_id.sender_token,
-                              source_id.sender_ip, source_id.gateway_ip);
+            AUDIO_ERROR_PRINT("Decoder not available for sender %u (session 0x%08X|0x%08X)", ssid.sender_token,
+                              ssid.sender_ip, ssid.gateway_ip);
             return;
         }
         decoded_frames = opus_decode(decoder_context.decoder, opus_data, static_cast<opus_int32>(opus_size),
@@ -691,8 +691,7 @@ void NetWorker::process_and_deliver_audio(const DataPacket *header, const uint8_
         if (decoded_frames < 0)
         {
             AUDIO_ERROR_PRINT("Failed to decode Opus data from sender %u (session 0x%08X|0x%08X): %s",
-                              source_id.sender_token, source_id.sender_ip, source_id.gateway_ip,
-                              opus_strerror(decoded_frames));
+                              ssid.sender_token, ssid.sender_ip, ssid.gateway_ip, opus_strerror(decoded_frames));
             return;
         }
         audio_data = decoder_context.decode_buffer.get();
@@ -706,7 +705,7 @@ void NetWorker::process_and_deliver_audio(const DataPacket *header, const uint8_
     auto receiver_it = receivers.find(receiver_id);
     if (receiver_it != receivers.end())
     {
-        receiver_it->second(channels, static_cast<unsigned int>(decoded_frames), sample_rate, audio_data, source_id);
+        receiver_it->second(channels, static_cast<unsigned int>(decoded_frames), sample_rate, audio_data, ssid);
     }
     else
     {
@@ -730,7 +729,7 @@ void NetWorker::send_data_packet(const Destination &dest, uint8_t sender_id, uin
     header.channels = channels;
     header.sample_rate = sample_rate;
     header.sequence = sequence;
-    header.session_id = local_session_ip;
+    header.session_ip = local_session_ip;
     header.timestamp = timestamp;
 
     std::array<asio::const_buffer, 2> buffers = {asio::buffer(&header, sizeof(header)), asio::buffer(data, size)};
