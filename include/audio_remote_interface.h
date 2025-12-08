@@ -17,7 +17,7 @@ class AudioRemoteClient
      * @param server_ip Server IP address
      * @param server_port Server port number
      */
-    AudioRemoteClient(const std::string &server_ip, unsigned short server_port);
+    AudioRemoteClient(const std::string &server_ip, unsigned short server_port = NETWORK_AUDIO_SERVICE_PORT);
 
     /**
      * @brief Destructor
