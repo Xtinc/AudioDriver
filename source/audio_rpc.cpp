@@ -121,8 +121,7 @@ static RetCode deserialize_rpc_response(const RPCRequest::Header &header, const 
 class RPCService::Session : public std::enable_shared_from_this<Session>
 {
   public:
-    Session(tcp::socket socket, RPCService *service)
-        : socket_(std::move(socket)), service_(service), closed_(false)
+    Session(tcp::socket socket, RPCService *service) : socket_(std::move(socket)), service_(service), closed_(false)
     {
     }
 
@@ -385,6 +384,8 @@ void RPCService::handle_request(std::shared_ptr<Session> session, const RPCReque
         {
             // Handler execution is now serialized via handler_strand_
             RetCode ret = it->second(request.payload);
+            AUDIO_INFO_PRINT("RPC request handled: command=%u, sequence_id=%u, result=%d", request.header.command,
+                             request.header.sequence_id, ret.what());
             response.result_code = ret.err;
             response.message = ret.what();
         }
@@ -392,6 +393,8 @@ void RPCService::handle_request(std::shared_ptr<Session> session, const RPCReque
         {
             response.result_code = RetCode::FAILED;
             response.message = "Unknown command";
+            AUDIO_ERROR_PRINT("RPC request failed: unknown command=%u, sequence_id=%u", request.header.command,
+                              request.header.sequence_id);
         }
 
         session->send_response(response);
