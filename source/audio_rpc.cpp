@@ -384,7 +384,7 @@ void RPCService::handle_request(std::shared_ptr<Session> session, const RPCReque
         {
             // Handler execution is now serialized via handler_strand_
             RetCode ret = it->second(request.payload);
-            AUDIO_INFO_PRINT("RPC request handled: command=%u, sequence_id=%u, result=%d", request.header.command,
+            AUDIO_INFO_PRINT("RPC request handled: command=%u, sequence_id=%u, result:%s", request.header.command,
                              request.header.sequence_id, ret.what());
             response.result_code = ret.err;
             response.message = ret.what();

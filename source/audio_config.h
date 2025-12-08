@@ -34,9 +34,7 @@ class INIReader
     void set_string(const std::string &section, const std::string &key, const std::string &value);
     bool save();
     bool load();
-    bool exists() const;
-
-    std::string trim(const std::string &str);
+    std::string trim(const std::string &str) const;
     std::list<Section>::iterator find_section(const std::string &section_name);
 
   private:
