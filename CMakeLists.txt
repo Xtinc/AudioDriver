@@ -4,6 +4,7 @@ project(test_alsa VERSION 0.1.0 LANGUAGES C CXX)
 # C++ standard
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(BUILD_SHARED_LIBS OFF)
 
 # Find required libraries
 set(AUDIO_DRIVER_DEP_LIBS TRUE)
@@ -40,22 +41,25 @@ if(AUDIO_DRIVER_DEP_LIBS)
     target_include_directories(asio INTERFACE asio-1.30.2/include)
     target_compile_definitions(asio INTERFACE $<$<PLATFORM_ID:Windows>:_WIN32_WINNT=0x0601>)
 
-    # opus
+    # opus - build as OBJECT library to merge into bettyaudio
+    set(OPUS_BUILD_SHARED_LIBRARY OFF CACHE BOOL "" FORCE)
+    set(OPUS_BUILD_TESTING OFF CACHE BOOL "" FORCE)
     add_subdirectory(opus-1.5.2)
 
     aux_source_directory(source SOURCES)
     aux_source_directory(source/bt BT_SOURCES)
 
-    # Main library
-    add_library(bettyaudio STATIC ${SOURCES} ${BT_SOURCES})
+    # Main library - include opus objects directly
+    add_library(bettyaudio ${SOURCES} ${BT_SOURCES} $<TARGET_OBJECTS:opus>)
     target_include_directories(bettyaudio 
         PRIVATE source
         PUBLIC include
+        PUBLIC $<TARGET_PROPERTY:opus,INTERFACE_INCLUDE_DIRECTORIES>
         PUBLIC $<$<NOT:$<PLATFORM_ID:Windows>>:${ALSA_INCLUDE_DIRS}>
         PUBLIC $<$<BOOL:${AUDIO_DRIVER_HAVE_DBUS}>:${DBUS_INCLUDE_DIRS}>
     )
 
-    target_link_libraries(bettyaudio asio opus ${PLATFORM_LIBS})
+    target_link_libraries(bettyaudio asio ${PLATFORM_LIBS})
     target_compile_definitions(bettyaudio 
         PUBLIC $<$<PLATFORM_ID:Windows>:_CRT_SECURE_NO_WARNINGS>
         PUBLIC $<$<BOOL:${AUDIO_DRIVER_HAVE_DBUS}>:AUDIO_DRIVER_HAVE_DBUS>

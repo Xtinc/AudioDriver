@@ -36,8 +36,7 @@ class AudioRemoteClient
      * @param port Remote port number
      * @return RetCode Operation result
      */
-    RetCode connect_stream(IToken itoken, OToken otoken, const std::string &ip = "",
-                           unsigned short port = NETWORK_AUDIO_TRANS_PORT);
+    RetCode connect_stream(IToken itoken, OToken otoken, const std::string &ip, unsigned short port);
 
     /**
      * @brief Disconnect audio stream connection
@@ -47,8 +46,7 @@ class AudioRemoteClient
      * @param port Remote port number
      * @return RetCode Operation result
      */
-    RetCode disconnect_stream(IToken itoken, OToken otoken, const std::string &ip = "",
-                              unsigned short port = NETWORK_AUDIO_TRANS_PORT);
+    RetCode disconnect_stream(IToken itoken, OToken otoken, const std::string &ip, unsigned short port);
 
     /**
      * @brief Set audio stream volume

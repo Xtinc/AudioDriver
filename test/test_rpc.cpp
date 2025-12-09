@@ -90,10 +90,10 @@ void cleanup_audio_center()
     if (g_center)
     {
         std::cout << "\nCleaning up AudioCenter..." << std::endl;
-        
+
         // Wait briefly for any in-flight operations
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        
+
         delete g_center;
         g_center = nullptr;
         std::cout << "  - AudioCenter cleaned up" << std::endl;
@@ -125,15 +125,15 @@ bool test_connect_stream()
 
         IToken itoken(1);
         OToken otoken(101);
-        auto ret = client.connect_stream(itoken, otoken);
+        auto ret = client.connect_stream(itoken, otoken, TEST_SERVER_IP, TEST_AUDIO_PORT);
 
         std::cout << "  - Connect result: " << (ret ? "OK" : ret.what()) << std::endl;
-        
+
         if (ret)
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
-        
+
         return static_cast<bool>(ret);
     }
     catch (const std::exception &e)
@@ -152,7 +152,7 @@ bool test_disconnect_stream()
 
         IToken itoken(1);
         OToken otoken(101);
-        auto ret = client.disconnect_stream(itoken, otoken);
+        auto ret = client.disconnect_stream(itoken, otoken, TEST_SERVER_IP, TEST_AUDIO_PORT);
 
         std::cout << "  - Disconnect result: " << (ret ? "OK" : ret.what()) << std::endl;
         return static_cast<bool>(ret);
