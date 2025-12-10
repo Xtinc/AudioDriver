@@ -369,7 +369,7 @@ void AlsaDriver::write_loop()
 
         if ((*timer_cnt)())
         {
-            AUDIO_DEBUG_PRINT("Alsa device [%s] write loop timeout", hw_name.c_str());
+            // AUDIO_DEBUG_PRINT("Alsa device [%s] write loop timeout", hw_name.c_str());
             ok = !strict_recover;
         }
     }
@@ -417,7 +417,7 @@ void AlsaDriver::read_loop()
 
         if ((*timer_cnt)())
         {
-            AUDIO_DEBUG_PRINT("ALSA device [%s] read loop timeout", hw_name.c_str());
+            // AUDIO_DEBUG_PRINT("ALSA device [%s] read loop timeout", hw_name.c_str());
             ok = !strict_recover;
         }
     }
@@ -851,7 +851,7 @@ void WasapiDriver::write_loop()
 
         if ((*timer_cnt)())
         {
-            AUDIO_DEBUG_PRINT("WASAPI device [%s] write loop timeout", hw_name.c_str());
+            // AUDIO_DEBUG_PRINT("WASAPI device [%s] write loop timeout", hw_name.c_str());
             ok = !strict_recover;
         }
     }
@@ -941,7 +941,7 @@ void WasapiDriver::read_loop()
 
         if ((*timer_cnt)())
         {
-            AUDIO_DEBUG_PRINT("WASAPI device [%s] read loop timeout", hw_name.c_str());
+            // AUDIO_DEBUG_PRINT("WASAPI device [%s] read loop timeout", hw_name.c_str());
             ok = !strict_recover;
         }
     }
