@@ -8,7 +8,7 @@
 static std::once_flag coinit_flag;
 #endif
 constexpr unsigned int AUDIO_MAX_RESET_INTERVAL = 30;
-constexpr unsigned int AUDIO_MAX_COCURRECY_WORKER = 4;
+constexpr unsigned int AUDIO_MAX_COCURRECY_WORKER = 3;
 constexpr unsigned int SESSION_IDLE_TIMEOUT = 1000;
 
 inline float volume2gain(unsigned int vol)

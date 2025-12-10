@@ -667,7 +667,8 @@ void NetWorker::process_and_deliver_audio(const DataPacket *header, const uint8_
 
     auto &decoder_context = get_decoder(ssid, channels, sample_rate);
     NetStatInfos stats{};
-    if (decoder_context.update_stats(sequence, timestamp, stats) && stats.packets_received > 0)
+    if (decoder_context.update_stats(sequence, timestamp, stats) &&
+        (stats.packets_lost > 0 || stats.packets_out_of_order > 0))
     {
         AUDIO_INFO_PRINT("NETSTATS(0x%08X|0x%08X:%u) : [loss] %.2f%%, [jitter] %.2fms, [received] %u, [lost] %u, "
                          "[out-of-order] %u",
