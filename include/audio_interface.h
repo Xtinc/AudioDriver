@@ -249,9 +249,10 @@ enum class StreamFlags : unsigned int
 {
     None = 0x00,      /**< No special options */
     Network = 0x01,   /**< Enable network functionality */
-    Reset = 0x02,     /**< Enable auto reset */
-    CodecOPUS = 0x04, /**< Use OPUS codec for network transmission (default) */
-    CodecPCM = 0x08   /**< Use PCM codec for network transmission (lossless) */
+    CodecOPUS = 0x02, /**< Use OPUS codec for network transmission (default) */
+    CodecPCM = 0x04,  /**< Use PCM codec for network transmission (lossless) */
+    ResetSoft = 0x08, /**< Enable soft reset: reset device when health check fails */
+    ResetHard = 0x10  /**< Enable hard reset: periodically force reset device (takes priority over ResetSoft) */
 };
 
 /**
@@ -522,8 +523,13 @@ class AudioCenter
      * @param bw Audio bandwidth (sample rate)
      * @param ps Audio period size
      * @param ch Number of channels
-     * @param flags Stream creation flags (Network | Reset | Denoise)
+     * @param flags Stream creation flags
+     *              - Network: Enable network transmission
+     *              - CodecOPUS/CodecPCM: Choose network codec (OPUS is default)
+     *              - ResetSoft: Enable automatic reset when device fails health checks
+     *              - ResetHard: Enable periodic forced reset (overrides ResetSoft if both set)
      * @return RetCode indicating success or failure
+     * @note ResetHard takes priority over ResetSoft when both flags are set
      */
     RetCode create(IToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps, unsigned int ch,
                    StreamFlags flags = StreamFlags::None);
@@ -536,8 +542,9 @@ class AudioCenter
      * @param ps Audio period size
      * @param dev_ch Number of channels to open device
      * @param imap Channel mapping between user channel and device channel
-     * @param flags Stream creation flags (Network)
+     * @param flags Stream creation flags (Network | CodecOPUS/CodecPCM)
      * @return RetCode indicating success or failure
+     * @note Reset flags (ResetSoft/ResetHard) are not supported for streams with channel mapping
      */
     RetCode create(IToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps,
                    unsigned int dev_ch, const AudioChannelMap &imap, StreamFlags flags = StreamFlags::None);
@@ -549,8 +556,12 @@ class AudioCenter
      * @param bw Audio bandwidth (sample rate)
      * @param ps Audio period size
      * @param ch Number of channels
-     * @param flags Stream creation flags (Network | Reset)
+     * @param flags Stream creation flags
+     *              - Network: Enable network reception
+     *              - ResetSoft: Enable automatic reset when device fails health checks
+     *              - ResetHard: Enable periodic forced reset (overrides ResetSoft if both set)
      * @return RetCode indicating success or failure
+     * @note ResetHard takes priority over ResetSoft when both flags are set
      */
     RetCode create(OToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps, unsigned int ch,
                    StreamFlags flags = StreamFlags::None);
@@ -565,6 +576,7 @@ class AudioCenter
      * @param omap Channel mapping between user channel and device channel
      * @param flags Stream creation flags (Network)
      * @return RetCode indicating success or failure
+     * @note Reset flags (ResetSoft/ResetHard) are not supported for streams with channel mapping
      */
     RetCode create(OToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps,
                    unsigned int dev_ch, const AudioChannelMap &omap, StreamFlags flags = StreamFlags::None);
@@ -573,8 +585,10 @@ class AudioCenter
      * @brief Creates a link between input and output streams
      * @param itoken Input token
      * @param otoken Output token
-     * @param flags Stream creation flags (Network)
+     * @param flags Stream creation flags (Network | CodecOPUS/CodecPCM)
      * @return RetCode indicating success or failure
+     * @note The created input stream is a virtual stream that receives data from the output stream
+     * @note Reset functionality is not applicable for linked streams
      */
     RetCode create(IToken itoken, OToken otoken, StreamFlags flags = StreamFlags::None);
 

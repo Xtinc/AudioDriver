@@ -71,9 +71,22 @@ RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBand
     }
 
     bool enable_network = has_flag(flags, StreamFlags::Network);
-    bool enable_reset = has_flag(flags, StreamFlags::Reset);
 
-    auto ias_ptr = std::make_shared<IAStream>(token.tok, name, enum2val(ps), enum2val(bw), ch, enable_reset);
+    ResetOrd reset_order;
+    if (has_flag(flags, StreamFlags::ResetHard))
+    {
+        reset_order = ResetOrd::RESET_HARD;
+    }
+    else if (has_flag(flags, StreamFlags::ResetSoft))
+    {
+        reset_order = ResetOrd::RESET_SOFT;
+    }
+    else
+    {
+        reset_order = ResetOrd::RESET_NONE;
+    }
+
+    auto ias_ptr = std::make_shared<IAStream>(token.tok, name, enum2val(ps), enum2val(bw), ch, reset_order);
 
     if (!ias_ptr->available())
     {
@@ -85,13 +98,7 @@ RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBand
 
     if (enable_network && net_mgr)
     {
-        AudioCodecType codec = AudioCodecType::PCM;
-
-        if (has_flag(flags, StreamFlags::CodecOPUS))
-        {
-            codec = AudioCodecType::OPUS;
-        }
-
+        AudioCodecType codec = has_flag(flags, StreamFlags::CodecOPUS) ? AudioCodecType::OPUS : AudioCodecType::PCM;
         auto ret = ias_map[token.tok]->initialize_network(net_mgr, codec);
         if (!ret)
         {
@@ -141,7 +148,7 @@ RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBand
         return RetCode::NOACTION;
     }
 
-    if (has_flag(flags, StreamFlags::Reset))
+    if (has_flag(flags, StreamFlags::ResetHard) || has_flag(flags, StreamFlags::ResetSoft))
     {
         AUDIO_ERROR_PRINT("Reset flag not supported for input stream with channel mapping (token %u), ignoring",
                           token.tok);
@@ -161,17 +168,7 @@ RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBand
 
     if (enable_network && net_mgr)
     {
-        AudioCodecType codec = AudioCodecType::PCM;
-
-        if (has_flag(flags, StreamFlags::CodecPCM))
-        {
-            codec = AudioCodecType::PCM;
-        }
-        else if (has_flag(flags, StreamFlags::CodecOPUS))
-        {
-            codec = AudioCodecType::OPUS;
-        }
-
+        AudioCodecType codec = has_flag(flags, StreamFlags::CodecOPUS) ? AudioCodecType::OPUS : AudioCodecType::PCM;
         auto ret = ias_map[token.tok]->initialize_network(net_mgr, codec);
         if (!ret)
         {
@@ -209,9 +206,22 @@ RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBand
     }
 
     bool enable_network = has_flag(flags, StreamFlags::Network);
-    bool enable_reset = has_flag(flags, StreamFlags::Reset);
 
-    auto oas_ptr = std::make_shared<OAStream>(token.tok, name, enum2val(ps), enum2val(bw), ch, enable_reset);
+    ResetOrd reset_order;
+    if (has_flag(flags, StreamFlags::ResetHard))
+    {
+        reset_order = ResetOrd::RESET_HARD;
+    }
+    else if (has_flag(flags, StreamFlags::ResetSoft))
+    {
+        reset_order = ResetOrd::RESET_SOFT;
+    }
+    else
+    {
+        reset_order = ResetOrd::RESET_NONE;
+    }
+
+    auto oas_ptr = std::make_shared<OAStream>(token.tok, name, enum2val(ps), enum2val(bw), ch, reset_order);
 
     if (!oas_ptr->available())
     {
@@ -271,7 +281,7 @@ RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBand
         return RetCode::NOACTION;
     }
 
-    if (has_flag(flags, StreamFlags::Reset))
+    if (has_flag(flags, StreamFlags::ResetHard) || has_flag(flags, StreamFlags::ResetSoft))
     {
         AUDIO_ERROR_PRINT("Reset flag not supported for output stream with channel mapping (token %u), ignoring",
                           token.tok);
@@ -279,7 +289,8 @@ RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBand
 
     bool enable_network = has_flag(flags, StreamFlags::Network);
 
-    auto oas_ptr = std::make_shared<OAStream>(token.tok, name, enum2val(ps), enum2val(bw), dev_ch, false, omap);
+    auto oas_ptr =
+        std::make_shared<OAStream>(token.tok, name, enum2val(ps), enum2val(bw), dev_ch, ResetOrd::RESET_NONE, omap);
 
     if (!oas_ptr->available())
     {
@@ -351,13 +362,13 @@ RetCode AudioCenter::create(IToken itoken, OToken otoken, StreamFlags flags)
         {
             new_stream = std::make_shared<IAStream>(itoken.tok, AudioDeviceName("null_dummy", 0),
                                                     enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full),
-                                                    1, false);
+                                                    1, ResetOrd::RESET_NONE);
         }
         else if (oas->second->omap == DEFAULT_DUAL_MAP)
         {
             new_stream = std::make_shared<IAStream>(itoken.tok, AudioDeviceName("null_dummy", 0),
                                                     enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full),
-                                                    2, false);
+                                                    2, ResetOrd::RESET_NONE);
         }
         else
         {
@@ -413,12 +424,14 @@ RetCode AudioCenter::prepare(bool enable_usb_detection)
     auto default_usb_in = cfg.input_device_id.empty() ? "null_usb" : cfg.input_device_id;
     auto default_usb_out = cfg.output_device_id.empty() ? "null_usb" : cfg.output_device_id;
 
-    ias_map.emplace(USR_DUMMY_IN.tok, std::make_shared<IAStream>(USR_DUMMY_IN.tok, AudioDeviceName(default_usb_in, 0),
-                                                                 enum2val(AudioPeriodSize::INR_20MS),
-                                                                 enum2val(AudioBandWidth::Full), 2, false));
+    ias_map.emplace(USR_DUMMY_IN.tok,
+                    std::make_shared<IAStream>(USR_DUMMY_IN.tok, AudioDeviceName(default_usb_in, 0),
+                                               enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2,
+                                               ResetOrd::RESET_NONE));
     oas_map.emplace(USR_DUMMY_OUT.tok,
                     std::make_shared<OAStream>(USR_DUMMY_OUT.tok, AudioDeviceName(default_usb_out, 0),
-                                               enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2));
+                                               enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2,
+                                               ResetOrd::RESET_NONE));
     if (net_mgr)
     {
         ias_map[USR_DUMMY_IN.tok]->initialize_network(net_mgr, AudioCodecType::OPUS);

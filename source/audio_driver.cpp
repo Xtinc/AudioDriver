@@ -34,7 +34,7 @@ class AlsaDriver final : public AudioDevice
 {
   public:
     AlsaDriver(const std::string &name, bool capture, unsigned int fs, unsigned int ps, unsigned int ch,
-               bool enable_strict_recover);
+               ResetOrd reset_order);
     ~AlsaDriver() override;
 
     RetCode open() override;
@@ -55,8 +55,8 @@ class AlsaDriver final : public AudioDevice
 };
 
 AlsaDriver::AlsaDriver(const std::string &name, bool capture, unsigned int fs, unsigned int ps, unsigned int ch,
-                       bool enable_strict_recover)
-    : AudioDevice(name, capture, fs, ps, ch, enable_strict_recover), mmap_mode(true), handle(nullptr)
+                       ResetOrd reset_order)
+    : AudioDevice(name, capture, fs, ps, ch, reset_order), mmap_mode(true), handle(nullptr)
 {
 }
 
@@ -367,10 +367,10 @@ void AlsaDriver::write_loop()
             cptr -= result;
         }
 
-        if ((*timer_cnt)())
+        if ((*timer_cnt)() && rst_order == ResetOrd::RESET_HARD)
         {
             // AUDIO_DEBUG_PRINT("Alsa device [%s] write loop timeout", hw_name.c_str());
-            ok = !strict_recover;
+            ok = false;
         }
     }
 
@@ -415,10 +415,10 @@ void AlsaDriver::read_loop()
             AUDIO_DEBUG_PRINT("ALSA device [%s] buffer overflow", hw_name.c_str());
         }
 
-        if ((*timer_cnt)())
+        if ((*timer_cnt)() && rst_order == ResetOrd::RESET_HARD)
         {
             // AUDIO_DEBUG_PRINT("ALSA device [%s] read loop timeout", hw_name.c_str());
-            ok = !strict_recover;
+            ok = false;
         }
     }
 
@@ -574,7 +574,7 @@ class WasapiDriver final : public AudioDevice
 {
   public:
     WasapiDriver(const std::string &friendly_name, const std::wstring &device_name, bool capture, unsigned int fs,
-                 unsigned int ps, unsigned int ch, bool enable_strict_recover);
+                 unsigned int ps, unsigned int ch, ResetOrd reset_order);
     ~WasapiDriver() override;
 
     RetCode open() override;
@@ -596,8 +596,8 @@ class WasapiDriver final : public AudioDevice
 };
 
 WasapiDriver::WasapiDriver(const std::string &friendly_name, const std::wstring &device_name, bool capture,
-                           unsigned int fs, unsigned int ps, unsigned int ch, bool enable_strict_recover)
-    : AudioDevice(friendly_name, capture, fs, ps, ch, enable_strict_recover), uuid_name(device_name), h_event(nullptr),
+                           unsigned int fs, unsigned int ps, unsigned int ch, ResetOrd reset_order)
+    : AudioDevice(friendly_name, capture, fs, ps, ch, reset_order), uuid_name(device_name), h_event(nullptr),
       audio_client(nullptr), render(nullptr), capture(nullptr)
 {
 }
@@ -849,17 +849,18 @@ void WasapiDriver::write_loop()
             break;
         }
 
-        if ((*timer_cnt)())
+        if ((*timer_cnt)() && rst_order == ResetOrd::RESET_HARD)
         {
             // AUDIO_DEBUG_PRINT("WASAPI device [%s] write loop timeout", hw_name.c_str());
-            ok = !strict_recover;
+            ok = false;
         }
     }
 
+    hstate = STREAM_STOPPED;
+    (void)audio_client->Stop();
+
     if (!ok)
     {
-        hstate = STREAM_STOPPED;
-        (void)audio_client->Stop();
         AUDIO_ERROR_PRINT("WASAPI device [%s] write loop exited with error", hw_name.c_str());
     }
 }
@@ -939,17 +940,18 @@ void WasapiDriver::read_loop()
             }
         } while (packet_sz > 0);
 
-        if ((*timer_cnt)())
+        if ((*timer_cnt)() && rst_order == ResetOrd::RESET_HARD)
         {
             // AUDIO_DEBUG_PRINT("WASAPI device [%s] read loop timeout", hw_name.c_str());
-            ok = !strict_recover;
+            ok = false;
         }
     }
 
+    hstate = STREAM_STOPPED;
+    (void)audio_client->Stop();
+
     if (!ok)
     {
-        hstate = STREAM_STOPPED;
-        (void)audio_client->Stop();
         AUDIO_ERROR_PRINT("WASAPI device [%s] read loop exited with error", hw_name.c_str());
     }
 }
@@ -977,7 +979,7 @@ class WaveDevice final : public AudioDevice
 
 WaveDevice::WaveDevice(const std::string &name, bool capture, unsigned int fs, unsigned int ps, unsigned int ch,
                        unsigned int cyc)
-    : AudioDevice(name, capture, fs, ps, ch, false), cycles(cyc), wav_file(std::make_unique<WavFile>())
+    : AudioDevice(name, capture, fs, ps, ch, ResetOrd::RESET_NONE), cycles(cyc), wav_file(std::make_unique<WavFile>())
 {
 }
 
@@ -1104,7 +1106,7 @@ class SimuDevice final : public AudioDevice
 };
 
 SimuDevice::SimuDevice(const std::string &name, bool capture, unsigned int fs, unsigned int ps, unsigned int ch)
-    : AudioDevice(name, capture, fs, ps, ch, false)
+    : AudioDevice(name, capture, fs, ps, ch, ResetOrd::RESET_NONE)
 {
 }
 
@@ -1181,7 +1183,7 @@ class NullDevice final : public AudioDevice
 };
 
 NullDevice::NullDevice(const std::string &name, bool capture, unsigned int fs, unsigned int ps, unsigned int ch)
-    : AudioDevice(name, capture, fs, ps, ch, false)
+    : AudioDevice(name, capture, fs, ps, ch, ResetOrd::RESET_NONE)
 {
 }
 
@@ -1243,26 +1245,24 @@ RetCode NullDevice::read(char * /*data*/, size_t /*len*/)
 }
 
 std::unique_ptr<AudioDevice> make_audio_driver(int type, const AudioDeviceName &name, unsigned int fs, unsigned int ps,
-                                               unsigned int ch, bool enable_strict_recover)
+                                               unsigned int ch, ResetOrd reset_order)
 {
     if (type == PHSY_IAS)
     {
 #if WINDOWS_OS_ENVIRONMENT
         auto ret = normailzed_device_name(name.first, true);
-        return std::make_unique<WasapiDriver>(utf16_to_utf8(ret.first), ret.second, true, fs, ps, ch,
-                                              enable_strict_recover);
+        return std::make_unique<WasapiDriver>(utf16_to_utf8(ret.first), ret.second, true, fs, ps, ch, reset_order);
 #elif LINUX_OS_ENVIRONMENT
-        return std::make_unique<AlsaDriver>(normailzed_device_name(name), true, fs, ps, ch, enable_strict_recover);
+        return std::make_unique<AlsaDriver>(normailzed_device_name(name), true, fs, ps, ch, reset_order);
 #endif
     }
     else if (type == PHSY_OAS)
     {
 #if WINDOWS_OS_ENVIRONMENT
         auto ret = normailzed_device_name(name.first, false);
-        return std::make_unique<WasapiDriver>(utf16_to_utf8(ret.first), ret.second, false, fs, ps, ch,
-                                              enable_strict_recover);
+        return std::make_unique<WasapiDriver>(utf16_to_utf8(ret.first), ret.second, false, fs, ps, ch, reset_order);
 #elif LINUX_OS_ENVIRONMENT
-        return std::make_unique<AlsaDriver>(normailzed_device_name(name), false, fs, ps, ch, enable_strict_recover);
+        return std::make_unique<AlsaDriver>(normailzed_device_name(name), false, fs, ps, ch, reset_order);
 #endif
     }
     else if (type == WAVE_IAS)

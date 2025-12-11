@@ -14,6 +14,13 @@
 #define NULL_IAS 0x66
 #define NULL_OAS 0x67
 
+enum class ResetOrd
+{
+    RESET_NONE,
+    RESET_SOFT,
+    RESET_HARD
+};
+
 struct TimerCounter
 {
     TimerCounter(const std::string &_name, unsigned int _threshold)
@@ -94,6 +101,11 @@ class AudioDevice
     virtual RetCode write(const char *data, size_t len) = 0;
     virtual RetCode read(char *data, size_t len) = 0;
 
+    bool is_running() const
+    {
+        return hstate == STREAM_RUNNING;
+    }
+
     unsigned int fs() const
     {
         return dev_fs;
@@ -118,13 +130,13 @@ class AudioDevice
   public:
     const std::string hw_name;
     const bool is_capture_dev;
-    const bool strict_recover;
+    const ResetOrd rst_order;
 
   protected:
     AudioDevice(const std::string &name, bool capture, unsigned int fs, unsigned int ps, unsigned int ch,
-                bool enable_strict_recover)
-        : hw_name(name), is_capture_dev(capture), strict_recover(enable_strict_recover), dev_fs(fs), dev_ps(ps),
-          dev_ch(ch), max_ch(0), min_ch(0), hstate(STREAM_CLOSED) {};
+                ResetOrd reset_order)
+        : hw_name(name), is_capture_dev(capture), rst_order(reset_order), dev_fs(fs), dev_ps(ps), dev_ch(ch), max_ch(0),
+          min_ch(0), hstate(STREAM_CLOSED) {};
 
   protected:
     enum Mode
@@ -155,6 +167,6 @@ class AudioDevice
 void set_current_thread_scheduler_policy();
 
 std::unique_ptr<AudioDevice> make_audio_driver(int type, const AudioDeviceName &name, unsigned int fs, unsigned int ps,
-                                               unsigned int ch, bool enable_strict_recover);
+                                               unsigned int ch, ResetOrd reset_order);
 
 #endif

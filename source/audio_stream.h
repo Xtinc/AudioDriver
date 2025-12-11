@@ -66,7 +66,7 @@ class OAStream : public std::enable_shared_from_this<OAStream>
 
   public:
     OAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs, unsigned int _ch,
-             bool auto_reset = false, AudioChannelMap _omap = {});
+             ResetOrd reset_order, AudioChannelMap _omap = {});
     ~OAStream();
 
     RetCode start();
@@ -97,7 +97,7 @@ class OAStream : public std::enable_shared_from_this<OAStream>
   public:
     const unsigned char token;
     const unsigned int ti;
-    const bool enable_reset;
+    const ResetOrd rst_order;
     const AudioChannelMap omap;
 
   private:
@@ -141,7 +141,7 @@ class IAStream : public std::enable_shared_from_this<IAStream>
 
   public:
     IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs, unsigned int _ch,
-             bool auto_reset);
+             ResetOrd reset_order);
     IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs,
              unsigned int dev_ch, AudioChannelMap _imap);
     ~IAStream();
@@ -181,7 +181,7 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     const unsigned int fs;
     const unsigned int ps;
     const unsigned int ch;
-    const bool enable_reset;
+    const ResetOrd rst_order;
     const unsigned int spf_ch;
     const AudioChannelMap imap;
 
