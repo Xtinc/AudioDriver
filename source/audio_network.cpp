@@ -372,7 +372,7 @@ RetCode NetWorker::register_receiver(uint8_t token, ReceiveCallback callback)
     else
     {
         receivers.emplace(token, std::move(callback));
-        AUDIO_DEBUG_PRINT("Registered receiver for token %u", token);
+        // AUDIO_DEBUG_PRINT("Registered receiver for token %u", token);
         return {RetCode::OK, "Receiver registered"};
     }
 }
@@ -416,9 +416,6 @@ RetCode NetWorker::register_sender(uint8_t sender_id, unsigned int channels, uns
         senders.erase(sender_id);
         return {RetCode::FAILED, "Failed to create Opus encoder"};
     }
-
-    AUDIO_INFO_PRINT("Registered sender %u with codec type: %s", sender_id,
-                     codec == AudioCodecType::OPUS ? "OPUS" : "PCM");
 
     return {RetCode::OK, "Sender registered"};
 }
@@ -468,7 +465,6 @@ RetCode NetWorker::add_destination(uint8_t sender_id, uint8_t receiver_token, co
     }
 
     dest_list.push_back(std::move(new_dest));
-    AUDIO_INFO_PRINT("Added destination %s for sender %u to receiver %u", ip.c_str(), sender_id, receiver_token);
 
     return {RetCode::OK, "Destination added"};
 }

@@ -7,7 +7,8 @@
 // CoInitializeEx is not thread-safe
 static std::once_flag coinit_flag;
 #endif
-constexpr unsigned int AUDIO_MAX_RESET_INTERVAL = 30;
+constexpr unsigned int AUDIO_MAX_RESET_HARD_INTERVAL = 30;
+constexpr unsigned int AUDIO_MAX_RESET_SOFT_INTERVAL = 1;
 constexpr unsigned int AUDIO_MAX_COCURRECY_WORKER = 3;
 constexpr unsigned int SESSION_IDLE_TIMEOUT = 1000;
 
@@ -587,7 +588,8 @@ void OAStream::schedule_auto_reset()
         return;
     }
 
-    constexpr auto reset_interval = std::chrono::minutes(AUDIO_MAX_RESET_INTERVAL);
+    const auto reset_interval = std::chrono::minutes(rst_order == ResetOrd::RESET_HARD ? AUDIO_MAX_RESET_HARD_INTERVAL
+                                                                                       : AUDIO_MAX_RESET_SOFT_INTERVAL);
     reset_timer.expires_from_now(reset_interval);
     reset_timer.async_wait(asio::bind_executor(reset_strand, [self = shared_from_this()](const asio::error_code &ec) {
         if (ec)
@@ -622,9 +624,14 @@ void OAStream::reset_self()
         (void)self->stop();
         self->odevice.reset();
         self->odevice = make_audio_driver(PHSY_OAS, self->usr_name, self->fs, self->ps, self->ch, self->rst_order);
+        auto ret = self->odevice->open();
+        if (!ret)
+        {
+            AUDIO_ERROR_PRINT("Failed to open capture device [%s]: %s", self->usr_name.first.c_str(), ret.what());
+        }
 
         self->oas_ready = true;
-        auto ret = self->start();
+        ret = self->start();
         if (!ret)
         {
             AUDIO_ERROR_PRINT("Failed to restart OAStream: %s", ret.what());
@@ -1090,7 +1097,8 @@ void IAStream::schedule_auto_reset()
         return;
     }
 
-    constexpr auto reset_interval = std::chrono::minutes(AUDIO_MAX_RESET_INTERVAL);
+    const auto reset_interval = std::chrono::minutes(rst_order == ResetOrd::RESET_HARD ? AUDIO_MAX_RESET_HARD_INTERVAL
+                                                                                       : AUDIO_MAX_RESET_SOFT_INTERVAL);
     reset_timer.expires_from_now(reset_interval);
     reset_timer.async_wait(asio::bind_executor(reset_strand, [self = shared_from_this()](const asio::error_code &ec) {
         if (ec)

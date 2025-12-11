@@ -112,7 +112,5 @@ DeviceConfig INIReader::LoadDeviceConfig()
     std::lock_guard<std::mutex> lock(mutex_);
     DeviceConfig config{get_string("Audio", "InputDeviceID", ""), get_string("Audio", "InputDeviceName", ""),
                         get_string("Audio", "OutputDeviceID", ""), get_string("Audio", "OutputDeviceName", "")};
-
-    AUDIO_DEBUG_PRINT("Device config loaded successfully");
     return config;
 }
