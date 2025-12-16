@@ -368,7 +368,6 @@ bool BluetoothAgent::remove(const std::string &device_path)
 {
     AUDIO_INFO_PRINT("Removing device: %s", device_path.c_str());
 
-    // 移除前先取消信任
     set_trusted(device_path, false);
 
     DBusMessage *reply = call_method(device_path.c_str(), DEVICE_INTERFACE, "Disconnect", DBUS_TYPE_INVALID);
@@ -383,6 +382,10 @@ bool BluetoothAgent::remove(const std::string &device_path)
     if (reply)
     {
         dbus_message_unref(reply);
+        // maybe updated from signal, but ensure removal here
+        std::lock_guard<std::mutex> lock(devices_mutex_);
+        auto it = std::remove_if(devices_.begin(), devices_.end(),
+                                 [device_path](const BluetoothDevice &dev) { return dev.path == device_path; });
         AUDIO_INFO_PRINT("Device removed: %s", device_path.c_str());
         return true;
     }
