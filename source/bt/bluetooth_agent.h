@@ -4,7 +4,6 @@
 
 #include "audio_message.h"
 #include <atomic>
-#include <dbus/dbus.h>
 #include <functional>
 #include <future>
 #include <memory>
@@ -14,6 +13,8 @@
 #include <vector>
 
 struct DBusConnection;
+struct DBusMessage;
+struct DBusMessageIter;
 
 struct BluetoothDevice
 {
@@ -84,7 +85,7 @@ class BluetoothAgent
     void handle_dev_add(DBusMessage *msg);
     void handle_dev_chg(DBusMessage *msg);
     void handle_dev_del(DBusMessage *msg);
-    DBusHandlerResult handle_message(DBusMessage *msg);
+    int handle_message(DBusMessage *msg);
 
     void set_pairing_request_callback(PairingRequestCallback callback);
     void set_confirmation_result(bool accept);
@@ -103,14 +104,14 @@ class BluetoothAgent
     void update_device_property(BluetoothDevice &device, const char *key, DBusMessageIter *iter);
 
     bool register_agent();
-    DBusHandlerResult handle_request_pincode(DBusMessage *msg);
-    DBusHandlerResult handle_display_pincode(DBusMessage *msg);
-    DBusHandlerResult handle_request_passkey(DBusMessage *msg);
-    DBusHandlerResult handle_display_passkey(DBusMessage *msg);
-    DBusHandlerResult handle_request_confirmation(DBusMessage *msg);
-    DBusHandlerResult handle_request_authorization(DBusMessage *msg);
-    DBusHandlerResult handle_authorize_service(DBusMessage *msg);
-    DBusHandlerResult handle_cancel(DBusMessage *msg);
+    int handle_request_pincode(DBusMessage *msg);
+    int handle_display_pincode(DBusMessage *msg);
+    int handle_request_passkey(DBusMessage *msg);
+    int handle_display_passkey(DBusMessage *msg);
+    int handle_request_confirmation(DBusMessage *msg);
+    int handle_request_authorization(DBusMessage *msg);
+    int handle_authorize_service(DBusMessage *msg);
+    int handle_cancel(DBusMessage *msg);
 
     void notify_pairing_request(const PairingRequest &request);
 

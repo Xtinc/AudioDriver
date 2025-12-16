@@ -1,6 +1,8 @@
 #include "bluetooth_agent.h"
 #if defined(AUDIO_DRIVER_HAVE_DBUS)
 
+#include <dbus/dbus.h>
+
 #define BLUEZ_SERVICE "org.bluez"
 #define AGENT_INTERFACE "org.bluez.Agent1"
 #define AGENT_MANAGER_INTERFACE "org.bluez.AgentManager1"
@@ -41,7 +43,7 @@ static DBusHandlerResult signal_filter_callback(DBusConnection *, DBusMessage *m
 static DBusHandlerResult message_handler_callback(DBusConnection *, DBusMessage *msg, void *user_data)
 {
     BluetoothAgent *agent = static_cast<BluetoothAgent *>(user_data);
-    return agent->handle_message(msg);
+    return static_cast<DBusHandlerResult>(agent->handle_message(msg));
 }
 
 static void send_simple_reply(DBusConnection *conn, DBusMessage *msg)
@@ -758,7 +760,7 @@ void BluetoothAgent::handle_dev_chg(DBusMessage *msg)
     update_device_property(object_path, &iter);
 }
 
-DBusHandlerResult BluetoothAgent::handle_message(DBusMessage *msg)
+int BluetoothAgent::handle_message(DBusMessage *msg)
 {
     const char *interface = dbus_message_get_interface(msg);
     const char *member = dbus_message_get_member(msg);
@@ -864,7 +866,7 @@ bool BluetoothAgent::register_agent()
     return true;
 }
 
-DBusHandlerResult BluetoothAgent::handle_request_pincode(DBusMessage *msg)
+int BluetoothAgent::handle_request_pincode(DBusMessage *msg)
 {
     const char *device_path;
     if (!dbus_message_get_args(msg, nullptr, DBUS_TYPE_OBJECT_PATH, &device_path, DBUS_TYPE_INVALID))
@@ -926,7 +928,7 @@ DBusHandlerResult BluetoothAgent::handle_request_pincode(DBusMessage *msg)
     return DBUS_HANDLER_RESULT_HANDLED;
 }
 
-DBusHandlerResult BluetoothAgent::handle_display_pincode(DBusMessage *msg)
+int BluetoothAgent::handle_display_pincode(DBusMessage *msg)
 {
     const char *device_path;
     const char *pincode;
@@ -953,7 +955,7 @@ DBusHandlerResult BluetoothAgent::handle_display_pincode(DBusMessage *msg)
     return DBUS_HANDLER_RESULT_HANDLED;
 }
 
-DBusHandlerResult BluetoothAgent::handle_request_passkey(DBusMessage *msg)
+int BluetoothAgent::handle_request_passkey(DBusMessage *msg)
 {
     const char *device_path;
     if (!dbus_message_get_args(msg, nullptr, DBUS_TYPE_OBJECT_PATH, &device_path, DBUS_TYPE_INVALID))
@@ -1015,7 +1017,7 @@ DBusHandlerResult BluetoothAgent::handle_request_passkey(DBusMessage *msg)
     return DBUS_HANDLER_RESULT_HANDLED;
 }
 
-DBusHandlerResult BluetoothAgent::handle_display_passkey(DBusMessage *msg)
+int BluetoothAgent::handle_display_passkey(DBusMessage *msg)
 {
     const char *device_path;
     dbus_uint32_t passkey;
@@ -1044,7 +1046,7 @@ DBusHandlerResult BluetoothAgent::handle_display_passkey(DBusMessage *msg)
     return DBUS_HANDLER_RESULT_HANDLED;
 }
 
-DBusHandlerResult BluetoothAgent::handle_request_confirmation(DBusMessage *msg)
+int BluetoothAgent::handle_request_confirmation(DBusMessage *msg)
 {
     const char *device_path;
     dbus_uint32_t passkey;
@@ -1111,7 +1113,7 @@ DBusHandlerResult BluetoothAgent::handle_request_confirmation(DBusMessage *msg)
     return DBUS_HANDLER_RESULT_HANDLED;
 }
 
-DBusHandlerResult BluetoothAgent::handle_request_authorization(DBusMessage *msg)
+int BluetoothAgent::handle_request_authorization(DBusMessage *msg)
 {
     const char *device_path;
     if (!dbus_message_get_args(msg, nullptr, DBUS_TYPE_OBJECT_PATH, &device_path, DBUS_TYPE_INVALID))
@@ -1136,7 +1138,7 @@ DBusHandlerResult BluetoothAgent::handle_request_authorization(DBusMessage *msg)
     return DBUS_HANDLER_RESULT_HANDLED;
 }
 
-DBusHandlerResult BluetoothAgent::handle_authorize_service(DBusMessage *msg)
+int BluetoothAgent::handle_authorize_service(DBusMessage *msg)
 {
     const char *device_path;
     const char *uuid;
@@ -1151,7 +1153,7 @@ DBusHandlerResult BluetoothAgent::handle_authorize_service(DBusMessage *msg)
     return DBUS_HANDLER_RESULT_HANDLED;
 }
 
-DBusHandlerResult BluetoothAgent::handle_cancel(DBusMessage *msg)
+int BluetoothAgent::handle_cancel(DBusMessage *msg)
 {
     AUDIO_INFO_PRINT("Pairing operation cancelled");
 
