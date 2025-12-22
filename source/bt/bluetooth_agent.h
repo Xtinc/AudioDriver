@@ -256,6 +256,23 @@ class BluetoothAgent
     bool set_trusted(const std::string &device_path, bool trusted = true);
 
     /**
+     * @brief Sets the alias (friendly name) of the Bluetooth adapter
+     *
+     * This changes the name that other devices see when discovering this adapter.
+     *
+     * @param alias New name for the adapter
+     * @return true if the operation succeeded, false otherwise
+     */
+    bool set_adapter_alias(const std::string &alias);
+
+    /**
+     * @brief Gets the current alias (friendly name) of the Bluetooth adapter
+     *
+     * @return Current adapter alias, or empty string on failure
+     */
+    std::string get_adapter_alias() const;
+
+    /**
      * @brief Gets the current list of known Bluetooth devices
      *
      * This includes all discovered, paired, and connected devices known to the adapter.
@@ -328,6 +345,8 @@ class BluetoothAgent
 
   private:
     bool set_adapter_property(const char *property, bool value);
+    bool set_adapter_property_string(const char *property, const std::string &value);
+    std::string get_adapter_property_string(const char *property) const;
     bool set_device_property(const char *device_path, const char *property, bool value);
     std::string get_device_property(const char *device_path, const char *property);
     DBusMessage *call_method(const char *path, const char *interface, const char *method, int first_arg_type, ...);

@@ -463,6 +463,29 @@ bool BluetoothAgent::set_trusted(const std::string &device_path, bool trusted)
     return false;
 }
 
+bool BluetoothAgent::set_adapter_alias(const std::string &alias)
+{
+    AUDIO_INFO_PRINT("Setting adapter alias to: %s", alias.c_str());
+
+    if (set_adapter_property_string("Alias", alias))
+    {
+        AUDIO_INFO_PRINT("Adapter alias set to: %s", alias.c_str());
+        return true;
+    }
+    AUDIO_ERROR_PRINT("Failed to set adapter alias");
+    return false;
+}
+
+std::string BluetoothAgent::get_adapter_alias() const
+{
+    std::string alias = get_adapter_property_string("Alias");
+    if (!alias.empty())
+    {
+        AUDIO_INFO_PRINT("Adapter alias: %s", alias.c_str());
+    }
+    return alias;
+}
+
 bool BluetoothAgent::set_adapter_property(const char *property, bool value)
 {
     DBusError err;
@@ -501,6 +524,92 @@ bool BluetoothAgent::set_adapter_property(const char *property, bool value)
         dbus_message_unref(reply);
     }
     return success;
+}
+
+bool BluetoothAgent::set_adapter_property_string(const char *property, const std::string &value)
+{
+    DBusError err;
+    dbus_error_init(&err);
+
+    DBusMessage *msg = dbus_message_new_method_call(BLUEZ_SERVICE, adapter_path_.c_str(), PROPERTIES_INTERFACE, "Set");
+    if (!msg)
+    {
+        AUDIO_ERROR_PRINT("Failed to create method call for Set");
+        return false;
+    }
+
+    DBusMessageIter iter, variant;
+    dbus_message_iter_init_append(msg, &iter);
+    const char *iface = ADAPTER_INTERFACE;
+    dbus_message_iter_append_basic(&iter, DBUS_TYPE_STRING, &iface);
+    dbus_message_iter_append_basic(&iter, DBUS_TYPE_STRING, &property);
+
+    const char *value_cstr = value.c_str();
+    dbus_message_iter_open_container(&iter, DBUS_TYPE_VARIANT, "s", &variant);
+    dbus_message_iter_append_basic(&variant, DBUS_TYPE_STRING, &value_cstr);
+    dbus_message_iter_close_container(&iter, &variant);
+
+    DBusMessage *reply = dbus_connection_send_with_reply_and_block(connection_, msg, DBUS_TIMEOUT_SHORT, &err);
+    dbus_message_unref(msg);
+
+    bool success = !dbus_error_is_set(&err);
+    if (!success)
+    {
+        AUDIO_ERROR_PRINT("Failed to set adapter property %s: %s - %s", property, err.name, err.message);
+        dbus_error_free(&err);
+    }
+
+    if (reply)
+    {
+        dbus_message_unref(reply);
+    }
+    return success;
+}
+
+std::string BluetoothAgent::get_adapter_property_string(const char *property) const
+{
+    DBusMessage *msg = dbus_message_new_method_call(BLUEZ_SERVICE, adapter_path_.c_str(), PROPERTIES_INTERFACE, "Get");
+    if (!msg)
+    {
+        AUDIO_ERROR_PRINT("Failed to create method call for Get");
+        return "";
+    }
+
+    DBusMessageIter iter;
+    dbus_message_iter_init_append(msg, &iter);
+    const char *iface = ADAPTER_INTERFACE;
+    dbus_message_iter_append_basic(&iter, DBUS_TYPE_STRING, &iface);
+    dbus_message_iter_append_basic(&iter, DBUS_TYPE_STRING, &property);
+
+    DBusError err;
+    dbus_error_init(&err);
+    DBusMessage *reply = dbus_connection_send_with_reply_and_block(connection_, msg, DBUS_TIMEOUT_SHORT, &err);
+    dbus_message_unref(msg);
+
+    std::string result;
+    if (reply)
+    {
+        DBusMessageIter args, variant;
+        if (dbus_message_iter_init(reply, &args) && dbus_message_iter_get_arg_type(&args) == DBUS_TYPE_VARIANT)
+        {
+            dbus_message_iter_recurse(&args, &variant);
+            if (dbus_message_iter_get_arg_type(&variant) == DBUS_TYPE_STRING)
+            {
+                const char *value;
+                dbus_message_iter_get_basic(&variant, &value);
+                result = value;
+            }
+        }
+        dbus_message_unref(reply);
+    }
+
+    if (dbus_error_is_set(&err))
+    {
+        AUDIO_DEBUG_PRINT("Failed to get adapter property %s: %s", property, err.message);
+        dbus_error_free(&err);
+    }
+
+    return result;
 }
 
 std::string BluetoothAgent::get_device_property(const char *device_path, const char *property)
