@@ -12,6 +12,7 @@
 
 #include "audio_message.h"
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <future>
 #include <memory>
@@ -42,6 +43,7 @@ struct BluetoothDevice
     bool connected;                 /**< True if device is currently connected */
     bool trusted;                   /**< True if device is trusted (auto-connection allowed) */
     bool blocked;                   /**< True if device is blocked */
+    bool removed;                   /**< True if device has been removed (soft delete) */
     std::vector<std::string> uuids; /**< List of supported service UUIDs */
 
     /**
@@ -258,10 +260,22 @@ class BluetoothAgent
      *
      * This includes all discovered, paired, and connected devices known to the adapter.
      *
+     * @param include_removed If true, includes devices marked as removed
      * @return Vector of BluetoothDevice structures containing device information
      * @note The returned list is a snapshot; use the pairing callback for real-time updates
      */
-    std::vector<BluetoothDevice> list() const;
+    std::vector<BluetoothDevice> list(bool include_removed = false) const;
+
+    /**
+     * @brief Clears devices marked as removed from the internal list
+     * 
+     * This method permanently removes devices that have been marked as removed
+     * for longer than the specified grace period.
+     * 
+     * @param grace_period_seconds Minimum time since removal before cleanup (default: 5 seconds)
+     * @return Number of devices cleaned up
+     */
+    int cleanup_removed_devices(int grace_period_seconds = 5);
 
     void handle_dev_add(DBusMessage *msg);
     void handle_dev_chg(DBusMessage *msg);
@@ -342,11 +356,19 @@ class BluetoothAgent
     using PincodeFuture = std::future<PincodeResult>;
 
   private:
+    struct DeviceEntry
+    {
+        BluetoothDevice device;
+        std::chrono::steady_clock::time_point removal_time;
+        
+        DeviceEntry() : removal_time(std::chrono::steady_clock::now()), device() {}
+    };
+    
     DBusConnection *connection_;
     DBusConnection *event_connection_;
     std::string adapter_path_;
     mutable std::mutex devices_mutex_;
-    std::vector<BluetoothDevice> devices_;
+    std::vector<DeviceEntry> devices_;
     std::atomic<bool> running_;
     bool scanning_;
     std::thread dbus_thread_;
