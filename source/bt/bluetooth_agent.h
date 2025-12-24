@@ -102,6 +102,18 @@ struct PairingRequest
 using PairingRequestCallback = std::function<void(const PairingRequest &request)>;
 
 /**
+ * @typedef ConnectionStateCallback
+ * @brief Callback function type for connection state change notifications
+ *
+ * Applications should register this callback to receive notifications when a device's
+ * connection state changes (connected or disconnected).
+ *
+ * @param device The Bluetooth device whose connection state changed
+ * @param connected true if device is now connected, false if disconnected
+ */
+using ConnectionStateCallback = std::function<void(const BluetoothDevice &device, bool connected)>;
+
+/**
  * @class BluetoothAgent
  * @brief Main class for managing Bluetooth operations via BlueZ D-Bus interface
  *
@@ -312,6 +324,16 @@ class BluetoothAgent
     void set_pairing_request_callback(PairingRequestCallback callback);
 
     /**
+     * @brief Registers a callback for connection state change notifications
+     *
+     * The callback will be invoked when a device's connection state changes,
+     * either when a device connects or disconnects.
+     *
+     * @param callback Function to call when a device's connection state changes
+     */
+    void set_connection_state_callback(ConnectionStateCallback callback);
+
+    /**
      * @brief Responds to a confirmation pairing request
      *
      * Call this method in response to a PairingRequestType::CONFIRMATION request
@@ -367,6 +389,7 @@ class BluetoothAgent
     int handle_cancel(DBusMessage *msg);
 
     void notify_pairing_request(const PairingRequest &request);
+    void notify_connection_state_change(const BluetoothDevice &device, bool connected);
 
     using PasskeyResult = std::pair<bool, uint32_t>;
     using PincodeResult = std::pair<bool, std::string>;
@@ -397,6 +420,7 @@ class BluetoothAgent
     std::unique_ptr<std::promise<PincodeResult>> pincode_promise_;
 
     PairingRequestCallback pairing_request_callback_;
+    ConnectionStateCallback connection_state_callback_;
     std::mutex callback_mutex_;
 };
 

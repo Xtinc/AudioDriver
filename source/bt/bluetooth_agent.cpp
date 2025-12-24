@@ -842,7 +842,18 @@ void BluetoothAgent::update_device_property(BluetoothDevice &device, const char 
     {
         dbus_bool_t connected;
         dbus_message_iter_get_basic(&variant_iter, &connected);
-        device.connected = connected ? true : false;
+        bool new_connected = connected ? true : false;
+        
+        if (device.connected != new_connected)
+        {
+            bool old_connected = device.connected;
+            device.connected = new_connected;
+            notify_connection_state_change(device, new_connected);
+        }
+        else
+        {
+            device.connected = new_connected;
+        }
     }
     else if (strcmp(key, "Trusted") == 0 && dbus_message_iter_get_arg_type(&variant_iter) == DBUS_TYPE_BOOLEAN)
     {
@@ -1398,6 +1409,13 @@ void BluetoothAgent::set_pairing_request_callback(PairingRequestCallback callbac
     AUDIO_INFO_PRINT("Pairing request callback registered");
 }
 
+void BluetoothAgent::set_connection_state_callback(ConnectionStateCallback callback)
+{
+    std::lock_guard<std::mutex> lock(callback_mutex_);
+    connection_state_callback_ = callback;
+    AUDIO_INFO_PRINT("Connection state callback registered");
+}
+
 void BluetoothAgent::notify_pairing_request(const PairingRequest &request)
 {
     std::lock_guard<std::mutex> lock(callback_mutex_);
@@ -1414,6 +1432,30 @@ void BluetoothAgent::notify_pairing_request(const PairingRequest &request)
         catch (...)
         {
             AUDIO_ERROR_PRINT("Unknown exception in pairing request callback");
+        }
+    }
+}
+
+void BluetoothAgent::notify_connection_state_change(const BluetoothDevice &device, bool connected)
+{
+    std::string device_name = device.alias.empty() ? device.name : device.alias;
+    AUDIO_INFO_PRINT("Device %s (%s) %s", device_name.c_str(), device.address.c_str(),
+                     connected ? "connected" : "disconnected");
+    
+    std::lock_guard<std::mutex> lock(callback_mutex_);
+    if (connection_state_callback_)
+    {
+        try
+        {
+            connection_state_callback_(device, connected);
+        }
+        catch (const std::exception &e)
+        {
+            AUDIO_ERROR_PRINT("Exception in connection state callback: %s", e.what());
+        }
+        catch (...)
+        {
+            AUDIO_ERROR_PRINT("Unknown exception in connection state callback");
         }
     }
 }
