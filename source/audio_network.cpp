@@ -505,6 +505,27 @@ RetCode NetWorker::del_destination(uint8_t sender_id, uint8_t receiver_token, co
     return {RetCode::OK, "Destination removed"};
 }
 
+RetCode NetWorker::clear_all_destinations(uint8_t sender_id)
+{
+    std::lock_guard<std::mutex> lock(senders_mutex);
+    auto iter = senders.find(sender_id);
+    if (iter == senders.end())
+    {
+        return {RetCode::NOACTION, "Sender not registered"};
+    }
+
+    size_t count = iter->second.destinations.size();
+    iter->second.destinations.clear();
+    
+    if (count > 0)
+    {
+        AUDIO_INFO_PRINT("Cleared %zu destination(s) for sender %u", count, sender_id);
+        return {RetCode::OK, "All destinations cleared"};
+    }
+    
+    return {RetCode::NOACTION, "No destinations to clear"};
+}
+
 RetCode NetWorker::send_audio(uint8_t sender_id, const int16_t *data, unsigned int frames)
 {
     if (!data || frames == 0)

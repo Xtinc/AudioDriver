@@ -154,6 +154,7 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     RetCode connect(const std::shared_ptr<OAStream> &oas);
     RetCode disconnect(const std::shared_ptr<OAStream> &oas);
     RetCode direct_push(const char *data, size_t len) const;
+    RetCode clear_all_connections();
 
     bool available() const;
     void mute();

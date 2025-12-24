@@ -616,6 +616,41 @@ RetCode AudioCenter::disconnect(IToken itoken, OToken otoken, const std::string 
     return ret;
 }
 
+RetCode AudioCenter::clear(AudioToken token)
+{
+    State current = center_state.load();
+    if (current != State::CONNECTING && current != State::READY)
+    {
+        AUDIO_ERROR_PRINT("AudioCenter not in CONNECTING or READY state");
+        return {RetCode::ESTATE, "AudioCenter not in CONNECTING or READY state"};
+    }
+
+    if (!token)
+    {
+        AUDIO_ERROR_PRINT("Invalid token: %u", token.tok);
+        return {RetCode::EPARAM, "Invalid token"};
+    }
+
+    // Try as input stream first
+    auto ias = ias_map.find(token.tok);
+    if (ias != ias_map.end())
+    {
+        AUDIO_INFO_PRINT("Clearing all connections for input stream %u", token.tok);
+        return ias->second->clear_all_connections();
+    }
+
+    // Output streams don't maintain connection lists, so just log
+    auto oas = oas_map.find(token.tok);
+    if (oas != oas_map.end())
+    {
+        AUDIO_INFO_PRINT("Output stream %u has no connections to clear (connections are managed by input streams)", token.tok);
+        return {RetCode::OK, "Output stream has no connections to clear"};
+    }
+
+    AUDIO_ERROR_PRINT("Token not found: %u", token.tok);
+    return {RetCode::EPARAM, "Token not found"};
+}
+
 RetCode AudioCenter::register_callback(IToken token, AudioInputCallBack cb, unsigned int frames, UsrCallBackMode mode,
                                        void *ptr)
 {

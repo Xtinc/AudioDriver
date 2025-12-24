@@ -842,6 +842,46 @@ RetCode IAStream::disconnect(const std::shared_ptr<OAStream> &oas)
     return {RetCode::OK, "Connection removed"};
 }
 
+RetCode IAStream::clear_all_connections()
+{
+    if (!ias_ready)
+    {
+        return {RetCode::FAILED, "Device not ready"};
+    }
+
+    // Clear local connections
+    size_t local_count = 0;
+    {
+        std::lock_guard<std::mutex> grd(dest_mtx);
+        local_count = dests.size();
+        dests.clear();
+    }
+
+    // Clear network destinations
+    size_t network_count = 0;
+    if (auto np = networker.lock())
+    {
+        auto ret = np->clear_all_destinations(token);
+        if (ret == RetCode::OK)
+        {
+            // Network destinations were cleared (we don't know exact count from here)
+            AUDIO_INFO_PRINT("Cleared all network destinations for input stream %u", token);
+        }
+    }
+
+    if (local_count > 0)
+    {
+        AUDIO_INFO_PRINT("Cleared %zu local connection(s) for input stream %u", local_count, token);
+    }
+
+    if (local_count > 0 || network_count > 0)
+    {
+        return {RetCode::OK, "All connections cleared"};
+    }
+
+    return {RetCode::NOACTION, "No connections to clear"};
+}
+
 RetCode IAStream::direct_push(const char *data, size_t len) const
 {
     if (usr_cb.cb && usr_cb.mode == UsrCallBackMode::OBSERVER)

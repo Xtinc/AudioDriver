@@ -296,6 +296,7 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     RetCode del_destination(uint8_t sender_id, uint8_t receiver_token, const std::string &ip, uint16_t port);
     RetCode register_receiver(uint8_t token, ReceiveCallback callback);
     RetCode unregister_receiver(uint8_t token);
+    RetCode clear_all_destinations(uint8_t sender_id);
 
   private:
     void start_receive_loop();

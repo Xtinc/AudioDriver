@@ -627,6 +627,17 @@ class AudioCenter
                        unsigned short port = NETWORK_AUDIO_TRANS_PORT);
 
     /**
+     * @brief Clears all connections for a stream (both local and network)
+     *
+     * This removes all connections associated with the specified token,
+     * including both local connections to other streams and network destinations.
+     *
+     * @param token Audio token (can be either input or output)
+     * @return RetCode indicating success or failure
+     */
+    RetCode clear(AudioToken token);
+
+    /**
      * @brief Registers a callback function for an input stream
      *
      * The callback will be invoked when new audio data is available from the input stream.
