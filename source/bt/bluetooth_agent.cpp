@@ -1352,14 +1352,87 @@ int BluetoothAgent::handle_authorize_service(DBusMessage *msg)
         return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
     }
 
-    AUDIO_INFO_PRINT("Service Authorization - Device: %s, UUID: %s (auto-accepting)", device_path, uuid);
-    send_simple_reply(connection_, msg);
+    std::string device_address = get_device_property(device_path, "Address");
+    std::string device_name = get_device_property(device_path, "Name");
+    if (device_name.empty())
+    {
+        device_name = get_device_property(device_path, "Alias");
+    }
+
+    AUDIO_INFO_PRINT("Service Authorization - Device: %s (%s), UUID: %s", 
+                     device_name.c_str(), device_address.c_str(), uuid);
+
+    bool has_callback = false;
+    {
+        std::lock_guard<std::mutex> lock(callback_mutex_);
+        has_callback = (service_authorization_callback_ != nullptr);
+    }
+
+    if (has_callback)
+    {
+        AUDIO_INFO_PRINT("Service authorization - waiting for callback response...");
+        
+        // 构建服务授权请求
+        PairingRequest request;
+        request.type = PairingRequestType::SERVICE_AUTHORIZATION;
+        request.device_path = device_path;
+        request.device_address = device_address;
+        request.device_name = device_name;
+        request.service_uuid = uuid;
+        
+        // 触发服务授权回调通知
+        notify_service_authorization(request);
+        
+        ConfirmationFuture future;
+        std::unique_lock<std::mutex> lock(confirmation_mutex_);
+        service_auth_promise_ = std::make_unique<std::promise<bool>>();
+        future = service_auth_promise_->get_future();
+        lock.unlock();
+
+        auto status = future.wait_for(std::chrono::seconds(PAIRING_TIMEOUT_SECONDS));
+
+        if (status != std::future_status::timeout)
+        {
+            bool accept = future.get();
+            if (accept)
+            {
+                AUDIO_INFO_PRINT("Service authorization accepted");
+                send_simple_reply(connection_, msg);
+            }
+            else
+            {
+                AUDIO_INFO_PRINT("Service authorization rejected");
+                DBusMessage *error = dbus_message_new_error(msg, "org.bluez.Error.Rejected", 
+                                                            "Service authorization rejected");
+                dbus_connection_send(connection_, error, nullptr);
+                dbus_message_unref(error);
+            }
+        }
+        else
+        {
+            AUDIO_INFO_PRINT("Service authorization timeout, rejecting by default");
+            DBusMessage *error = dbus_message_new_error(msg, "org.bluez.Error.Rejected", 
+                                                        "Service authorization timeout");
+            dbus_connection_send(connection_, error, nullptr);
+            dbus_message_unref(error);
+        }
+
+        lock.lock();
+        service_auth_promise_.reset();
+    }
+    else
+    {
+        AUDIO_INFO_PRINT("Service authorization - no callback set, auto-accepting");
+        send_simple_reply(connection_, msg);
+    }
+
     return DBUS_HANDLER_RESULT_HANDLED;
 }
 
 int BluetoothAgent::handle_cancel(DBusMessage *msg)
 {
     AUDIO_INFO_PRINT("Pairing operation cancelled");
+    notify_pairing_cancel();
 
     {
         std::lock_guard<std::mutex> lock(confirmation_mutex_);
@@ -1396,6 +1469,17 @@ int BluetoothAgent::handle_cancel(DBusMessage *msg)
             }
             pincode_promise_.reset();
         }
+        if (service_auth_promise_)
+        {
+            try
+            {
+                service_auth_promise_->set_value(false);
+            }
+            catch (...)
+            {
+            }
+            service_auth_promise_.reset();
+        }
     }
 
     send_simple_reply(connection_, msg);
@@ -1414,6 +1498,20 @@ void BluetoothAgent::set_connection_state_callback(ConnectionStateCallback callb
     std::lock_guard<std::mutex> lock(callback_mutex_);
     connection_state_callback_ = callback;
     AUDIO_INFO_PRINT("Connection state callback registered");
+}
+
+void BluetoothAgent::set_service_authorization_callback(ServiceAuthorizationCallback callback)
+{
+    std::lock_guard<std::mutex> lock(callback_mutex_);
+    service_authorization_callback_ = callback;
+    AUDIO_INFO_PRINT("Service authorization callback registered");
+}
+
+void BluetoothAgent::set_pairing_cancel_callback(PairingCancelCallback callback)
+{
+    std::lock_guard<std::mutex> lock(callback_mutex_);
+    pairing_cancel_callback_ = callback;
+    AUDIO_INFO_PRINT("Pairing cancel callback registered");
 }
 
 void BluetoothAgent::notify_pairing_request(const PairingRequest &request)
@@ -1456,6 +1554,47 @@ void BluetoothAgent::notify_connection_state_change(const BluetoothDevice &devic
         catch (...)
         {
             AUDIO_ERROR_PRINT("Unknown exception in connection state callback");
+        }
+    }
+}
+
+void BluetoothAgent::notify_service_authorization(const PairingRequest &request)
+{
+    std::lock_guard<std::mutex> lock(callback_mutex_);
+    if (service_authorization_callback_)
+    {
+        try
+        {
+            service_authorization_callback_(request);
+        }
+        catch (const std::exception &e)
+        {
+            AUDIO_ERROR_PRINT("Exception in service authorization callback: %s", e.what());
+        }
+        catch (...)
+        {
+            AUDIO_ERROR_PRINT("Unknown exception in service authorization callback");
+        }
+    }
+}
+
+void BluetoothAgent::notify_pairing_cancel()
+{
+    std::lock_guard<std::mutex> lock(callback_mutex_);
+    if (pairing_cancel_callback_)
+    {
+        try
+        {
+            pairing_cancel_callback_();
+            AUDIO_INFO_PRINT("Pairing cancel notification sent");
+        }
+        catch (const std::exception &e)
+        {
+            AUDIO_ERROR_PRINT("Exception in pairing cancel callback: %s", e.what());
+        }
+        catch (...)
+        {
+            AUDIO_ERROR_PRINT("Unknown exception in pairing cancel callback");
         }
     }
 }
@@ -1508,6 +1647,23 @@ void BluetoothAgent::set_pincode_result(bool accept, const std::string &pincode)
             AUDIO_ERROR_PRINT("Pincode already set");
         }
         AUDIO_INFO_PRINT("Pincode result set: %s, pincode: %s", accept ? "accepted" : "rejected", pincode.c_str());
+    }
+}
+
+void BluetoothAgent::set_service_authorization_result(bool accept)
+{
+    std::lock_guard<std::mutex> lock(confirmation_mutex_);
+    if (service_auth_promise_)
+    {
+        try
+        {
+            service_auth_promise_->set_value(accept);
+        }
+        catch (const std::future_error &)
+        {
+            AUDIO_ERROR_PRINT("Service authorization already set");
+        }
+        AUDIO_INFO_PRINT("Service authorization result set: %s", accept ? "accepted" : "rejected");
     }
 }
 
@@ -1570,8 +1726,7 @@ void BluetoothAgent::load_existing_devices()
     }
 
     dbus_message_unref(reply);
-    
-    // 清理旧的已移除设备
+
     cleanup_removed_devices(0);
     
     AUDIO_INFO_PRINT("Loaded %d existing devices", device_count);

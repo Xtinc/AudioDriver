@@ -65,7 +65,8 @@ enum class PairingRequestType
     CONFIRMATION,    /**< Request to confirm a displayed passkey matches on both devices */
     DISPLAY_PINCODE, /**< Display a PIN code for the user to enter on remote device */
     DISPLAY_PASSKEY, /**< Display a 6-digit passkey for the user to enter on remote device */
-    AUTHORIZATION    /**< Request authorization for connection/service access */
+    AUTHORIZATION,    /**< Request authorization for connection/service access */
+    SERVICE_AUTHORIZATION  // Service authorization request
 };
 
 /**
@@ -82,6 +83,7 @@ struct PairingRequest
     std::string device_name;    /**< Name or alias of the requesting device */
     std::string device_address; /**< Bluetooth address of the requesting device */
     uint32_t passkey;           /**< Passkey to display (only valid for DISPLAY_PASSKEY and CONFIRMATION types) */
+    std::string service_uuid;  // 新增：服务UUID（用于SERVICE_AUTHORIZATION类型）
 
     PairingRequest() : type(PairingRequestType::CONFIRMATION), passkey(0)
     {
@@ -112,6 +114,31 @@ using PairingRequestCallback = std::function<void(const PairingRequest &request)
  * @param connected true if device is now connected, false if disconnected
  */
 using ConnectionStateCallback = std::function<void(const BluetoothDevice &device, bool connected)>;
+
+/**
+ * @typedef ServiceAuthorizationCallback
+ * @brief Callback function type for service authorization requests
+ *
+ * Applications can register this callback to handle service authorization requests
+ * from Bluetooth devices. The callback is invoked when a device requests access to
+ * a service, allowing the application to decide whether to grant or deny the request.
+ *
+ * @param device_path D-Bus object path of the requesting device
+ * @param device_address Bluetooth address of the requesting device
+ * @param device_name Name or alias of the requesting device
+ * @param service_uuid UUID of the service being requested
+ * @return true to grant access, false to deny
+ */
+using ServiceAuthorizationCallback = std::function<void(const PairingRequest &)>;
+
+/**
+ * @typedef PairingCancelCallback
+ * @brief Callback function type for pairing cancellation notifications
+ *
+ * Applications can register this callback to receive notifications when a pairing
+ * operation is cancelled by the remote device or by BlueZ.
+ */
+using PairingCancelCallback = std::function<void()>;
 
 /**
  * @class BluetoothAgent
@@ -334,6 +361,26 @@ class BluetoothAgent
     void set_connection_state_callback(ConnectionStateCallback callback);
 
     /**
+     * @brief Registers a callback for service authorization requests
+     *
+     * The callback will be invoked when a device requests access to a service.
+     * The application can grant or deny the request based on its logic.
+     *
+     * @param callback Function to call when a service authorization request is received
+     */
+    void set_service_authorization_callback(ServiceAuthorizationCallback callback);
+
+    /**
+     * @brief Registers a callback for pairing cancellation notifications
+     *
+     * The callback will be invoked when a pairing operation is cancelled,
+     * either by the remote device or by BlueZ.
+     *
+     * @param callback Function to call when pairing is cancelled
+     */
+    void set_pairing_cancel_callback(PairingCancelCallback callback);
+
+    /**
      * @brief Responds to a confirmation pairing request
      *
      * Call this method in response to a PairingRequestType::CONFIRMATION request
@@ -365,6 +412,16 @@ class BluetoothAgent
      */
     void set_pincode_result(bool accept, const std::string &pincode = "");
 
+    /**
+     * @brief Responds to a service authorization request
+     *
+     * Call this method in response to a PairingRequestType::SERVICE_AUTHORIZATION request
+     * received via the pairing request callback.
+     *
+     * @param accept true to grant access to the service, false to deny
+     */
+    void set_service_authorization_result(bool accept);
+
   private:
     bool set_adapter_property(const char *property, bool value);
     bool set_adapter_property_string(const char *property, const std::string &value);
@@ -390,6 +447,8 @@ class BluetoothAgent
 
     void notify_pairing_request(const PairingRequest &request);
     void notify_connection_state_change(const BluetoothDevice &device, bool connected);
+    void notify_service_authorization(const PairingRequest &request);
+    void notify_pairing_cancel();
 
     using PasskeyResult = std::pair<bool, uint32_t>;
     using PincodeResult = std::pair<bool, std::string>;
@@ -418,9 +477,13 @@ class BluetoothAgent
     std::unique_ptr<std::promise<bool>> confirmation_promise_;
     std::unique_ptr<std::promise<PasskeyResult>> passkey_promise_;
     std::unique_ptr<std::promise<PincodeResult>> pincode_promise_;
+    std::unique_ptr<std::promise<bool>> service_auth_promise_;  // 新增
 
     PairingRequestCallback pairing_request_callback_;
     ConnectionStateCallback connection_state_callback_;
+    ServiceAuthorizationCallback service_authorization_callback_;
+    PairingCancelCallback pairing_cancel_callback_;  // 新增
+    
     std::mutex callback_mutex_;
 };
 
