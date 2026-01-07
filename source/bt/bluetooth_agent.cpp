@@ -323,7 +323,7 @@ bool BluetoothAgent::disconnect(const std::string &device_path)
         AUDIO_INFO_PRINT("Device disconnected: %s", device_path.c_str());
         return true;
     }
-    AUDIO_ERROR_PRINT("Failed to disconnect device: %s", device_path.c_str());
+    AUDIO_ERROR_PRINT("Failed to disconnect to device: %s", device_path.c_str());
     return false;
 }
 
@@ -370,34 +370,54 @@ bool BluetoothAgent::remove(const std::string &device_path)
 {
     AUDIO_INFO_PRINT("Removing device: %s", device_path.c_str());
 
-    set_trusted(device_path, false);
+    DBusError err;
+    dbus_error_init(&err);
 
-    DBusMessage *reply = call_method(device_path.c_str(), DEVICE_INTERFACE, "Disconnect", DBUS_TYPE_INVALID);
-    if (reply)
+    DBusMessage *disconnect_msg =
+        dbus_message_new_method_call(BLUEZ_SERVICE, device_path.c_str(), DEVICE_INTERFACE, "Disconnect");
+
+    if (disconnect_msg)
     {
-        dbus_message_unref(reply);
+        DBusMessage *disconnect_reply =
+            dbus_connection_send_with_reply_and_block(connection_, disconnect_msg, DBUS_TIMEOUT_LONG, &err);
+        dbus_message_unref(disconnect_msg);
+
+        if (dbus_error_is_set(&err))
+        {
+            AUDIO_DEBUG_PRINT("Disconnect returned error (may already be disconnected): %s - %s", err.name,
+                              err.message);
+            dbus_error_free(&err);
+        }
+        else if (disconnect_reply)
+        {
+            dbus_message_unref(disconnect_reply);
+            AUDIO_INFO_PRINT("Device disconnected: %s", device_path.c_str());
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        }
     }
 
     const char *path = device_path.c_str();
-    reply = call_method(adapter_path_.c_str(), ADAPTER_INTERFACE, "RemoveDevice", DBUS_TYPE_OBJECT_PATH, &path,
-                        DBUS_TYPE_INVALID);
-    if (reply)
+    DBusMessage *remove_reply = call_method(adapter_path_.c_str(), ADAPTER_INTERFACE, "RemoveDevice",
+                                            DBUS_TYPE_OBJECT_PATH, &path, DBUS_TYPE_INVALID);
+    if (remove_reply)
     {
-        dbus_message_unref(reply);
-        
-        // 标记为已移除，而不是立即删除
-        std::lock_guard<std::mutex> lock(devices_mutex_);
-        auto it = std::find_if(devices_.begin(), devices_.end(),
-                               [device_path](const DeviceEntry &entry) { return entry.device.path == device_path; });
-        
-        if (it != devices_.end())
+        dbus_message_unref(remove_reply);
+
         {
-            it->device.removed = true;
-            it->device.connected = false;
-            it->device.paired = false;
-            it->removal_time = std::chrono::steady_clock::now();
+            std::lock_guard<std::mutex> lock(devices_mutex_);
+            auto it = std::find_if(devices_.begin(), devices_.end(), [device_path](const DeviceEntry &entry) {
+                return entry.device.path == device_path;
+            });
+
+            if (it != devices_.end())
+            {
+                it->device.removed = true;
+                it->device.connected = false;
+                it->device.paired = false;
+                it->removal_time = std::chrono::steady_clock::now();
+            }
         }
-        
+
         AUDIO_INFO_PRINT("Device marked as removed: %s", device_path.c_str());
         return true;
     }
@@ -411,7 +431,7 @@ std::vector<BluetoothDevice> BluetoothAgent::list(bool include_removed) const
     std::lock_guard<std::mutex> lock(devices_mutex_);
     std::vector<BluetoothDevice> result;
     result.reserve(devices_.size());
-    
+
     for (const auto &entry : devices_)
     {
         if (include_removed || !entry.device.removed)
@@ -419,34 +439,33 @@ std::vector<BluetoothDevice> BluetoothAgent::list(bool include_removed) const
             result.push_back(entry.device);
         }
     }
-    
+
     return result;
 }
 
 int BluetoothAgent::cleanup_removed_devices(int grace_period_seconds)
 {
     std::lock_guard<std::mutex> lock(devices_mutex_);
-    
+
     auto now = std::chrono::steady_clock::now();
     auto grace_period = std::chrono::seconds(grace_period_seconds);
-    
-    auto it = std::remove_if(devices_.begin(), devices_.end(),
-                             [now, grace_period](const DeviceEntry &entry) {
-                                 if (!entry.device.removed)
-                                     return false;
-                                 
-                                 auto elapsed = now - entry.removal_time;
-                                 return elapsed >= grace_period;
-                             });
-    
+
+    auto it = std::remove_if(devices_.begin(), devices_.end(), [now, grace_period](const DeviceEntry &entry) {
+        if (!entry.device.removed)
+            return false;
+
+        auto elapsed = now - entry.removal_time;
+        return elapsed >= grace_period;
+    });
+
     int removed_count = std::distance(it, devices_.end());
-    
+
     if (removed_count > 0)
     {
         devices_.erase(it, devices_.end());
         AUDIO_INFO_PRINT("Cleaned up %d removed device(s)", removed_count);
     }
-    
+
     return removed_count;
 }
 
@@ -735,7 +754,7 @@ void BluetoothAgent::update_device_property(const char *path, DBusMessageIter *i
     std::lock_guard<std::mutex> lock(devices_mutex_);
 
     auto dev_iter = std::find_if(devices_.begin(), devices_.end(),
-                                  [path](const DeviceEntry &entry) { return entry.device.path == path; });
+                                 [path](const DeviceEntry &entry) { return entry.device.path == path; });
 
     bool is_new = (dev_iter == devices_.end());
 
@@ -752,33 +771,6 @@ void BluetoothAgent::update_device_property(const char *path, DBusMessageIter *i
         devices_.push_back(new_entry);
         dev_iter = devices_.end() - 1;
         AUDIO_INFO_PRINT("New device discovered: %s", path);
-    }
-    else if (dev_iter->device.removed)
-    {
-        // 如果设备已被标记为移除，只更新连接状态，忽略其他属性
-        AUDIO_DEBUG_PRINT("Ignoring property updates for removed device: %s", path);
-        
-        // 只允许更新 Connected 和 Paired 状态，用于确认断开
-        DBusMessageIter dict_iter;
-        dbus_message_iter_recurse(iter, &dict_iter);
-        
-        while (dbus_message_iter_get_arg_type(&dict_iter) == DBUS_TYPE_DICT_ENTRY)
-        {
-            DBusMessageIter entry_iter;
-            const char *property_name;
-
-            dbus_message_iter_recurse(&dict_iter, &entry_iter);
-            dbus_message_iter_get_basic(&entry_iter, &property_name);
-            dbus_message_iter_next(&entry_iter);
-
-            if (strcmp(property_name, "Connected") == 0 || strcmp(property_name, "Paired") == 0)
-            {
-                update_device_property(dev_iter->device, property_name, &entry_iter);
-            }
-            
-            dbus_message_iter_next(&dict_iter);
-        }
-        return;
     }
 
     DBusMessageIter dict_iter;
@@ -843,7 +835,7 @@ void BluetoothAgent::update_device_property(BluetoothDevice &device, const char 
         dbus_bool_t connected;
         dbus_message_iter_get_basic(&variant_iter, &connected);
         bool new_connected = connected ? true : false;
-        
+
         if (device.connected != new_connected)
         {
             bool old_connected = device.connected;
@@ -921,17 +913,28 @@ void BluetoothAgent::handle_dev_del(DBusMessage *msg)
 
     AUDIO_INFO_PRINT("Device removed from system: %s", object_path);
 
-    std::lock_guard<std::mutex> lock(devices_mutex_);
-    auto it = std::find_if(devices_.begin(), devices_.end(),
-                           [object_path](const DeviceEntry &entry) { return entry.device.path == object_path; });
-
-    if (it != devices_.end())
+    bool was_connected = false;
+    BluetoothDevice device_copy;
     {
-        // 软删除：标记为已移除，不立即删除
-        it->device.removed = true;
-        it->device.connected = false;
-        it->removal_time = std::chrono::steady_clock::now();
-        AUDIO_INFO_PRINT("Device marked as removed: %s", object_path);
+        std::lock_guard<std::mutex> lock(devices_mutex_);
+        auto it = std::find_if(devices_.begin(), devices_.end(),
+                               [object_path](const DeviceEntry &entry) { return entry.device.path == object_path; });
+
+        if (it != devices_.end())
+        {
+            was_connected = it->device.connected;
+            device_copy = it->device;
+
+            it->device.removed = true;
+            it->device.connected = false;
+            it->removal_time = std::chrono::steady_clock::now();
+            AUDIO_INFO_PRINT("Device marked as removed: %s", object_path);
+        }
+    }
+
+    if (was_connected)
+    {
+        notify_connection_state_change(device_copy, false);
     }
 }
 
@@ -1359,8 +1362,8 @@ int BluetoothAgent::handle_authorize_service(DBusMessage *msg)
         device_name = get_device_property(device_path, "Alias");
     }
 
-    AUDIO_INFO_PRINT("Service Authorization - Device: %s (%s), UUID: %s", 
-                     device_name.c_str(), device_address.c_str(), uuid);
+    AUDIO_INFO_PRINT("Service Authorization - Device: %s (%s), UUID: %s", device_name.c_str(), device_address.c_str(),
+                     uuid);
 
     bool has_callback = false;
     {
@@ -1371,18 +1374,16 @@ int BluetoothAgent::handle_authorize_service(DBusMessage *msg)
     if (has_callback)
     {
         AUDIO_INFO_PRINT("Service authorization - waiting for callback response...");
-        
-        // 构建服务授权请求
+
         PairingRequest request;
         request.type = PairingRequestType::SERVICE_AUTHORIZATION;
         request.device_path = device_path;
         request.device_address = device_address;
         request.device_name = device_name;
         request.service_uuid = uuid;
-        
-        // 触发服务授权回调通知
+
         notify_service_authorization(request);
-        
+
         ConfirmationFuture future;
         std::unique_lock<std::mutex> lock(confirmation_mutex_);
         service_auth_promise_ = std::make_unique<std::promise<bool>>();
@@ -1402,8 +1403,8 @@ int BluetoothAgent::handle_authorize_service(DBusMessage *msg)
             else
             {
                 AUDIO_INFO_PRINT("Service authorization rejected");
-                DBusMessage *error = dbus_message_new_error(msg, "org.bluez.Error.Rejected", 
-                                                            "Service authorization rejected");
+                DBusMessage *error =
+                    dbus_message_new_error(msg, "org.bluez.Error.Rejected", "Service authorization rejected");
                 dbus_connection_send(connection_, error, nullptr);
                 dbus_message_unref(error);
             }
@@ -1411,8 +1412,8 @@ int BluetoothAgent::handle_authorize_service(DBusMessage *msg)
         else
         {
             AUDIO_INFO_PRINT("Service authorization timeout, rejecting by default");
-            DBusMessage *error = dbus_message_new_error(msg, "org.bluez.Error.Rejected", 
-                                                        "Service authorization timeout");
+            DBusMessage *error =
+                dbus_message_new_error(msg, "org.bluez.Error.Rejected", "Service authorization timeout");
             dbus_connection_send(connection_, error, nullptr);
             dbus_message_unref(error);
         }
@@ -1539,7 +1540,7 @@ void BluetoothAgent::notify_connection_state_change(const BluetoothDevice &devic
     std::string device_name = device.alias.empty() ? device.name : device.alias;
     AUDIO_INFO_PRINT("Device %s (%s) %s", device_name.c_str(), device.address.c_str(),
                      connected ? "connected" : "disconnected");
-    
+
     std::lock_guard<std::mutex> lock(callback_mutex_);
     if (connection_state_callback_)
     {
@@ -1728,7 +1729,7 @@ void BluetoothAgent::load_existing_devices()
     dbus_message_unref(reply);
 
     cleanup_removed_devices(0);
-    
+
     AUDIO_INFO_PRINT("Loaded %d existing devices", device_count);
 }
 
