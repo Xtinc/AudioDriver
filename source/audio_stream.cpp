@@ -813,7 +813,14 @@ RetCode IAStream::connect(const std::shared_ptr<OAStream> &oas)
     }
 
     std::lock_guard<std::mutex> grd(dest_mtx);
-    if (std::any_of(dests.begin(), dests.end(), [&oas](const std::weak_ptr<OAStream> &wp) { return wp.lock() == oas; }))
+    OAStream *oas_ptr = oas.get();
+    if (std::any_of(dests.begin(), dests.end(), [oas_ptr](const std::weak_ptr<OAStream> &wp) {
+            if (auto sp = wp.lock())
+            {
+                return sp.get() == oas_ptr;
+            }
+            return false;
+        }))
     {
         return {RetCode::FAILED, "Already connected to this output stream"};
     }
@@ -835,8 +842,15 @@ RetCode IAStream::disconnect(const std::shared_ptr<OAStream> &oas)
     }
 
     std::lock_guard<std::mutex> grd(dest_mtx);
+    OAStream *oas_ptr = oas.get();
     dests.erase(std::remove_if(dests.begin(), dests.end(),
-                               [oas](const std::weak_ptr<OAStream> &wp) { return wp.lock() == oas; }),
+                               [oas_ptr](const std::weak_ptr<OAStream> &wp) {
+                                   if (auto sp = wp.lock())
+                                   {
+                                       return sp.get() == oas_ptr;
+                                   }
+                                   return false;
+                               }),
                 dests.end());
 
     return {RetCode::OK, "Connection removed"};

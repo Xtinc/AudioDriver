@@ -38,8 +38,8 @@ struct TimerCounter
 
         updateAverage(static_cast<unsigned int>(diff));
 
-        // Print the average interval every minute if the counter exceeds 5 per minute
-        if (now - last_print_time > std::chrono::minutes(1) && counter > 5)
+        // Print the average interval every minute if the counter exceeds 50 per minute
+        if (now - last_print_time > std::chrono::minutes(1) && counter > 50)
         {
             AUDIO_ERROR_PRINT("%s time out %u in last 1 minutes. avg interval: %uus", name.c_str(), counter,
                               avg_interval);
