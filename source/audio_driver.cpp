@@ -1,6 +1,8 @@
 #include "audio_driver.h"
 #include "audio_wavfile.h"
+#include <chrono>
 #include <codecvt>
+#include <ctime>
 
 #if LINUX_OS_ENVIRONMENT
 #include <alsa/asoundlib.h>
@@ -958,6 +960,26 @@ void WasapiDriver::read_loop()
 
 #endif
 
+static std::string generate_timestamp()
+{
+    auto now = std::chrono::system_clock::now();
+    auto time_t_now = std::chrono::system_clock::to_time_t(now);
+
+    std::tm tm_now;
+#if WINDOWS_OS_ENVIRONMENT
+    localtime_s(&tm_now, &time_t_now);
+#else
+    localtime_r(&time_t_now, &tm_now);
+#endif
+
+    // YYYYMMDD_HHMMSS
+    char timestamp[32];
+    snprintf(timestamp, sizeof(timestamp), "%04d%02d%02d_%02d%02d%02d", tm_now.tm_year + 1900, tm_now.tm_mon + 1,
+             tm_now.tm_mday, tm_now.tm_hour, tm_now.tm_min, tm_now.tm_sec);
+
+    return std::string(timestamp);
+}
+
 // Wave file device
 class WaveDevice final : public AudioDevice
 {
@@ -973,29 +995,54 @@ class WaveDevice final : public AudioDevice
     RetCode read(char *data, size_t len) override;
 
   private:
+    std::string generate_next_filename();
+    RetCode create_new_output_file();
+    void close_current_file();
+
+  private:
     unsigned int cycles;
+    std::string base_filename;
+    uint64_t max_file_bytes;
+    uint64_t written_bytes;
     std::unique_ptr<WavFile> wav_file;
 };
 
 WaveDevice::WaveDevice(const std::string &name, bool capture, unsigned int fs, unsigned int ps, unsigned int ch,
                        unsigned int cyc)
-    : AudioDevice(name, capture, fs, ps, ch, ResetOrd::RESET_NONE), cycles(cyc), wav_file(std::make_unique<WavFile>())
+    : AudioDevice(name, capture, fs, ps, ch, ResetOrd::RESET_NONE), cycles(cyc), base_filename(name), max_file_bytes(0),
+      written_bytes(0), wav_file(std::make_unique<WavFile>())
 {
 }
 
 WaveDevice::~WaveDevice()
 {
     (void)stop();
+    close_current_file();
 }
 
 RetCode WaveDevice::open()
 {
     WavFile::mode open_mode = is_capture_dev ? WavFile::in : WavFile::out;
 
-    auto ret = wav_file->open(hw_name, open_mode);
-    if (!ret)
+    if (!is_capture_dev && cycles > 0)
     {
-        return ret;
+        max_file_bytes = static_cast<uint64_t>(cycles) * dev_fs * dev_ch * sizeof(PCM_TYPE);
+
+        std::string first_filename = generate_next_filename();
+        auto ret = wav_file->open(first_filename, open_mode);
+        if (!ret)
+        {
+            return ret;
+        }
+        AUDIO_INFO_PRINT("Created first WAV output file: %s (max %u seconds per file)", first_filename.c_str(), cycles);
+    }
+    else
+    {
+        auto ret = wav_file->open(hw_name, open_mode);
+        if (!ret)
+        {
+            return ret;
+        }
     }
 
     if (open_mode == WavFile::out)
@@ -1003,6 +1050,7 @@ RetCode WaveDevice::open()
         wav_file->set_channel_number(static_cast<uint16_t>(dev_ch));
         wav_file->set_sample_rate(dev_fs);
         wav_file->set_bits_per_sample(sizeof(PCM_TYPE) * 8);
+        written_bytes = 0;
     }
     else
     {
@@ -1038,6 +1086,49 @@ RetCode WaveDevice::stop()
         return {RetCode::OK, "Not running"};
     }
 
+    // 确保当前文件被正确关闭（刷新缓冲区）
+    close_current_file();
+
+    return {RetCode::OK, "Success"};
+}
+
+std::string WaveDevice::generate_next_filename()
+{
+    size_t ext_pos = base_filename.find_last_of('.');
+    std::string name_without_ext = (ext_pos != std::string::npos) ? base_filename.substr(0, ext_pos) : base_filename;
+    std::string ext = (ext_pos != std::string::npos) ? base_filename.substr(ext_pos) : ".wav";
+    return name_without_ext + "_" + generate_timestamp() + ext;
+}
+
+void WaveDevice::close_current_file()
+{
+    if (wav_file)
+    {
+        wav_file.reset();
+    }
+}
+
+RetCode WaveDevice::create_new_output_file()
+{
+    close_current_file();
+
+    std::string new_filename = generate_next_filename();
+    wav_file = std::make_unique<WavFile>();
+
+    auto ret = wav_file->open(new_filename, WavFile::out);
+    if (!ret)
+    {
+        AUDIO_ERROR_PRINT("Failed to create new WAV file: %s", new_filename.c_str());
+        return ret;
+    }
+
+    wav_file->set_channel_number(static_cast<uint16_t>(dev_ch));
+    wav_file->set_sample_rate(dev_fs);
+    wav_file->set_bits_per_sample(sizeof(PCM_TYPE) * 8);
+
+    written_bytes = 0;
+
+    AUDIO_INFO_PRINT("Created new WAV output file: %s", new_filename.c_str());
     return {RetCode::OK, "Success"};
 }
 
@@ -1059,7 +1150,22 @@ RetCode WaveDevice::write(const char *data, size_t len)
         return {RetCode::OK, "No data to write"};
     }
 
-    return wav_file->write(reinterpret_cast<const PCM_TYPE *>(data), frames);
+    if (cycles > 0 && max_file_bytes > 0 && written_bytes + len > max_file_bytes)
+    {
+        auto ret = create_new_output_file();
+        if (!ret)
+        {
+            return ret;
+        }
+    }
+
+    auto ret = wav_file->write(reinterpret_cast<const PCM_TYPE *>(data), frames);
+    if (ret)
+    {
+        written_bytes += len;
+    }
+
+    return ret;
 }
 
 RetCode WaveDevice::read(char *data, size_t len)
