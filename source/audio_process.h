@@ -109,6 +109,77 @@ class DRCompressor
 };
 
 /**
+ * @brief Fade effect processor for audio streams
+ *
+ * Designed for periodic processing calls (5-40ms periods)
+ * Performs fade-in or fade-out over a specified duration
+ */
+class FadeEffect
+{
+  public:
+    /**
+     * @brief Fade effect type
+     */
+    enum class FadeType
+    {
+        NONE,    ///< No fade effect
+        FADE_IN, ///< Fade from silence to full volume
+        FADE_OUT ///< Fade from full volume to silence
+    };
+
+    /**
+     * @brief Constructs a fade effect processor
+     *
+     * @param sample_rate Audio sample rate in Hz
+     * @param channels Number of audio channels
+     */
+    FadeEffect(float sample_rate, unsigned int channels);
+
+    /**
+     * @brief Starts a fade effect
+     *
+     * @param type Type of fade effect to apply
+     * @param duration_ms Fade duration in milliseconds
+     */
+    void start(FadeType type, float duration_ms);
+
+    /**
+     * @brief Stops the current fade effect immediately
+     */
+    void stop();
+
+    /**
+     * @brief Checks if fade effect is currently active
+     *
+     * @return true if fade is in progress, false otherwise
+     */
+    bool is_active() const
+    {
+        return fade_type != FadeType::NONE;
+    }
+
+    /**
+     * @brief Processes audio buffer with fade effect
+     *
+     * Call this method periodically (every 5-40ms) to apply fade
+     *
+     * @param buffer Audio buffer to process (modified in place)
+     */
+    void process(ChannelBuffer<float> *buffer);
+
+  private:
+    float compute_gain() const;
+
+  private:
+    const float sample_rate;
+    const unsigned int channels;
+
+    FadeType fade_type;
+    unsigned int position;      ///< Current sample position in fade
+    unsigned int total_samples; ///< Total samples for complete fade
+};
+
+/**
  * @brief Audio format conversion and processing class
  *
  * Handles sample rate conversion, channel mapping, and audio processing

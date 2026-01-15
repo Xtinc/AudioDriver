@@ -178,8 +178,8 @@ float SincInterpolator::interpolator(double x, const float *input, const float *
     return (std::max)(-1.0f, (std::min)(1.0f, sum));
 }
 
-LocSampler::LocSampler(unsigned int sfs, unsigned int sch, unsigned int dfs, unsigned int dch,
-                       unsigned int max_iframe, const AudioChannelMap &imap, const AudioChannelMap &omap)
+LocSampler::LocSampler(unsigned int sfs, unsigned int sch, unsigned int dfs, unsigned int dch, unsigned int max_iframe,
+                       const AudioChannelMap &imap, const AudioChannelMap &omap)
     : src_fs(sfs), src_ch(sch), dst_fs(dfs), dst_ch(dch), ratio(static_cast<double>(dfs) / sfs),
       ti(max_iframe * 1000 / sfs), ichan_map(imap), ochan_map(omap), real_ichan(std::min(2u, sch)),
       real_ochan(std::min(2u, dch))
@@ -426,4 +426,97 @@ float DRCompressor::compute_gain(float inputLevelDB) const
     }
 
     return gainReduction;
+}
+
+FadeEffect::FadeEffect(float _sample_rate, unsigned int _channels)
+    : sample_rate(_sample_rate), channels(_channels), fade_type(FadeType::NONE), position(0), total_samples(0)
+{
+    DBG_ASSERT_GT(sample_rate, 0.0f);
+    DBG_ASSERT_GT(channels, 0u);
+}
+
+void FadeEffect::start(FadeType type, float duration_ms)
+{
+    DBG_ASSERT_GT(duration_ms, 0.0f);
+
+    fade_type = type;
+    position = 0;
+
+    // Calculate total samples needed for fade duration
+    total_samples = static_cast<unsigned int>((duration_ms / 1000.0f) * sample_rate);
+}
+
+void FadeEffect::stop()
+{
+    fade_type = FadeType::NONE;
+    position = 0;
+    total_samples = 0;
+}
+
+void FadeEffect::process(ChannelBuffer<float> *buffer)
+{
+    if (fade_type == FadeType::NONE)
+    {
+        return;
+    }
+
+    const auto frames = buffer->num_frames();
+    const auto num_channels = std::min<unsigned int>(channels, buffer->num_channels());
+
+    for (unsigned int i = 0; i < frames; i++)
+    {
+        // Check if fade is complete
+        if (position >= total_samples)
+        {
+            if (fade_type == FadeType::FADE_OUT)
+            {
+                // Silence remaining samples after fade-out completes
+                for (unsigned int c = 0; c < num_channels; c++)
+                {
+                    MonoView<float> channel = buffer->channels_view()[c];
+                    for (unsigned int j = i; j < frames; j++)
+                    {
+                        channel[j] = 0.0f;
+                    }
+                }
+            }
+            // Fade complete, stop processing
+            stop();
+            return;
+        }
+
+        // Compute gain for current position
+        float gain = compute_gain();
+
+        // Apply gain to all channels
+        for (unsigned int c = 0; c < num_channels; c++)
+        {
+            MonoView<float> channel = buffer->channels_view()[c];
+            channel[i] *= gain;
+        }
+
+        position++;
+    }
+}
+
+float FadeEffect::compute_gain() const
+{
+    if (position >= total_samples)
+    {
+        return fade_type == FadeType::FADE_IN ? 1.0f : 0.0f;
+    }
+
+    // Calculate linear position (0.0 to 1.0)
+    float linear_position = static_cast<float>(position) / static_cast<float>(total_samples);
+
+    // Apply S-curve for smooth fade (smoothstep function)
+    float gain = linear_position * linear_position * (3.0f - 2.0f * linear_position);
+
+    // Invert for fade-out
+    if (fade_type == FadeType::FADE_OUT)
+    {
+        gain = 1.0f - gain;
+    }
+
+    return gain;
 }
