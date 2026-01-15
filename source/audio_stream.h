@@ -75,6 +75,8 @@ class OAStream : public std::enable_shared_from_this<OAStream>
     RetCode restart(const AudioDeviceName &_name);
     RetCode direct_push(unsigned int chan, unsigned int frames, unsigned int sample_rate, const int16_t *data,
                         SourceUUID source_id);
+    void pause();
+    void resume();
 
     bool available() const;
     void mute();
@@ -156,6 +158,8 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     RetCode direct_push(const char *data, size_t len) const;
     RetCode clear_all_connections();
 
+    void pause();
+    void resume();
     bool available() const;
     void mute();
     void unmute();

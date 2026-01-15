@@ -643,7 +643,8 @@ RetCode AudioCenter::clear(AudioToken token)
     auto oas = oas_map.find(token.tok);
     if (oas != oas_map.end())
     {
-        AUDIO_INFO_PRINT("Output stream %u has no connections to clear (connections are managed by input streams)", token.tok);
+        AUDIO_INFO_PRINT("Output stream %u has no connections to clear (connections are managed by input streams)",
+                         token.tok);
         return {RetCode::OK, "Output stream has no connections to clear"};
     }
 
@@ -828,6 +829,72 @@ RetCode AudioCenter::stop()
     return RetCode::OK;
 }
 
+RetCode AudioCenter::pause(AudioToken token)
+{
+    if (center_state.load() != State::READY)
+    {
+        AUDIO_ERROR_PRINT("AudioCenter not in READY state");
+        return {RetCode::ESTATE, "AudioCenter not in READY state"};
+    }
+
+    if (!token)
+    {
+        AUDIO_ERROR_PRINT("Invalid token: %u", token.tok);
+        return {RetCode::EPARAM, "Invalid token"};
+    }
+
+    auto ias = ias_map.find(token.tok);
+    if (ias != ias_map.end())
+    {
+        ias->second->pause();
+        AUDIO_INFO_PRINT("Input stream %u paused", token.tok);
+        return RetCode::OK;
+    }
+
+    auto oas = oas_map.find(token.tok);
+    if (oas != oas_map.end())
+    {
+        oas->second->pause();
+        AUDIO_INFO_PRINT("Output stream %u paused", token.tok);
+        return RetCode::OK;
+    }
+
+    AUDIO_INFO_PRINT("Token not found: %u", token.tok);
+    return {RetCode::FAILED, "Token not found"};
+}
+
+RetCode AudioCenter::resume(AudioToken token)
+{
+    if (center_state.load() != State::READY)
+    {
+        AUDIO_ERROR_PRINT("AudioCenter not in READY state");
+        return {RetCode::ESTATE, "AudioCenter not in READY state"};
+    }
+
+    if (!token)
+    {
+        AUDIO_ERROR_PRINT("Invalid token: %u", token.tok);
+        return {RetCode::EPARAM, "Invalid token"};
+    }
+
+    auto ias = ias_map.find(token.tok);
+    if (ias != ias_map.end())
+    {
+        return RetCode::OK;
+    }
+
+    auto oas = oas_map.find(token.tok);
+    if (oas != oas_map.end())
+    {
+        oas->second->resume();
+        AUDIO_INFO_PRINT("Output stream %u resumed", token.tok);
+        return RetCode::OK;
+    }
+
+    AUDIO_INFO_PRINT("Token not found: %u", token.tok);
+    return {RetCode::FAILED, "Token not found"};
+}
+
 RetCode AudioCenter::set_volume(AudioToken token, unsigned int vol)
 {
     if (center_state.load() != State::READY)
@@ -960,11 +1027,12 @@ RetCode AudioCenter::stop(const std::string &path)
 
     AUDIO_INFO_PRINT("Stopping file %s", path.c_str());
     auto ret = player->stop(path);
-    if (!ret)
+    if (ret != RetCode::OK && ret != RetCode::NOACTION)
     {
         AUDIO_ERROR_PRINT("Failed to stop file %s: %s", path.c_str(), ret.what());
+        return ret;
     }
-    return ret;
+    return RetCode::OK;
 }
 
 RetCode AudioCenter::set_player_volume(unsigned int vol)

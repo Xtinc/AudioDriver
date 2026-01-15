@@ -151,7 +151,7 @@ RetCode OAStream::initialize_network(const std::shared_ptr<NetWorker> &nw)
             if (auto self = weak_self.lock())
             {
                 auto ret = self->direct_push(channels, frames, sample_rate, data, source_id);
-                if (ret != RetCode::OK)
+                if (ret != RetCode::OK && ret != RetCode::NOACTION)
                 {
                     AUDIO_ERROR_PRINT("Failed to push data: %s", ret.what());
                     return;
@@ -281,6 +281,26 @@ RetCode OAStream::direct_push(unsigned int chan, unsigned int frames, unsigned i
 
     bool success = it->second->session.store(reinterpret_cast<const char *>(data), frames * chan * sizeof(PCM_TYPE));
     return success ? RetCode::OK : RetCode::NOACTION;
+}
+
+void OAStream::pause()
+{
+    if (!oas_ready)
+    {
+        return;
+    }
+
+    exec_timer.cancel();
+}
+
+void OAStream::resume()
+{
+    if (!oas_ready)
+    {
+        return;
+    }
+
+    execute_loop({}, 0);
 }
 
 bool OAStream::available() const
@@ -894,6 +914,26 @@ RetCode IAStream::clear_all_connections()
     }
 
     return {RetCode::NOACTION, "No connections to clear"};
+}
+
+void IAStream::pause()
+{
+    if (!ias_ready)
+    {
+        return;
+    }
+
+    exec_timer.cancel();
+}
+
+void IAStream::resume()
+{
+    if (!ias_ready)
+    {
+        return;
+    }
+
+    execute_loop({}, 0);
 }
 
 RetCode IAStream::direct_push(const char *data, size_t len) const

@@ -11,13 +11,16 @@ int main()
                   StreamFlags::Network | StreamFlags::CodecPCM | StreamFlags::ResetSoft);
     center.create(120_otk, {"default.wav", 10}, AudioBandWidth::Full, AudioPeriodSize::INR_10MS, 2,
                   StreamFlags::Network | StreamFlags::ResetSoft);
-    center.create(20_itk, 120_otk, StreamFlags::Network | StreamFlags::CodecPCM);
-    center.prepare(true);
+    center.prepare(false);
     center.connect(10_itk, 120_otk, "127.0.0.1");
     center.start();
     // center.play("dukou.wav", 1, 120_otk);
     // center.set_player_volume(20);
     // center.connect(20_itk, 120_otk, "127.0.0.1");
+    std::this_thread::sleep_for(std::chrono::seconds(30));
+    center.pause(120_otk);
+    std::this_thread::sleep_for(std::chrono::seconds(30));
+    center.resume(120_otk);
     std::this_thread::sleep_for(std::chrono::seconds(30));
     return 0;
 }

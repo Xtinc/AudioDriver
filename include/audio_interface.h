@@ -707,6 +707,22 @@ class AudioCenter
     RetCode stop();
 
     /**
+     * @brief Pauses a stream
+     *
+     * @param token Audio token (can be either input or output)
+     * @return RetCode indicating success or failure
+     */
+    RetCode pause(AudioToken token);
+
+    /**
+     * @brief Resumes a paused stream
+     *
+     * @param token Audio token (can be either input or output)
+     * @return RetCode indicating success or failure
+     */
+    RetCode resume(AudioToken token);
+
+    /**
      * @brief Sets the volume for a stream
      *
      * @param token Audio token (can be either input or output)
