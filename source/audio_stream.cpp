@@ -123,11 +123,11 @@ RetCode OAStream::initialize_network(const std::shared_ptr<NetWorker> &nw)
     std::weak_ptr<OAStream> weak_self = shared_from_this();
     auto result =
         nw->register_receiver(token, [weak_self](unsigned int channels, unsigned int frames, unsigned int sample_rate,
-                                                 const int16_t *data, SourceUUID source_id) {
+                                                 const int16_t *data, SourceUUID source_id, AudioPriority priority) {
             if (auto self = weak_self.lock())
             {
-                // need client pass AudioPriority here
-                auto ret = self->direct_push(channels, frames, sample_rate, data, source_id, AudioPriority::MEDIUM);
+                // Use the priority from network packet
+                auto ret = self->direct_push(channels, frames, sample_rate, data, source_id, priority);
                 if (ret != RetCode::OK && ret != RetCode::NOACTION)
                 {
                     AUDIO_ERROR_PRINT("Failed to push data: %s", ret.what());
@@ -1093,8 +1093,8 @@ RetCode IAStream::process_data()
 
     if (auto np = networker.lock())
     {
-        // need priority here
-        np->send_audio(token, src, ps);
+        // Pass the stream priority to network
+        np->send_audio(token, src, ps, priority);
     }
 
     return RetCode::OK;

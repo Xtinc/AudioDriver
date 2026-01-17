@@ -41,17 +41,97 @@ struct SourceUUID
     }
 };
 
-constexpr uint8_t NET_AUDIO_MAGIC = 0xBD;
-constexpr uint8_t NET_AUDIO_MAGIC_OPUS = 0xBD;
-constexpr uint8_t NET_AUDIO_MAGIC_PCM = 0xBE;
-constexpr unsigned int NETWORK_MAX_FRAMES = enum2val(AudioPeriodSize::INR_40MS) * enum2val(AudioBandWidth::Full) / 1000;
-constexpr unsigned int NETWORK_MAX_BUFFER_SIZE = NETWORK_MAX_FRAMES * 4 + 320;
+// Magic number encoding scheme:
+// Bit 7-4: Base magic number (1011 = 0xB)
+// Bit 3-2: Priority (00=LOW, 01=MEDIUM, 10=HIGH)
+// Bit 1: Codec type (0=OPUS, 1=PCM)
+// Bit 0: Fixed bit (1)
 
 enum class AudioCodecType : uint8_t
 {
     OPUS = 0,
     PCM = 1
 };
+
+namespace NetAudio
+{
+/**
+ * @brief Generate magic number that encodes both codec type and priority
+ * @param codec Audio codec type
+ * @param priority Audio priority level
+ * @return Encoded magic number
+ */
+inline constexpr uint8_t encode_magic_num(AudioCodecType codec, AudioPriority priority)
+{
+    uint8_t base = 0xB0; // Base magic number: 1011 0000
+
+    // Encode priority (bits 3-2)
+    uint8_t priority_bits = 0;
+    switch (priority)
+    {
+    case AudioPriority::LOW:
+        priority_bits = 0;
+        break; // 00
+    case AudioPriority::MEDIUM:
+        priority_bits = 1;
+        break; // 01
+    case AudioPriority::HIGH:
+        priority_bits = 2;
+        break; // 10
+    }
+
+    // Encode codec type (bit 1)
+    uint8_t codec_bit = (codec == AudioCodecType::PCM) ? 1 : 0;
+
+    // Combine: base | (priority << 2) | (codec << 1) | 1
+    return base | (priority_bits << 2) | (codec_bit << 1) | 1;
+}
+
+/**
+ * @brief Decode codec type from magic number
+ * @param magic_num Encoded magic number
+ * @return Audio codec type
+ */
+inline constexpr AudioCodecType decode_magic_codec(uint8_t magic_num)
+{
+    return ((magic_num >> 1) & 1) ? AudioCodecType::PCM : AudioCodecType::OPUS;
+}
+
+/**
+ * @brief Decode priority from magic number
+ * @param magic_num Encoded magic number
+ * @return Audio priority level
+ */
+inline constexpr AudioPriority decode_magic_priority(uint8_t magic_num)
+{
+    uint8_t priority_bits = (magic_num >> 2) & 0x3;
+    switch (priority_bits)
+    {
+    case 0:
+        return AudioPriority::LOW;
+    case 1:
+        return AudioPriority::MEDIUM;
+    case 2:
+        return AudioPriority::HIGH;
+    default:
+        return AudioPriority::MEDIUM;
+    }
+}
+
+/**
+ * @brief Check if magic number is valid
+ * @param magic_num Magic number to validate
+ * @return True if valid
+ */
+inline constexpr bool is_valid_magic_num(uint8_t magic_num)
+{
+    // Check format: base should be 0xB0, bit 0 should be 1
+    return (magic_num & 0xF1) == 0xB1;
+}
+
+} // namespace NetAudio
+constexpr unsigned int NETWORK_MAX_FRAMES = enum2val(AudioPeriodSize::INR_40MS) * enum2val(AudioBandWidth::Full) / 1000;
+constexpr unsigned int NETWORK_MAX_BUFFER_SIZE = NETWORK_MAX_FRAMES * 4 + 320;
 
 struct NetStatInfos
 {
@@ -146,7 +226,7 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
 {
   public:
     using ReceiveCallback = std::function<void(unsigned int channels, unsigned int frames, unsigned int sample_rate,
-                                               const int16_t *data, SourceUUID ssid)>;
+                                               const int16_t *data, SourceUUID ssid, AudioPriority priority)>;
     using ReceiverContext = ReceiveCallback;
 
   private:
@@ -290,7 +370,7 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     RetCode register_sender(uint8_t sender_id, unsigned int channels, unsigned int sample_rate,
                             AudioCodecType codec = AudioCodecType::OPUS);
     RetCode unregister_sender(uint8_t sender_id);
-    RetCode send_audio(uint8_t sender_id, const int16_t *data, unsigned int frames);
+    RetCode send_audio(uint8_t sender_id, const int16_t *data, unsigned int frames, AudioPriority priority);
 
     RetCode add_destination(uint8_t sender_id, uint8_t receiver_token, const std::string &ip, uint16_t port);
     RetCode del_destination(uint8_t sender_id, uint8_t receiver_token, const std::string &ip, uint16_t port);
@@ -310,7 +390,7 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
 
     void send_data_packet(const Destination &dest, uint8_t sender_id, uint8_t receiver_id, uint32_t sequence,
                           uint64_t timestamp, const uint8_t *data, size_t size, uint8_t channels, uint32_t sample_rate,
-                          AudioCodecType codec_type);
+                          AudioCodecType codec_type, AudioPriority priority);
 
   private:
     int retry_count;

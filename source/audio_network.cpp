@@ -516,17 +516,17 @@ RetCode NetWorker::clear_all_destinations(uint8_t sender_id)
 
     size_t count = iter->second.destinations.size();
     iter->second.destinations.clear();
-    
+
     if (count > 0)
     {
         AUDIO_INFO_PRINT("Cleared %zu destination(s) for sender %u", count, sender_id);
         return {RetCode::OK, "All destinations cleared"};
     }
-    
+
     return {RetCode::NOACTION, "No destinations to clear"};
 }
 
-RetCode NetWorker::send_audio(uint8_t sender_id, const int16_t *data, unsigned int frames)
+RetCode NetWorker::send_audio(uint8_t sender_id, const int16_t *data, unsigned int frames, AudioPriority priority)
 {
     if (!data || frames == 0)
     {
@@ -592,7 +592,7 @@ RetCode NetWorker::send_audio(uint8_t sender_id, const int16_t *data, unsigned i
     for (const auto &dest : context.destinations)
     {
         send_data_packet(dest, sender_id, dest.receiver_token, sequence, timestamp, payload_data, payload_size,
-                         static_cast<uint8_t>(context.channels), context.sample_rate, context.codec_type);
+                         static_cast<uint8_t>(context.channels), context.sample_rate, context.codec_type, priority);
     }
 
     return {RetCode::OK, "Data sent"};
@@ -622,8 +622,7 @@ void NetWorker::handle_receive(const asio::error_code &error, std::size_t bytes_
     }
 
     auto magic_num = static_cast<uint8_t>(receive_buffer.get()[0]);
-    if (bytes_transferred >= sizeof(DataPacket) &&
-        (magic_num == NET_AUDIO_MAGIC_OPUS || magic_num == NET_AUDIO_MAGIC_PCM))
+    if (bytes_transferred >= sizeof(DataPacket) && NetAudio::is_valid_magic_num(magic_num))
     {
         auto data_header = reinterpret_cast<const DataPacket *>(receive_buffer.get());
         const auto *payload = reinterpret_cast<const uint8_t *>(receive_buffer.get() + sizeof(DataPacket));
@@ -680,7 +679,10 @@ void NetWorker::process_and_deliver_audio(const DataPacket *header, const uint8_
     auto sample_rate = header->sample_rate;
     auto sequence = header->sequence;
     auto timestamp = header->timestamp;
-    auto codec_type = (header->magic_num == NET_AUDIO_MAGIC_PCM) ? AudioCodecType::PCM : AudioCodecType::OPUS;
+
+    // Decode codec type and priority from magic number
+    AudioCodecType codec_type = NetAudio::decode_magic_codec(header->magic_num);
+    AudioPriority priority = NetAudio::decode_magic_priority(header->magic_num);
 
     auto &decoder_context = get_decoder(ssid, channels, sample_rate);
     NetStatInfos stats{};
@@ -723,7 +725,8 @@ void NetWorker::process_and_deliver_audio(const DataPacket *header, const uint8_
     auto receiver_it = receivers.find(receiver_id);
     if (receiver_it != receivers.end())
     {
-        receiver_it->second(channels, static_cast<unsigned int>(decoded_frames), sample_rate, audio_data, ssid);
+        receiver_it->second(channels, static_cast<unsigned int>(decoded_frames), sample_rate, audio_data, ssid,
+                            priority);
     }
     else
     {
@@ -733,7 +736,7 @@ void NetWorker::process_and_deliver_audio(const DataPacket *header, const uint8_
 
 void NetWorker::send_data_packet(const Destination &dest, uint8_t sender_id, uint8_t receiver_id, uint32_t sequence,
                                  uint64_t timestamp, const uint8_t *data, size_t size, uint8_t channels,
-                                 uint32_t sample_rate, AudioCodecType codec_type)
+                                 uint32_t sample_rate, AudioCodecType codec_type, AudioPriority priority)
 {
     if (!running || !data || size == 0)
     {
@@ -741,7 +744,7 @@ void NetWorker::send_data_packet(const Destination &dest, uint8_t sender_id, uin
     }
 
     DataPacket header{};
-    header.magic_num = (codec_type == AudioCodecType::PCM) ? NET_AUDIO_MAGIC_PCM : NET_AUDIO_MAGIC_OPUS;
+    header.magic_num = NetAudio::encode_magic_num(codec_type, priority);
     header.sender_id = sender_id;
     header.receiver_id = receiver_id;
     header.channels = channels;
