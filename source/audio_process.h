@@ -62,50 +62,41 @@ class SincInterpolator
 };
 
 /**
- * @brief Dynamic Range Compressor for audio processing
+ * @brief Professional volume controller for audio processing
+ *
+ * Uses logarithmic volume scaling and smooth transitions to provide
+ * professional-grade volume control that matches human hearing perception
  */
-class DRCompressor
+class VolumeController
 {
   public:
     /**
-     * @brief Constructs a dynamic range compressor
+     * @brief Constructs a volume controller
      *
      * @param sample_rate Audio sample rate in Hz
-     * @param chs Number of audio channels
-     * @param threshold Compression threshold in dB
-     * @param ratio Compression ratio
-     * @param attack Attack time in seconds
-     * @param release Release time in seconds
-     * @param knee_width Width of the knee in dB
+     * @param channels Number of audio channels
+     * @param smooth_time_ms Time for volume changes to smooth out in milliseconds
      */
-    explicit DRCompressor(float sample_rate, unsigned int chs, float threshold = -6.0f, float ratio = 2.0f,
-                          float attack = 0.006f, float release = 0.1f, float knee_width = 6.0f);
+    explicit VolumeController(float sample_rate, unsigned int channels, float smooth_time_ms = 10.0f);
 
     /**
-     * @brief Processes audio through the compressor
+     * @brief Processes audio buffer with volume control
      *
-     * @param input Audio buffer to process
-     * @param gain Additional gain to apply in dB
+     * @param input Audio buffer to process (modified in place)
+     * @param gain Volume level (0-100, where 0=mute, 50=medium, 100=unity gain)
      */
-    void process(ChannelBuffer<float> *input, float gain);
+    void process(ChannelBuffer<float> *input, unsigned int gain);
 
   private:
-    float compute_gain(float inputLevel) const;
+    float convert_gain_to_linear(float gain_percent) const;
 
   private:
-    const float threshold;
-    const float ratio;
-    const float attack;
-    const float release;
-    const float knee_width;
+    const float sample_rate;
     const unsigned int channels;
 
-    std::vector<float> current_gain;
-    float attack_coeff;
-    float release_coeff;
-
-    float knee_threshold_lower;
-    float knee_threshold_upper;
+    std::vector<float> current_gain; ///< Current gain per channel (linear scale)
+    float target_gain;               ///< Target gain (linear scale)
+    float smooth_coeff;              ///< Smoothing coefficient for volume changes
 };
 
 /**
@@ -120,8 +111,9 @@ class FadeEffect
     /**
      * @brief Fade effect type
      */
-    enum class FadeType
+    enum FadeType
     {
+        INIT,    ///< Initial state before any fade
         NONE,    ///< No fade effect
         FADE_IN, ///< Fade from silence to full volume
         FADE_OUT ///< Fade from full volume to silence
@@ -131,32 +123,17 @@ class FadeEffect
      * @brief Constructs a fade effect processor
      *
      * @param sample_rate Audio sample rate in Hz
-     * @param channels Number of audio channels
      */
-    FadeEffect(float sample_rate, unsigned int channels);
+    FadeEffect(float sample_rate);
 
     /**
-     * @brief Starts a fade effect
+     * @brief Decides fade type based on stream priorities
      *
-     * @param type Type of fade effect to apply
-     * @param duration_ms Fade duration in milliseconds
+     * @param highest_priority Highest priority among active streams
+     * @param current_priority Current stream's priority
+     * @return FadeType Decided fade type
      */
-    void start(FadeType type, float duration_ms);
-
-    /**
-     * @brief Stops the current fade effect immediately
-     */
-    void stop();
-
-    /**
-     * @brief Checks if fade effect is currently active
-     *
-     * @return true if fade is in progress, false otherwise
-     */
-    bool is_active() const
-    {
-        return fade_type != FadeType::NONE;
-    }
+    void decide_fade_type(unsigned int highest_priority, unsigned int current_priority);
 
     /**
      * @brief Processes audio buffer with fade effect
@@ -168,11 +145,11 @@ class FadeEffect
     void process(ChannelBuffer<float> *buffer);
 
   private:
+    void start(FadeType type, float duration_ms);
     float compute_gain() const;
 
   private:
     const float sample_rate;
-    const unsigned int channels;
 
     FadeType fade_type;
     unsigned int position;      ///< Current sample position in fade
@@ -207,15 +184,15 @@ class LocSampler
      * @brief Processes audio data with format conversion
      *
      * Performs channel conversion, sample rate conversion,
-     * and dynamic range compression
+     * and volume control
      *
      * @param input Input audio data (interleaved PCM)
      * @param output Output audio data buffer (interleaved PCM)
-     * @param gain Gain to apply in dB
+     * @param gain Volume level (0-100)
      * @return RetCode Status code indicating success or failure
      */
     RetCode process(const InterleavedView<const PCM_TYPE> &input, const InterleavedView<PCM_TYPE> &output,
-                    float gain) const;
+                    unsigned int gain, FadeEffect *effetor = nullptr) const;
 
   public:
     const unsigned int src_fs;
@@ -231,7 +208,7 @@ class LocSampler
 
   private:
     std::unique_ptr<SincInterpolator> resampler;
-    std::unique_ptr<DRCompressor> compressor;
+    std::unique_ptr<VolumeController> volume_controller;
     std::unique_ptr<ChannelBuffer<float>> analysis_ibuffer;
     std::unique_ptr<ChannelBuffer<float>> analysis_obuffer;
 

@@ -48,9 +48,10 @@ AudioCenter::~AudioCenter()
 }
 
 RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps,
-                            unsigned int ch, StreamFlags flags)
+                            unsigned int ch, StreamFlags flags, AudioPriority priority)
 {
-    AUDIO_INFO_PRINT("Creating %s input stream with token %u", name.first.c_str(), token.tok);
+    AUDIO_INFO_PRINT("Creating %s input stream with token %u, priority %u", name.first.c_str(), token.tok,
+                     enum2val(priority));
 
     if (center_state.load() != State::INIT)
     {
@@ -86,7 +87,7 @@ RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBand
         reset_order = ResetOrd::RESET_NONE;
     }
 
-    auto ias_ptr = std::make_shared<IAStream>(token.tok, name, enum2val(ps), enum2val(bw), ch, reset_order);
+    auto ias_ptr = std::make_shared<IAStream>(token.tok, name, enum2val(ps), enum2val(bw), ch, reset_order, priority);
 
     if (!ias_ptr->available())
     {
@@ -113,9 +114,10 @@ RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBand
 }
 
 RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps,
-                            unsigned int dev_ch, const AudioChannelMap &imap, StreamFlags flags)
+                            unsigned int dev_ch, const AudioChannelMap &imap, StreamFlags flags, AudioPriority priority)
 {
-    AUDIO_INFO_PRINT("Creating %s input stream with token %u and channel mapping", name.first.c_str(), token.tok);
+    AUDIO_INFO_PRINT("Creating %s input stream with token %u and channel mapping, priority %u", name.first.c_str(),
+                     token.tok, enum2val(priority));
 
     if (center_state.load() != State::INIT)
     {
@@ -156,7 +158,7 @@ RetCode AudioCenter::create(IToken token, const AudioDeviceName &name, AudioBand
 
     bool enable_network = has_flag(flags, StreamFlags::Network);
 
-    auto ias_ptr = std::make_shared<IAStream>(token.tok, name, enum2val(ps), enum2val(bw), dev_ch, imap);
+    auto ias_ptr = std::make_shared<IAStream>(token.tok, name, enum2val(ps), enum2val(bw), dev_ch, imap, priority);
 
     if (!ias_ptr->available())
     {
@@ -314,9 +316,10 @@ RetCode AudioCenter::create(OToken token, const AudioDeviceName &name, AudioBand
     return RetCode::OK;
 }
 
-RetCode AudioCenter::create(IToken itoken, OToken otoken, StreamFlags flags)
+RetCode AudioCenter::create(IToken itoken, OToken otoken, StreamFlags flags, AudioPriority priority)
 {
-    AUDIO_INFO_PRINT("Creating linked streams with tokens %u -> %u", itoken.tok, otoken.tok);
+    AUDIO_INFO_PRINT("Creating linked streams with tokens %u -> %u, priority %u", itoken.tok, otoken.tok,
+                     enum2val(priority));
 
     if (center_state.load() != State::INIT)
     {
@@ -362,19 +365,19 @@ RetCode AudioCenter::create(IToken itoken, OToken otoken, StreamFlags flags)
         {
             new_stream = std::make_shared<IAStream>(itoken.tok, AudioDeviceName("null_dummy", 0),
                                                     enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full),
-                                                    1, ResetOrd::RESET_NONE);
+                                                    1, ResetOrd::RESET_NONE, priority);
         }
         else if (oas->second->omap == DEFAULT_DUAL_MAP)
         {
             new_stream = std::make_shared<IAStream>(itoken.tok, AudioDeviceName("null_dummy", 0),
                                                     enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full),
-                                                    2, ResetOrd::RESET_NONE);
+                                                    2, ResetOrd::RESET_NONE, priority);
         }
         else
         {
             new_stream = std::make_shared<IAStream>(itoken.tok, AudioDeviceName("null_dummy", 0),
                                                     enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full),
-                                                    99, oas->second->omap);
+                                                    99, oas->second->omap, priority);
         }
 
         if (has_flag(flags, StreamFlags::Network) && net_mgr)
@@ -427,7 +430,7 @@ RetCode AudioCenter::prepare(bool enable_usb_detection)
     ias_map.emplace(USR_DUMMY_IN.tok,
                     std::make_shared<IAStream>(USR_DUMMY_IN.tok, AudioDeviceName(default_usb_in, 0),
                                                enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2,
-                                               ResetOrd::RESET_NONE));
+                                               ResetOrd::RESET_NONE, AudioPriority::MEDIUM));
     oas_map.emplace(USR_DUMMY_OUT.tok,
                     std::make_shared<OAStream>(USR_DUMMY_OUT.tok, AudioDeviceName(default_usb_out, 0),
                                                enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2,
@@ -544,7 +547,7 @@ RetCode AudioCenter::connect(IToken itoken, OToken otoken, const std::string &ip
         auto ret = net_mgr->add_destination(itoken.tok, otoken.tok, ip, port);
         if (!ret)
         {
-            AUDIO_ERROR_PRINT("Failed to add network destination %s for tokens %u->%u: %s", ip.c_str(), itoken.tok,
+            AUDIO_ERROR_PRINT("Failed to add network destination %s for tokens %u -> %u: %s", ip.c_str(), itoken.tok,
                               otoken.tok, ret.what());
         }
         return ret;
@@ -718,7 +721,7 @@ RetCode AudioCenter::register_filter(IToken token, const std::vector<AudioChanne
 }
 
 RetCode AudioCenter::direct_push_pcm(IToken itoken, OToken otoken, unsigned int chan, unsigned int frames,
-                                     unsigned int sample_rate, const int16_t *data)
+                                     unsigned int sample_rate, const int16_t *data, AudioPriority priority)
 {
     if (center_state.load() != State::READY)
     {
@@ -745,7 +748,7 @@ RetCode AudioCenter::direct_push_pcm(IToken itoken, OToken otoken, unsigned int 
         return {RetCode::EPARAM, "Invalid data pointer"};
     }
 
-    return oas->second->direct_push(chan, frames, sample_rate, data, SourceUUID{0, 0, itoken.tok});
+    return oas->second->direct_push(chan, frames, sample_rate, data, SourceUUID{0, 0, itoken.tok}, priority);
 }
 
 RetCode AudioCenter::start()
@@ -987,7 +990,7 @@ RetCode AudioCenter::mute(IToken itoken, OToken otoken, bool enable, const std::
     return enable ? oas->second->mute(itoken.tok, ip) : oas->second->unmute(itoken.tok, ip);
 }
 
-RetCode AudioCenter::play(const std::string &name, int cycles, OToken otoken)
+RetCode AudioCenter::play(const std::string &name, int cycles, OToken otoken, AudioPriority priority)
 {
     if (center_state.load() != State::READY)
     {
@@ -1009,7 +1012,7 @@ RetCode AudioCenter::play(const std::string &name, int cycles, OToken otoken)
     }
 
     AUDIO_INFO_PRINT("Try to play file %s -> %u", name.c_str(), otoken.tok);
-    auto ret = player->play(name, cycles, oas->second);
+    auto ret = player->play(name, cycles, oas->second, priority);
     if (!ret)
     {
         AUDIO_ERROR_PRINT("Failed to play file %s to output token %u: %s", name.c_str(), otoken.tok, ret.what());
@@ -1049,7 +1052,6 @@ RetCode AudioCenter::set_player_volume(unsigned int vol)
         return {RetCode::EPARAM, "Invalid volume level"};
     }
 
-    AUDIO_INFO_PRINT("Setting player global volume to %u", vol);
     auto ret = player->set_volume(vol);
     if (!ret)
     {

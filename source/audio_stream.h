@@ -47,14 +47,19 @@ class OAStream : public std::enable_shared_from_this<OAStream>
 {
     struct SessionContext
     {
+        SourceUUID uuid;
         bool enabled;
+        unsigned int priority;
         SessionData session;
         LocSampler sampler;
+        FadeEffect effector;
 
-        SessionContext(unsigned int src_fs, unsigned int src_ch, unsigned int dst_fs, unsigned int dst_ch,
-                       unsigned int max_frames, const AudioChannelMap &imap, const AudioChannelMap &omap)
-            : enabled(true), session(max_frames * sizeof(PCM_TYPE), 2, src_ch),
-              sampler(src_fs, src_ch, dst_fs, dst_ch, max_frames, imap, omap)
+        SessionContext(SourceUUID source_uuid, unsigned int src_fs, unsigned int src_ch, unsigned int dst_fs,
+                       unsigned int dst_ch, unsigned int max_frames, const AudioChannelMap &imap,
+                       const AudioChannelMap &omap, unsigned int priority_value)
+            : uuid(source_uuid), enabled(true), priority(priority_value),
+              session(max_frames * sizeof(PCM_TYPE), 2, src_ch),
+              sampler(src_fs, src_ch, dst_fs, dst_ch, max_frames, imap, omap), effector(static_cast<float>(dst_fs))
         {
         }
     };
@@ -74,7 +79,7 @@ class OAStream : public std::enable_shared_from_this<OAStream>
     RetCode initialize_network(const std::shared_ptr<NetWorker> &nw);
     RetCode restart(const AudioDeviceName &_name);
     RetCode direct_push(unsigned int chan, unsigned int frames, unsigned int sample_rate, const int16_t *data,
-                        SourceUUID source_id);
+                        SourceUUID source_id, AudioPriority priority);
     void pause();
     void resume();
 
@@ -120,7 +125,7 @@ class OAStream : public std::enable_shared_from_this<OAStream>
     std::atomic_uint volume;
 
     std::mutex session_mtx;
-    std::map<SourceUUID, context_ptr> sessions;
+    std::list<context_ptr> sessions;
     network_ptr networker;
     std::mutex listener_mtx;
     istream_ptr listener;
@@ -143,9 +148,9 @@ class IAStream : public std::enable_shared_from_this<IAStream>
 
   public:
     IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs, unsigned int _ch,
-             ResetOrd reset_order);
+             ResetOrd reset_order, AudioPriority priority);
     IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs,
-             unsigned int dev_ch, AudioChannelMap _imap);
+             unsigned int dev_ch, AudioChannelMap _imap, AudioPriority priority);
     ~IAStream();
 
     RetCode start();
@@ -189,6 +194,7 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     const ResetOrd rst_order;
     const unsigned int spf_ch;
     const AudioChannelMap imap;
+    const AudioPriority priority;
 
   private:
     AudioDeviceName usr_name;
@@ -222,7 +228,7 @@ class AudioPlayer : public std::enable_shared_from_this<AudioPlayer>
     explicit AudioPlayer(unsigned char _token);
     ~AudioPlayer();
 
-    RetCode play(const std::string &name, int cycles, const std::shared_ptr<OAStream> &sink);
+    RetCode play(const std::string &name, int cycles, const std::shared_ptr<OAStream> &sink, AudioPriority priority);
     RetCode stop(const std::string &name);
     RetCode set_volume(unsigned int vol);
 

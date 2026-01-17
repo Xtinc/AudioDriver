@@ -12,30 +12,6 @@ constexpr unsigned int AUDIO_MAX_RESET_SOFT_INTERVAL = 1;
 constexpr unsigned int AUDIO_MAX_COCURRECY_WORKER = 3;
 constexpr unsigned int SESSION_IDLE_TIMEOUT = 1000;
 
-inline float volume2gain(unsigned int vol)
-{
-    // 0% -> -80dB(mute), 1% -> -40dB, 100% -> +6dB
-    if (vol == 0)
-    {
-        return -80.0f;
-    }
-
-    // gain_db = 20 * log10(vol/100)
-    float normalized_vol = static_cast<float>(vol) / 100.0f;
-
-    if (vol <= 10)
-    {
-        // Low volume range: 1%-10% maps to -40dB to -20dB
-        return -40.0f + 20.0f * (normalized_vol * 10.0f - 1.0f) / 9.0f;
-    }
-    else
-    {
-        // High volume range: 11%-100% maps to -20dB to +6dB using logarithmic curve with offset
-        // Base logarithmic curve + offset to make 100% correspond to +6dB
-        return 20.0f * std::log10(normalized_vol) + 6.0f;
-    }
-}
-
 static bool check_wave_file_name(const std::string &dev_name)
 {
     return dev_name.size() >= 4 && dev_name.compare(dev_name.size() - 4, 4, ".wav") == 0;
@@ -120,7 +96,7 @@ OAStream::OAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
       omap(_omap == AudioChannelMap{} ? (_ch == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP) : _omap), fs(_fs),
       ps(fs * ti / 1000), ch(_ch), usr_name(_name), oas_ready(false), exec_timer(BG_SERVICE),
       exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE), reset_strand(asio::make_strand(BG_SERVICE)),
-      volume(50), muted(false)
+      volume(100), muted(false)
 {
     DBG_ASSERT_LT(omap[0], ch);
     DBG_ASSERT_LT(omap[1], ch);
@@ -150,7 +126,8 @@ RetCode OAStream::initialize_network(const std::shared_ptr<NetWorker> &nw)
                                                  const int16_t *data, SourceUUID source_id) {
             if (auto self = weak_self.lock())
             {
-                auto ret = self->direct_push(channels, frames, sample_rate, data, source_id);
+                // need client pass AudioPriority here
+                auto ret = self->direct_push(channels, frames, sample_rate, data, source_id, AudioPriority::MEDIUM);
                 if (ret != RetCode::OK && ret != RetCode::NOACTION)
                 {
                     AUDIO_ERROR_PRINT("Failed to push data: %s", ret.what());
@@ -248,7 +225,7 @@ RetCode OAStream::restart(const AudioDeviceName &_name)
 }
 
 RetCode OAStream::direct_push(unsigned int chan, unsigned int frames, unsigned int sample_rate, const int16_t *data,
-                              SourceUUID source_id)
+                              SourceUUID source_id, AudioPriority priority)
 {
     if (!oas_ready)
     {
@@ -261,25 +238,20 @@ RetCode OAStream::direct_push(unsigned int chan, unsigned int frames, unsigned i
     }
 
     std::lock_guard<std::mutex> grd(session_mtx);
-    auto it = sessions.find(source_id);
+    auto it = std::find_if(sessions.begin(), sessions.end(),
+                           [&source_id](const context_ptr &elem) { return elem->uuid == source_id; });
     if (it == sessions.end())
     {
         unsigned int std_fr = (std::max)(frames, sample_rate * ti / 1000);
         auto imap = chan == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP;
-        auto result = sessions.emplace(source_id,
-                                       std::make_unique<SessionContext>(sample_rate, chan, fs, ch, std_fr, imap, omap));
-
-        if (!result.second)
-        {
-            return {RetCode::FAILED, "Failed to create session"};
-        }
-
-        it = result.first;
+        sessions.emplace_back(std::make_unique<SessionContext>(source_id, sample_rate, chan, fs, ch, std_fr, imap, omap,
+                                                               enum2val(priority)));
+        it = std::prev(sessions.end());
         AUDIO_INFO_PRINT("%u receiver New connection: %u (IP: 0x%08X|0x%08X)", token, source_id.sender_token,
                          source_id.sender_ip, source_id.gateway_ip);
     }
 
-    bool success = it->second->session.store(reinterpret_cast<const char *>(data), frames * chan * sizeof(PCM_TYPE));
+    bool success = (*it)->session.store(reinterpret_cast<const char *>(data), frames * chan * sizeof(PCM_TYPE));
     return success ? RetCode::OK : RetCode::NOACTION;
 }
 
@@ -334,11 +306,11 @@ RetCode OAStream::mute(unsigned char itoken, const std::string &ip)
         std::lock_guard<std::mutex> grd(session_mtx);
         int muted_count = 0;
 
-        for (auto &session_pair : sessions)
+        for (auto &session : sessions)
         {
-            if (session_pair.first.sender_token == itoken && session_pair.first.sender_ip == ip_address)
+            if (session->uuid.sender_token == itoken && session->uuid.sender_ip == ip_address)
             {
-                session_pair.second->enabled = false;
+                session->enabled = false;
                 muted_count++;
             }
         }
@@ -374,11 +346,11 @@ RetCode OAStream::unmute(unsigned char itoken, const std::string &ip)
         std::lock_guard<std::mutex> grd(session_mtx);
         int unmuted_count = 0;
 
-        for (auto &session_pair : sessions)
+        for (auto &session : sessions)
         {
-            if (session_pair.first.sender_token == itoken && session_pair.first.sender_ip == ip_address)
+            if (session->uuid.sender_token == itoken && session->uuid.sender_ip == ip_address)
             {
-                session_pair.second->enabled = true;
+                session->enabled = true;
                 unmuted_count++;
             }
         }
@@ -409,7 +381,7 @@ RetCode OAStream::set_volume(unsigned int vol)
         return {RetCode::EPARAM, "Invalid volume value"};
     }
     volume.store(vol);
-    AUDIO_INFO_PRINT("Token %u all volume set to %u, gain: %.2f db", token, vol, volume2gain(vol));
+    AUDIO_INFO_PRINT("Token %u all volume set to %u", token, vol);
     return RetCode::OK;
 }
 
@@ -486,10 +458,12 @@ void OAStream::process_data()
 
     {
         std::lock_guard<std::mutex> grd(session_mtx);
+        sessions.sort([](const auto &a, const auto &b) { return a->priority > b->priority; });
+        unsigned int highest_priority = 0;
 
         for (auto it = sessions.begin(); it != sessions.end();)
         {
-            auto &context = it->second;
+            auto &context = *it;
             unsigned int session_frames = context->sampler.src_fs * ti / 1000;
             unsigned int session_channels = context->sampler.src_ch;
             bool has_data = context->session.load_aside(session_frames * session_channels * sizeof(PCM_TYPE));
@@ -498,8 +472,8 @@ void OAStream::process_data()
             {
                 if (context->session.idle_count++ > SESSION_IDLE_TIMEOUT)
                 {
-                    AUDIO_INFO_PRINT("Removing empty session: %u (IP: 0x%08X|0x%08X)", it->first.sender_token,
-                                     it->first.sender_ip, it->first.gateway_ip);
+                    AUDIO_INFO_PRINT("Removing empty session: %u (IP: 0x%08X|0x%08X)", context->uuid.sender_token,
+                                     context->uuid.sender_ip, context->uuid.gateway_ip);
                     it = sessions.erase(it);
                     continue;
                 }
@@ -509,27 +483,37 @@ void OAStream::process_data()
 
             context->session.idle_count = 0;
 
-            if (muted || (!context->enabled))
+            if (!muted && context->enabled && context->priority > highest_priority)
             {
-                ++it;
+                highest_priority = context->priority;
+            }
+            ++it;
+        }
+
+        for (auto it = sessions.begin(); it != sessions.end(); ++it)
+        {
+            auto &context = *it;
+
+            if (muted || !context->enabled || context->session.idle_count > 0)
+            {
                 continue;
             }
 
+            unsigned int session_frames = context->sampler.src_fs * ti / 1000;
+            unsigned int session_channels = context->sampler.src_ch;
             auto *session_source = reinterpret_cast<PCM_TYPE *>(context->session.data());
             InterleavedView<const PCM_TYPE> iview(session_source, session_frames, session_channels);
             InterleavedView<PCM_TYPE> oview(reinterpret_cast<PCM_TYPE *>(mix_buf.get()), ps, ch);
 
-            float session_gain = volume2gain(volume.load());
-            auto ret = context->sampler.process(iview, oview, session_gain);
+            context->effector.decide_fade_type(highest_priority, context->priority);
+            auto ret = context->sampler.process(iview, oview, volume.load(), &context->effector);
             if (ret != RetCode::OK)
             {
                 AUDIO_DEBUG_PRINT("Failed to process data: %s", ret.what());
-                ++it;
                 continue;
             }
 
             mix_channels(&oview.data()[0], ch, ps, reinterpret_cast<PCM_TYPE *>(databuf.get()));
-            ++it;
         }
     }
 
@@ -661,11 +645,12 @@ void OAStream::reset_self()
 
 // IAStream
 IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs,
-                   unsigned int _ch, ResetOrd reset_order)
+                   unsigned int _ch, ResetOrd reset_order, AudioPriority _priority)
     : token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(_ch), rst_order(reset_order), spf_ch(_ch),
-      imap(_ch == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP), usr_name(_name), ias_ready(false), exec_timer(BG_SERVICE),
-      exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE), reset_strand(asio::make_strand(BG_SERVICE)),
-      volume(50), muted(false), usr_cb{nullptr, 0, UsrCallBackMode::PROCESSED, nullptr}, cb_timer(BG_SERVICE),
+      imap(_ch == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP), priority(_priority), usr_name(_name), ias_ready(false),
+      exec_timer(BG_SERVICE), exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE),
+      reset_strand(asio::make_strand(BG_SERVICE)), volume(100), muted(false),
+      usr_cb{nullptr, 0, UsrCallBackMode::PROCESSED, nullptr}, cb_timer(BG_SERVICE),
       cb_strand(asio::make_strand(BG_SERVICE))
 {
     auto ret = create_device(_name);
@@ -682,11 +667,11 @@ IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
 }
 
 IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned int _ti, unsigned int _fs,
-                   unsigned int dev_ch, AudioChannelMap _imap)
+                   unsigned int dev_ch, AudioChannelMap _imap, AudioPriority _priority)
     : token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(2), rst_order(ResetOrd::RESET_NONE), spf_ch(dev_ch),
-      imap(_imap), usr_name(_name), ias_ready(false), exec_timer(BG_SERVICE),
+      imap(_imap), priority(_priority), usr_name(_name), ias_ready(false), exec_timer(BG_SERVICE),
       exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE), reset_strand(asio::make_strand(BG_SERVICE)),
-      volume(50), muted(false), usr_cb{nullptr, 0, UsrCallBackMode::PROCESSED, nullptr}, cb_timer(BG_SERVICE),
+      volume(100), muted(false), usr_cb{nullptr, 0, UsrCallBackMode::PROCESSED, nullptr}, cb_timer(BG_SERVICE),
       cb_strand(asio::make_strand(BG_SERVICE))
 {
     DBG_ASSERT_GE(dev_ch, 2);
@@ -971,7 +956,7 @@ RetCode IAStream::set_volume(unsigned int vol)
         AUDIO_ERROR_PRINT("Invalid volume value: %u", vol);
         return {RetCode::EPARAM, "Invalid volume value"};
     }
-    AUDIO_INFO_PRINT("Token %u volume set to %u, gain: %.2f db", token, vol, volume2gain(vol));
+    AUDIO_INFO_PRINT("Token %u volume set to %u", token, vol);
     volume.store(vol);
     return RetCode::OK;
 }
@@ -1082,8 +1067,7 @@ RetCode IAStream::process_data()
         filter_bank->process(iview);
     }
 
-    auto volume_gain = volume2gain(volume.load());
-    ret = sampler->process(iview, oview, volume_gain);
+    ret = sampler->process(iview, oview, volume.load());
 
     if (ret != RetCode::OK)
     {
@@ -1103,12 +1087,13 @@ RetCode IAStream::process_data()
     {
         if (auto np = dest.lock())
         {
-            np->direct_push(ch, ps, fs, src, SourceUUID{0, 0, token});
+            np->direct_push(ch, ps, fs, src, SourceUUID{0, 0, token}, priority);
         }
     }
 
     if (auto np = networker.lock())
     {
+        // need priority here
         np->send_audio(token, src, ps);
     }
 
@@ -1268,13 +1253,14 @@ void IAStream::reset_self()
 }
 
 // AudioPlayer
-AudioPlayer::AudioPlayer(unsigned char _token) : token(_token), preemptive(0), volume(50)
+AudioPlayer::AudioPlayer(unsigned char _token) : token(_token), preemptive(0), volume(100)
 {
 }
 
 AudioPlayer::~AudioPlayer() = default;
 
-RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared_ptr<OAStream> &sink)
+RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared_ptr<OAStream> &sink,
+                          AudioPriority priority)
 {
     if (preemptive.load(std::memory_order_relaxed) > 5)
     {
@@ -1292,9 +1278,9 @@ RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared
         return {RetCode::FAILED, "Stream already exists"};
     }
 
-    auto *raw_sender =
-        new IAStream(static_cast<unsigned char>(token + preemptive), AudioDeviceName(name, cycles),
-                     enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2, ResetOrd::RESET_NONE);
+    auto *raw_sender = new IAStream(static_cast<unsigned char>(token + preemptive), AudioDeviceName(name, cycles),
+                                    enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2,
+                                    ResetOrd::RESET_NONE, priority);
 
     auto audio_sender = std::shared_ptr<IAStream>(raw_sender, [self = shared_from_this(), name](const IAStream *ptr) {
         self->preemptive.fetch_sub(1, std::memory_order_relaxed);

@@ -287,6 +287,29 @@ void test_mix_channels()
         std::cout << "  Overflow clipping test passed" << std::endl;
     }
 
+    // Test 2.5: Soft limiter compression behavior (integer-only soft limiter)
+    {
+        // Prepare sums that exceed soft threshold but should be compressed (not immediate hard clip)
+        // Using values chosen to exercise the soft-limiter implemented in mix_channels
+        std::vector<int16_t> source = {20000, 32000, -20000, -32000};
+        std::vector<int16_t> dest = {15000, 1000, -15000, -1000};
+
+        mix_channels(source.data(), 2, 2, dest.data());
+
+        // Expected results computed with the same integer soft-limiter logic:
+        // SOFT_THRESH = 30000
+        // 1) 20000+15000=35000 -> excess=5000 -> compressed=(5000+1)>>1=2500 -> 30000+2500=32500
+        // 2) 32000+1000=33000  -> excess=3000 -> compressed=1500 -> 31500
+        // 3) -20000 + -15000 = -35000 -> -32500
+        // 4) -32000 + -1000 = -33000 -> -31500
+
+        bool soft_ok = (dest[0] == static_cast<int16_t>(32500) && dest[1] == static_cast<int16_t>(31500) &&
+                        dest[2] == static_cast<int16_t>(-32500) && dest[3] == static_cast<int16_t>(-31500));
+
+        test_check(soft_ok, "Soft limiter compression test");
+        std::cout << "  Soft limiter compression test " << (soft_ok ? "passed" : "FAILED") << std::endl;
+    }
+
     // Test 3: Mixing within valid range
     {
         std::vector<int16_t> source = {10000, 5000, -10000, -5000};

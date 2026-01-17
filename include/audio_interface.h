@@ -242,6 +242,17 @@ enum class AudioPeriodSize : unsigned int
 };
 
 /**
+ * @enum AudioPriority
+ * @brief Audio stream priority levels
+ */
+enum class AudioPriority : unsigned int
+{
+    LOW = 10,    /**< Low priority, will fade out when audio stream with high priority come in */
+    MEDIUM = 50, /**< Medium priority */
+    HIGH = 90    /**< High priority, will not be affected by other streams */
+};
+
+/**
  * @enum StreamFlags
  * @brief Bitflags for controlling stream creation options
  */
@@ -351,8 +362,8 @@ struct AudioToken
     }
 
     /**
-     * @brief Convert to unsigned char
-     * @return Token value as unsigned char
+     * @brief Check if token is valid
+     * @return true if token is valid (not INVALID_TOKEN)
      */
     constexpr explicit operator bool() const noexcept
     {
@@ -528,11 +539,12 @@ class AudioCenter
      *              - CodecOPUS/CodecPCM: Choose network codec (OPUS is default)
      *              - ResetSoft: Enable automatic reset when device fails health checks
      *              - ResetHard: Enable periodic forced reset (overrides ResetSoft if both set)
+     * @param priority Priority level for the stream
      * @return RetCode indicating success or failure
      * @note ResetHard takes priority over ResetSoft when both flags are set
      */
     RetCode create(IToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps, unsigned int ch,
-                   StreamFlags flags = StreamFlags::None);
+                   StreamFlags flags = StreamFlags::None, AudioPriority priority = AudioPriority::MEDIUM);
 
     /**
      * @brief Creates an input stream with custom channel mapping
@@ -543,11 +555,13 @@ class AudioCenter
      * @param dev_ch Number of channels to open device
      * @param imap Channel mapping between user channel and device channel
      * @param flags Stream creation flags (Network | CodecOPUS/CodecPCM)
+     * @param priority Priority level for the stream
      * @return RetCode indicating success or failure
      * @note Reset flags (ResetSoft/ResetHard) are not supported for streams with channel mapping
      */
     RetCode create(IToken token, const AudioDeviceName &name, AudioBandWidth bw, AudioPeriodSize ps,
-                   unsigned int dev_ch, const AudioChannelMap &imap, StreamFlags flags = StreamFlags::None);
+                   unsigned int dev_ch, const AudioChannelMap &imap, StreamFlags flags = StreamFlags::None,
+                   AudioPriority priority = AudioPriority::MEDIUM);
 
     /**
      * @brief Creates an output stream
@@ -586,11 +600,13 @@ class AudioCenter
      * @param itoken Input token
      * @param otoken Output token
      * @param flags Stream creation flags (Network | CodecOPUS/CodecPCM)
+     * @param priority Priority level for the stream
      * @return RetCode indicating success or failure
      * @note The created input stream is a virtual stream that receives data from the output stream
      * @note Reset functionality is not applicable for linked streams
      */
-    RetCode create(IToken itoken, OToken otoken, StreamFlags flags = StreamFlags::None);
+    RetCode create(IToken itoken, OToken otoken, StreamFlags flags = StreamFlags::None,
+                   AudioPriority priority = AudioPriority::MEDIUM);
 
     /**
      * @brief Prepares the AudioCenter for use
@@ -645,7 +661,10 @@ class AudioCenter
      * @param token Input token
      * @param cb Callback function
      * @param required_frames Number of frames required for the callback
-     * @param mode decide callback mode, 0: raw, 1: processed, 2: from listener
+     * @param mode Callback mode:
+     *             - RAW: Raw data from real device
+     *             - PROCESSED: Processed audio data from real device  
+     *             - OBSERVER: Raw audio data from listener
      * @param ptr User data pointer to be passed to the callback function
      * @return RetCode indicating success or failure
      */
@@ -683,10 +702,12 @@ class AudioCenter
      * @param frames Number of frames in the data
      * @param sample_rate Sample rate of the data
      * @param data Pointer to the PCM data
+     * @param priority Priority level for the data
      * @return RetCode indicating success or failure
      */
     RetCode direct_push_pcm(IToken itoken, OToken otoken, unsigned int chan, unsigned int frames,
-                            unsigned int sample_rate, const int16_t *data);
+                            unsigned int sample_rate, const int16_t *data,
+                            AudioPriority priority = AudioPriority::MEDIUM);
 
     /**
      * @brief Starts the AudioCenter and all associated streams
@@ -757,9 +778,10 @@ class AudioCenter
      * @param name Path to the audio file
      * @param cycles Number of times to play the file
      * @param otoken Output token
+     * @param priority Priority level for the playback
      * @return RetCode indicating success or failure
      */
-    RetCode play(const std::string &name, int cycles, OToken otoken);
+    RetCode play(const std::string &name, int cycles, OToken otoken, AudioPriority priority = AudioPriority::MEDIUM);
 
     /**
      * @brief Stops playing an audio file
