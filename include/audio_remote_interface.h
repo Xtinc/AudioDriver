@@ -79,9 +79,10 @@ class AudioRemoteClient
      * @param name Audio file path
      * @param cycles Play count (-1 for loop, 0 for once)
      * @param otoken Output stream token
+     * @param priority Priority level for the playback
      * @return RetCode Operation result
      */
-    RetCode play(const std::string &name, int cycles, OToken otoken);
+    RetCode play(const std::string &name, int cycles, OToken otoken, AudioPriority priority = AudioPriority::MEDIUM);
 
     /**
      * @brief Stop playing specified audio file

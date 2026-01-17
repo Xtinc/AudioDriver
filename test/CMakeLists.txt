@@ -21,5 +21,8 @@ target_link_libraries(bluetoothctl bettyaudio)
 add_executable(test_magic_encoding test_magic_encoding.cpp)
 target_link_libraries(test_magic_encoding bettyaudio)
 
+add_executable(test_rpc_priority test_rpc_priority.cpp)
+target_link_libraries(test_rpc_priority bettyaudio)
+
 add_executable(test_rpc test_rpc.cpp)
 target_link_libraries(test_rpc bettyaudio)

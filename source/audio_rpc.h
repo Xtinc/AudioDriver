@@ -79,7 +79,7 @@ class RPCClient
     RetCode set_volume(AudioToken token, unsigned int volume);
     RetCode mute(AudioToken token, bool enable);
     RetCode mute(IToken itoken, OToken otoken, bool enable, const std::string &ip);
-    RetCode play(const std::string &name, int cycles, OToken otoken);
+    RetCode play(const std::string &name, int cycles, OToken otoken, AudioPriority priority = AudioPriority::MEDIUM);
     RetCode stop_play(const std::string &path);
     RetCode set_player_volume(unsigned int volume);
 

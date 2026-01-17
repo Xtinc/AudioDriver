@@ -569,7 +569,7 @@ RetCode RPCClient::mute(IToken itoken, OToken otoken, bool enable, const std::st
     return send_request(RPCCommand::MUTE, payload);
 }
 
-RetCode RPCClient::play(const std::string &name, int cycles, OToken otoken)
+RetCode RPCClient::play(const std::string &name, int cycles, OToken otoken, AudioPriority priority)
 {
     if (name.size() > RPC_MAX_PATH_LENGTH)
     {
@@ -577,9 +577,10 @@ RetCode RPCClient::play(const std::string &name, int cycles, OToken otoken)
     }
 
     std::vector<uint8_t> payload;
-    payload.reserve(5 + name.size());
+    payload.reserve(9 + name.size());
     payload.push_back(otoken.tok);
     append_to_payload(payload, static_cast<int32_t>(cycles));
+    append_to_payload(payload, static_cast<uint32_t>(priority));
     payload.insert(payload.end(), name.begin(), name.end());
 
     return send_request(RPCCommand::PLAY, payload);

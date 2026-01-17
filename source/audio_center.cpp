@@ -1235,9 +1235,9 @@ RetCode AudioRemoteClient::mute(IToken itoken, OToken otoken, bool enable, const
     return rpc_client->mute(itoken, otoken, enable, ip);
 }
 
-RetCode AudioRemoteClient::play(const std::string &name, int cycles, OToken otoken)
+RetCode AudioRemoteClient::play(const std::string &name, int cycles, OToken otoken, AudioPriority priority)
 {
-    return rpc_client->play(name, cycles, otoken);
+    return rpc_client->play(name, cycles, otoken, priority);
 }
 
 RetCode AudioRemoteClient::stop_play(const std::string &path)
