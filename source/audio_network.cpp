@@ -622,7 +622,7 @@ void NetWorker::handle_receive(const asio::error_code &error, std::size_t bytes_
     }
 
     auto magic_num = static_cast<uint8_t>(receive_buffer.get()[0]);
-    if (bytes_transferred >= sizeof(DataPacket) && NetAudio::is_valid_magic_num(magic_num))
+    if (bytes_transferred >= sizeof(DataPacket) && DataPacket::is_valid_magic_num(magic_num))
     {
         auto data_header = reinterpret_cast<const DataPacket *>(receive_buffer.get());
         const auto *payload = reinterpret_cast<const uint8_t *>(receive_buffer.get() + sizeof(DataPacket));
@@ -681,8 +681,8 @@ void NetWorker::process_and_deliver_audio(const DataPacket *header, const uint8_
     auto timestamp = header->timestamp;
 
     // Decode codec type and priority from magic number
-    AudioCodecType codec_type = NetAudio::decode_magic_codec(header->magic_num);
-    AudioPriority priority = NetAudio::decode_magic_priority(header->magic_num);
+    AudioCodecType codec_type = DataPacket::decode_magic_codec(header->magic_num);
+    AudioPriority priority = DataPacket::decode_magic_priority(header->magic_num);
 
     auto &decoder_context = get_decoder(ssid, channels, sample_rate);
     NetStatInfos stats{};
@@ -744,7 +744,7 @@ void NetWorker::send_data_packet(const Destination &dest, uint8_t sender_id, uin
     }
 
     DataPacket header{};
-    header.magic_num = NetAudio::encode_magic_num(codec_type, priority);
+    header.magic_num = DataPacket::encode_magic_num(codec_type, priority);
     header.sender_id = sender_id;
     header.receiver_id = receiver_id;
     header.channels = channels;

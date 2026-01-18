@@ -22,7 +22,7 @@ int main()
     {
         for (int p = 0; p < 3; p++)
         {
-            uint8_t magic = NetAudio::encode_magic_num(codecs[c], priorities[p]);
+            uint8_t magic = DataPacket::encode_magic_num(codecs[c], priorities[p]);
 
             std::cout << codec_names[c] << "\t\t" << priority_names[p] << "\t\t0x" << std::hex << std::uppercase
                       << std::setfill('0') << std::setw(2) << (int)magic << "\t\t";
@@ -44,11 +44,11 @@ int main()
     {
         for (int p = 0; p < 3; p++)
         {
-            uint8_t magic = NetAudio::encode_magic_num(codecs[c], priorities[p]);
+            uint8_t magic = DataPacket::encode_magic_num(codecs[c], priorities[p]);
 
-            AudioCodecType decoded_codec = NetAudio::decode_magic_codec(magic);
-            AudioPriority decoded_priority = NetAudio::decode_magic_priority(magic);
-            bool valid = NetAudio::is_valid_magic_num(magic);
+            AudioCodecType decoded_codec = DataPacket::decode_magic_codec(magic);
+            AudioPriority decoded_priority = DataPacket::decode_magic_priority(magic);
+            bool valid = DataPacket::is_valid_magic_num(magic);
 
             std::cout << "0x" << std::hex << std::uppercase << std::setfill('0') << std::setw(2) << (int)magic
                       << "\t\t";
