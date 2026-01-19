@@ -533,13 +533,13 @@ void FadeEffect::decide_fade_type(unsigned int highest_priority, unsigned int cu
     case FadeType::NONE:
         if (highest_priority >= enum2val(AudioPriority::HIGH) && current_priority <= enum2val(AudioPriority::LOW))
         {
-            start(FadeType::FADE_OUT, 5000.0f);
+            start(FadeType::FADE_OUT, 500.0f);
         }
         break;
     case FadeType::FADE_OUT:
         if (highest_priority < enum2val(AudioPriority::HIGH))
         {
-            start(FadeType::FADE_IN, 3000.0f);
+            start(FadeType::FADE_IN, 2500.0f);
         }
         break;
     case FadeType::FADE_IN:

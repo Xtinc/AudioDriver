@@ -381,7 +381,6 @@ RetCode OAStream::set_volume(unsigned int vol)
         return {RetCode::EPARAM, "Invalid volume value"};
     }
     volume.store(vol);
-    AUDIO_INFO_PRINT("Token %u all volume set to %u", token, vol);
     return RetCode::OK;
 }
 
@@ -956,7 +955,6 @@ RetCode IAStream::set_volume(unsigned int vol)
         AUDIO_ERROR_PRINT("Invalid volume value: %u", vol);
         return {RetCode::EPARAM, "Invalid volume value"};
     }
-    AUDIO_INFO_PRINT("Token %u volume set to %u", token, vol);
     volume.store(vol);
     return RetCode::OK;
 }

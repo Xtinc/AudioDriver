@@ -915,15 +915,25 @@ RetCode AudioCenter::set_volume(AudioToken token, unsigned int vol)
     auto ias = ias_map.find(token.tok);
     if (ias != ias_map.end())
     {
-        ias->second->set_volume(vol);
-        return RetCode::OK;
+        auto ret = ias->second->set_volume(vol);
+        if (!ret)
+        {
+            AUDIO_ERROR_PRINT("Failed to set volume for input stream %u: %s", token.tok, ret.what());
+        }
+        AUDIO_INFO_PRINT("Token %u volume set to %u", token, vol);
+        return ret;
     }
 
     auto oas = oas_map.find(token.tok);
     if (oas != oas_map.end())
     {
-        oas->second->set_volume(vol);
-        return RetCode::OK;
+        auto ret = oas->second->set_volume(vol);
+        if (!ret)
+        {
+            AUDIO_ERROR_PRINT("Failed to set volume for input stream %u: %s", token.tok, ret.what());
+        }
+        AUDIO_INFO_PRINT("Token %u volume set to %u", token, vol);
+        return ret;
     }
 
     AUDIO_DEBUG_PRINT("Token not found: %u", token.tok);
@@ -1057,6 +1067,7 @@ RetCode AudioCenter::set_player_volume(unsigned int vol)
     {
         AUDIO_ERROR_PRINT("Failed to set player volume: %s", ret.what());
     }
+    AUDIO_INFO_PRINT("Player volume set to %u", vol);
     return ret;
 }
 
