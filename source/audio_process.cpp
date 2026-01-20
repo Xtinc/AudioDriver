@@ -374,17 +374,17 @@ void LocSampler::convert_sample_rate(ChannelBuffer<float> *input, ChannelBuffer<
     }
 }
 
-VolumeController::VolumeController(float sample_rate, unsigned int channels, float smooth_time_ms)
-    : sample_rate(sample_rate), channels(channels), current_gain(channels, 0.0f), target_gain(0.0f)
+VolumeController::VolumeController(float sample_rate_, unsigned int channels_, float smooth_time_ms_)
+    : sample_rate(sample_rate_), channels(channels_), current_gain(channels, 0.0f), target_gain(0.0f)
 {
     DBG_ASSERT_GT(sample_rate, 0.0f);
     DBG_ASSERT_GT(channels, 0u);
-    DBG_ASSERT_GT(smooth_time_ms, 0.0f);
+    DBG_ASSERT_GT(smooth_time_ms_, 0.0f);
 
     // Calculate smoothing coefficient for exponential smoothing
     // Time constant: tau = smooth_time_ms / 1000.0f
     // Coefficient: coeff = exp(-1.0f / (tau * sample_rate))
-    float tau = smooth_time_ms / 1000.0f;
+    float tau = smooth_time_ms_ / 1000.0f;
     smooth_coeff = std::exp(-1.0f / (tau * sample_rate));
 }
 

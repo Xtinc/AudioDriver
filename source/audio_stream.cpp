@@ -193,7 +193,7 @@ RetCode OAStream::stop()
 
     {
         std::lock_guard<std::mutex> grd(session_mtx);
-        sessions.clear();
+        // sessions.clear();
     }
 
     return odevice->stop();

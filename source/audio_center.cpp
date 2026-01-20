@@ -920,7 +920,7 @@ RetCode AudioCenter::set_volume(AudioToken token, unsigned int vol)
         {
             AUDIO_ERROR_PRINT("Failed to set volume for input stream %u: %s", token.tok, ret.what());
         }
-        AUDIO_INFO_PRINT("Token %u volume set to %u", token, vol);
+        AUDIO_INFO_PRINT("Token %u volume set to %u", token.tok, vol);
         return ret;
     }
 
@@ -932,7 +932,7 @@ RetCode AudioCenter::set_volume(AudioToken token, unsigned int vol)
         {
             AUDIO_ERROR_PRINT("Failed to set volume for input stream %u: %s", token.tok, ret.what());
         }
-        AUDIO_INFO_PRINT("Token %u volume set to %u", token, vol);
+        AUDIO_INFO_PRINT("Token %u volume set to %u", token.tok, vol);
         return ret;
     }
 

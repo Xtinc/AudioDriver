@@ -7,6 +7,7 @@
 #include "audio_monitor.h"
 #include "audio_network.h"
 #include "audio_process.h"
+#include <list>
 
 #define BG_SERVICE (BackgroundService::instance().context())
 
