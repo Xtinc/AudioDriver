@@ -161,28 +161,39 @@ bool NetState::update(uint32_t sequence, uint64_t timestamp, NetStatInfos &stats
         return false;
     }
 
-    if (sequence < highest_sequence_seen)
+    // Check for out-of-order packets using proper sequence comparison
+    // Handle sequence number wrap-around using signed difference
+    int32_t seq_diff = static_cast<int32_t>(sequence - highest_sequence_seen);
+
+    if (seq_diff < 0)
     {
+        // Out of order packet
         packets_out_of_order++;
         period_packets_out_of_order++;
     }
-    else
+    else if (seq_diff > 0)
     {
-        if (sequence > last_sequence + 1)
+        // In-order packet, check for gaps
+        if (seq_diff > 1)
         {
-            uint32_t lost = sequence - last_sequence - 1;
+            uint32_t lost = seq_diff - 1;
             packets_lost += lost;
             period_packets_lost += lost;
         }
-
         highest_sequence_seen = sequence;
     }
+    // else: seq_diff == 0, duplicate packet (ignore)
 
-    if (timestamp > last_timestamp)
+    // Calculate jitter according to RFC 3550
+    // Only calculate jitter for in-order or reasonably close packets
+    // to avoid distortion from severely out-of-order packets
+    if (seq_diff >= 0 && last_timestamp > 0 && timestamp > 0)
     {
-        uint64_t send_interval = timestamp - last_timestamp;
-        uint64_t arrival_interval = arrival_time - last_arrival_time;
+        // Calculate intervals
+        int64_t send_interval = static_cast<int64_t>(timestamp) - static_cast<int64_t>(last_timestamp);
+        int64_t arrival_interval = static_cast<int64_t>(arrival_time) - static_cast<int64_t>(last_arrival_time);
 
+        // Jitter is the absolute difference between send and arrival intervals
         double jitter = std::abs(static_cast<double>(arrival_interval) - static_cast<double>(send_interval));
 
         total_jitter += jitter;
@@ -190,6 +201,8 @@ bool NetState::update(uint32_t sequence, uint64_t timestamp, NetStatInfos &stats
         max_jitter = std::max(max_jitter, jitter);
     }
 
+    // Update tracking variables for next packet comparison
+    // Always update these to track the most recent packet received
     last_sequence = sequence;
     last_timestamp = timestamp;
     last_arrival_time = arrival_time;
@@ -219,6 +232,7 @@ bool NetState::update(uint32_t sequence, uint64_t timestamp, NetStatInfos &stats
     period_packets_lost = 0;
     period_packets_out_of_order = 0;
     period_total_jitter = 0.0;
+    max_jitter = 0.0; // Reset max jitter for next period
     last_report_time = now;
 
     return true;
