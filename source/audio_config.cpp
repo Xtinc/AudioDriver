@@ -7,7 +7,8 @@ INIReader::INIReader(const std::string &filename) : filename_(filename)
 {
     if (!load())
     {
-        AUDIO_ERROR_PRINT("Failed to load INI file: %s", filename.c_str());
+        AUDIO_DEBUG_PRINT("INI file not found, creating new file: %s", filename.c_str());
+        SaveDeviceConfig(DeviceConfig{});
     }
 }
 
@@ -111,6 +112,7 @@ DeviceConfig INIReader::LoadDeviceConfig()
 {
     std::lock_guard<std::mutex> lock(mutex_);
     DeviceConfig config{get_string("Audio", "InputDeviceID", ""), get_string("Audio", "InputDeviceName", ""),
-                        get_string("Audio", "OutputDeviceID", ""), get_string("Audio", "OutputDeviceName", "")};
+                        get_string("Audio", "OutputDeviceID", ""), get_string("Audio", "OutputDeviceName", ""),
+                        get_string("Audio", "EnableRPC", "")};
     return config;
 }

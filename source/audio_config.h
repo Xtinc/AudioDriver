@@ -12,6 +12,7 @@ struct DeviceConfig
     std::string input_device_name;
     std::string output_device_id;
     std::string output_device_name;
+    std::string enable_rpc;
 };
 
 class INIReader

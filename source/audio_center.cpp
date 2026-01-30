@@ -416,6 +416,13 @@ RetCode AudioCenter::prepare(bool enable_usb_detection)
         return {RetCode::ESTATE, "AudioCenter not in INIT state"};
     }
 
+    auto cfg = config->LoadDeviceConfig();
+
+    if (cfg.enable_rpc == "true")
+    {
+        enable_rpc();
+    }
+
     if (!enable_usb_detection)
     {
         AUDIO_INFO_PRINT(
@@ -423,7 +430,6 @@ RetCode AudioCenter::prepare(bool enable_usb_detection)
         return RetCode::OK;
     }
 
-    auto cfg = config->LoadDeviceConfig();
     auto default_usb_in = cfg.input_device_id.empty() ? "null_usb" : cfg.input_device_id;
     auto default_usb_out = cfg.output_device_id.empty() ? "null_usb" : cfg.output_device_id;
 

@@ -626,6 +626,7 @@ void OAStream::reset_self()
     asio::post(reset_strand, [self = shared_from_this()]() {
         (void)self->stop();
         self->odevice.reset();
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
         self->odevice = make_audio_driver(PHSY_OAS, self->usr_name, self->fs, self->ps, self->ch, self->rst_order);
         auto ret = self->odevice->open();
         if (!ret)
@@ -1235,6 +1236,7 @@ void IAStream::reset_self()
     asio::post(reset_strand, [self = shared_from_this()]() {
         (void)self->stop();
         self->idevice.reset();
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
         self->idevice = make_audio_driver(PHSY_IAS, self->usr_name, self->fs, self->ps, self->ch, self->rst_order);
         auto ret = self->idevice->open();
         if (!ret)
