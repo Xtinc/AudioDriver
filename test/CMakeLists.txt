@@ -26,3 +26,6 @@ target_link_libraries(test_rpc_priority bettyaudio)
 
 add_executable(test_rpc test_rpc.cpp)
 target_link_libraries(test_rpc bettyaudio)
+
+add_executable(test_remote_debug test_remote_debug.cpp)
+target_link_libraries(test_remote_debug bettyaudio)
