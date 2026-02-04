@@ -63,14 +63,59 @@ BluetoothAgent::BluetoothAgent(const std::string &adapter_path)
 
 BluetoothAgent::~BluetoothAgent()
 {
+    // Stop thread first to prevent callbacks during cleanup
     stop_dbus_loop();
+    
+    // Cancel any pending promises to prevent deadlocks
+    {
+        std::lock_guard<std::mutex> lock(confirmation_mutex_);
+        if (confirmation_promise_)
+        {
+            try { confirmation_promise_->set_value(false); } catch (...) {}
+            confirmation_promise_.reset();
+        }
+        if (passkey_promise_)
+        {
+            try { passkey_promise_->set_value(std::make_pair(false, 0)); } catch (...) {}
+            passkey_promise_.reset();
+        }
+        if (pincode_promise_)
+        {
+            try { pincode_promise_->set_value(std::make_pair(false, "")); } catch (...) {}
+            pincode_promise_.reset();
+        }
+        if (service_auth_promise_)
+        {
+            try { service_auth_promise_->set_value(false); } catch (...) {}
+            service_auth_promise_.reset();
+        }
+    }
+    
+    // Unregister agent
+    unregister_agent();
+    
+    // Clean up D-Bus resources
     if (event_connection_)
     {
+        DBusError err;
+        dbus_error_init(&err);
+        dbus_bus_remove_match(event_connection_, "type='signal',interface='org.freedesktop.DBus.ObjectManager'", &err);
+        dbus_error_free(&err);
+        
+        dbus_error_init(&err);
+        dbus_bus_remove_match(event_connection_, "type='signal',interface='org.freedesktop.DBus.Properties'", &err);
+        dbus_error_free(&err);
+        
+        dbus_connection_remove_filter(event_connection_, signal_filter_callback, this);
         dbus_connection_unref(event_connection_);
+        event_connection_ = nullptr;
     }
+    
     if (connection_)
     {
+        dbus_connection_unregister_object_path(connection_, AGENT_PATH);
         dbus_connection_unref(connection_);
+        connection_ = nullptr;
     }
 }
 
@@ -1068,6 +1113,45 @@ bool BluetoothAgent::register_agent()
     if (reply)
     {
         dbus_message_unref(reply);
+    }
+
+    return true;
+}
+
+bool BluetoothAgent::unregister_agent()
+{
+    if (!connection_)
+    {
+        return false;
+    }
+
+    DBusError err;
+    dbus_error_init(&err);
+
+    const char *agent_path = AGENT_PATH;
+
+    DBusMessage *msg =
+        dbus_message_new_method_call(BLUEZ_SERVICE, "/org/bluez", AGENT_MANAGER_INTERFACE, "UnregisterAgent");
+    if (!msg)
+    {
+        AUDIO_ERROR_PRINT("Failed to create UnregisterAgent message");
+        return false;
+    }
+
+    dbus_message_append_args(msg, DBUS_TYPE_OBJECT_PATH, &agent_path, DBUS_TYPE_INVALID);
+    DBusMessage *reply = dbus_connection_send_with_reply_and_block(connection_, msg, DBUS_TIMEOUT_SHORT, &err);
+    dbus_message_unref(msg);
+
+    if (dbus_error_is_set(&err))
+    {
+        AUDIO_DEBUG_PRINT("UnregisterAgent failed (this is normal if not registered): %s", err.message);
+        dbus_error_free(&err);
+    }
+
+    if (reply)
+    {
+        dbus_message_unref(reply);
+        AUDIO_INFO_PRINT("Bluetooth agent unregistered successfully");
     }
 
     return true;

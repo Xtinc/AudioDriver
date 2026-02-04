@@ -436,6 +436,8 @@ class BluetoothAgent
     void update_device_property(BluetoothDevice &device, const char *key, DBusMessageIter *iter);
 
     bool register_agent();
+    bool unregister_agent();
+
     int handle_request_pincode(DBusMessage *msg);
     int handle_display_pincode(DBusMessage *msg);
     int handle_request_passkey(DBusMessage *msg);
