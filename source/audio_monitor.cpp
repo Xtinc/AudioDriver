@@ -422,10 +422,10 @@ static std::string get_device_description(const char *device_name)
             const char *card_id = snd_ctl_card_info_get_id(info);
             const char *card_longname = snd_ctl_card_info_get_longname(info);
 
-            //use card ID
+            // use card ID
             if (card_id && strlen(card_id) > 0)
             {
-                result = card_id;
+                result = "hw:" + std::string(card_id);
             }
             // detailed name if available
             else if (card_longname && strlen(card_longname) > 0)
@@ -1254,14 +1254,6 @@ bool AudioMonitor::DeviceExists(const std::string &device_id)
         exists = true;
         snd_pcm_close(pcm);
         return exists;
-    }
-
-    // If direct open fails, enumerate devices
-    if (!exists)
-    {
-        std::vector<AudioDeviceInfo> devices = EnumerateDevices();
-        exists = std::any_of(devices.begin(), devices.end(),
-                             [&device_id](const AudioDeviceInfo &device) { return device.id == device_id; });
     }
 
     return exists;

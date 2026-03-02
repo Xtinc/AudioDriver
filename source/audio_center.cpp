@@ -430,8 +430,20 @@ RetCode AudioCenter::prepare(bool enable_usb_detection)
         return RetCode::OK;
     }
 
-    auto default_usb_in = cfg.input_device_id.empty() ? "null_usb" : cfg.input_device_id;
-    auto default_usb_out = cfg.output_device_id.empty() ? "null_usb" : cfg.output_device_id;
+    std::string default_usb_in = "null_iusb";
+    std::string default_usb_out = "null_ousb";
+
+    if (monitor->DeviceExists(cfg.input_device_name))
+    {
+        default_usb_in = cfg.input_device_name;
+        AUDIO_INFO_PRINT("Default input device found: %s", default_usb_in.c_str());
+    }
+
+    if (monitor->DeviceExists(cfg.output_device_name))
+    {
+        default_usb_out = cfg.output_device_name;
+        AUDIO_INFO_PRINT("Default output device found: %s", default_usb_out.c_str());
+    }
 
     ias_map.emplace(USR_DUMMY_IN.tok,
                     std::make_shared<IAStream>(USR_DUMMY_IN.tok, AudioDeviceName(default_usb_in, 0),
@@ -472,14 +484,14 @@ RetCode AudioCenter::prepare(bool enable_usb_detection)
             {
                 ias->second->restart({info.id, 0});
                 usr_cfg.input_device_id = info.id;
-                usr_cfg.input_device_name = info.name;
+                usr_cfg.input_device_name = info.name + ",0";
                 config->SaveDeviceConfig(usr_cfg);
             }
             else if (info.type == AudioDeviceType::Playback)
             {
                 oas->second->restart({info.id, 0});
                 usr_cfg.output_device_id = info.id;
-                usr_cfg.output_device_name = info.name;
+                usr_cfg.output_device_name = info.name + ",0";
                 config->SaveDeviceConfig(usr_cfg);
             }
             else
@@ -487,9 +499,9 @@ RetCode AudioCenter::prepare(bool enable_usb_detection)
                 ias->second->restart({info.id, 0});
                 oas->second->restart({info.id, 0});
                 usr_cfg.input_device_id = info.id;
-                usr_cfg.input_device_name = info.name;
+                usr_cfg.input_device_name = info.name + ",0";
                 usr_cfg.output_device_id = info.id;
-                usr_cfg.output_device_name = info.name;
+                usr_cfg.output_device_name = info.name + ",0";
                 config->SaveDeviceConfig(usr_cfg);
             }
             break;
@@ -498,16 +510,10 @@ RetCode AudioCenter::prepare(bool enable_usb_detection)
             if (ias->second->name().first == info.id)
             {
                 ias->second->restart({"null_usb", 0});
-                usr_cfg.input_device_id = "null_usb";
-                usr_cfg.input_device_name = "null_usb";
-                config->SaveDeviceConfig(usr_cfg);
             }
             if (oas->second->name().first == info.id)
             {
                 oas->second->restart({"null_usb", 0});
-                usr_cfg.output_device_id = "null_usb";
-                usr_cfg.output_device_name = "null_usb";
-                config->SaveDeviceConfig(usr_cfg);
             }
             break;
         default:
@@ -889,6 +895,8 @@ RetCode AudioCenter::resume(AudioToken token)
     auto ias = ias_map.find(token.tok);
     if (ias != ias_map.end())
     {
+        ias->second->resume();
+        AUDIO_INFO_PRINT("Input stream %u resumed", token.tok);
         return RetCode::OK;
     }
 
