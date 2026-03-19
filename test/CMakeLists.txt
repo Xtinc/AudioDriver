@@ -29,3 +29,6 @@ target_link_libraries(test_rpc bettyaudio)
 
 add_executable(test_remote_debug test_remote_debug.cpp)
 target_link_libraries(test_remote_debug bettyaudio)
+
+add_executable(test_histogram test_histogram.cpp)
+target_link_libraries(test_histogram bettyaudio)

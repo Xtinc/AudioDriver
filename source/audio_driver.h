@@ -5,6 +5,12 @@
 #include "audio_network.h"
 #include <atomic>
 #include <thread>
+#include <array>
+#include <algorithm>
+#include <string>
+#include <cstdio>
+#include <stdexcept>
+#include <chrono>
 
 #define PHSY_IAS 0x61
 #define PHSY_OAS 0x62
@@ -19,6 +25,122 @@ enum class ResetOrd
     RESET_NONE,
     RESET_SOFT,
     RESET_HARD
+};
+
+template <size_t N = 20> class Histogram
+{
+  public:
+    Histogram(double _min_val, double _max_val) : ffactor(0.99), min_val(_min_val), max_val(_max_val)
+    {
+        DBG_ASSERT_GT(max_val, min_val);
+        std::fill(bcnts.begin(), bcnts.end(), 0.0);
+
+        const auto delta = (max_val - min_val) / N;
+        for (size_t i = 0; i <= N; i++)
+        {
+            scale[i] = min_val + i * delta;
+        }
+        scale[N] = max_val;
+    }
+
+    void add(double val)
+    {
+        double sum = 0.0;
+        for (auto &cnt : bcnts)
+        {
+            cnt *= ffactor;
+            sum += cnt;
+        }
+
+        size_t bucket_idx;
+        if (val < min_val)
+        {
+            bucket_idx = 0;
+        }
+        else if (val >= max_val)
+        {
+            bucket_idx = N + 1;
+        }
+        else
+        {
+            auto iter = std::lower_bound(scale.begin(), scale.begin() + N + 1, val);
+            bucket_idx = std::distance(scale.begin(), iter);
+            if (bucket_idx > 0)
+            {
+                bucket_idx--;
+            }
+            if (bucket_idx == 0 && val >= scale[0])
+            {
+                bucket_idx = 1;
+            }
+        }
+
+        bcnts[bucket_idx] += 2.0 - ffactor - sum;
+    }
+
+    std::string print() const
+    {
+        constexpr size_t BUFFER_SZ = 50 * (N + 2);
+        char buffer[BUFFER_SZ]{};
+        size_t offset = 0;
+
+        for (size_t i = 0; i < N + 2; i++)
+        {
+            if (bcnts[i] < 5e-4)
+            {
+                continue;
+            }
+
+            int len = 0;
+            if (i == 0)
+            {
+                len = snprintf(buffer + offset, BUFFER_SZ - offset, "(  -inf, %6.2f): %6.2f%%\n", min_val,
+                               bcnts[i] * 100.0);
+            }
+            else if (i == N + 1)
+            {
+                len = snprintf(buffer + offset, BUFFER_SZ - offset, "[%6.2f,   +inf): %6.2f%%\n", max_val,
+                               bcnts[i] * 100.0);
+            }
+            else
+            {
+                len = snprintf(buffer + offset, BUFFER_SZ - offset, "[%6.2f, %6.2f): %6.2f%%\n", scale[i - 1], scale[i],
+                               bcnts[i] * 100.0);
+            }
+
+            if (len < 0 || offset + len >= BUFFER_SZ)
+            {
+                break;
+            }
+            offset += static_cast<size_t>(len);
+        }
+
+        return std::string(buffer);
+    }
+
+    void reset()
+    {
+        std::fill(bcnts.begin(), bcnts.end(), 0.0);
+    }
+
+    double total_weight() const
+    {
+        return std::accumulate(bcnts.begin(), bcnts.end(), 0.0);
+    }
+
+    size_t bucket_count() const { return N + 2; }
+    
+    double bucket_weight(size_t idx) const 
+    { 
+        return (idx < N + 2) ? bcnts[idx] : 0.0; 
+    }
+
+  private:
+    const double ffactor;
+    const double min_val;
+    const double max_val;
+    std::array<double, N + 2> bcnts;
+    std::array<double, N + 1> scale;
 };
 
 struct TimerCounter
