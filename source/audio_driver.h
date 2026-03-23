@@ -3,14 +3,14 @@
 
 #include "audio_interface.h"
 #include "audio_network.h"
-#include <atomic>
-#include <thread>
-#include <array>
 #include <algorithm>
-#include <string>
+#include <array>
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <stdexcept>
-#include <chrono>
+#include <string>
+#include <thread>
 
 #define PHSY_IAS 0x61
 #define PHSY_OAS 0x62
@@ -29,18 +29,19 @@ enum class ResetOrd
 
 template <size_t N = 20> class Histogram
 {
-  public:
-    Histogram(double _min_val, double _max_val) : ffactor(0.99), min_val(_min_val), max_val(_max_val)
-    {
-        DBG_ASSERT_GT(max_val, min_val);
-        std::fill(bcnts.begin(), bcnts.end(), 0.0);
+    static_assert(N > 2, "Histogram must have at least 3 buckets (including underflow and overflow)");
 
-        const auto delta = (max_val - min_val) / N;
-        for (size_t i = 0; i <= N; i++)
+  public:
+    Histogram(const std::string &_name) : ffactor(0.99), name(_name), count(0)
+    {
+        std::fill(bcnts.begin(), bcnts.end(), 1.0 / N);
+        constexpr auto min_val = 0.0;
+        constexpr auto max_val = 1.0;
+        constexpr auto delta = (max_val - min_val) / N;
+        for (size_t i = 0; i < N + 1; i++)
         {
             scale[i] = min_val + i * delta;
         }
-        scale[N] = max_val;
     }
 
     void add(double val)
@@ -53,13 +54,15 @@ template <size_t N = 20> class Histogram
         }
 
         size_t bucket_idx;
-        if (val < min_val)
+        if (val < scale[0])
         {
             bucket_idx = 0;
+            scale[0] = val;
         }
-        else if (val >= max_val)
+        else if (val > scale[N])
         {
-            bucket_idx = N + 1;
+            bucket_idx = N - 1;
+            scale[N] = val;
         }
         else
         {
@@ -69,44 +72,31 @@ template <size_t N = 20> class Histogram
             {
                 bucket_idx--;
             }
-            if (bucket_idx == 0 && val >= scale[0])
-            {
-                bucket_idx = 1;
-            }
         }
 
         bcnts[bucket_idx] += 2.0 - ffactor - sum;
+
+        if (count++ % 100 == 0)
+        {
+            adjust_scale();
+        }
     }
 
     std::string print() const
     {
-        constexpr size_t BUFFER_SZ = 50 * (N + 2);
+        constexpr size_t BUFFER_SZ = 50 * N;
         char buffer[BUFFER_SZ]{};
         size_t offset = 0;
 
-        for (size_t i = 0; i < N + 2; i++)
+        for (size_t i = 0; i < N; i++)
         {
             if (bcnts[i] < 5e-4)
             {
                 continue;
             }
 
-            int len = 0;
-            if (i == 0)
-            {
-                len = snprintf(buffer + offset, BUFFER_SZ - offset, "(  -inf, %6.2f): %6.2f%%\n", min_val,
+            int len = snprintf(buffer + offset, BUFFER_SZ - offset, "[%6.2e, %6.2e): %6.2f%%\n", scale[i], scale[i + 1],
                                bcnts[i] * 100.0);
-            }
-            else if (i == N + 1)
-            {
-                len = snprintf(buffer + offset, BUFFER_SZ - offset, "[%6.2f,   +inf): %6.2f%%\n", max_val,
-                               bcnts[i] * 100.0);
-            }
-            else
-            {
-                len = snprintf(buffer + offset, BUFFER_SZ - offset, "[%6.2f, %6.2f): %6.2f%%\n", scale[i - 1], scale[i],
-                               bcnts[i] * 100.0);
-            }
 
             if (len < 0 || offset + len >= BUFFER_SZ)
             {
@@ -118,29 +108,56 @@ template <size_t N = 20> class Histogram
         return std::string(buffer);
     }
 
-    void reset()
+    void adjust_scale()
     {
-        std::fill(bcnts.begin(), bcnts.end(), 0.0);
-    }
+        std::array<double, N> density;
+        for (size_t i = 0; i < N; i++)
+        {
+            double width = scale[i + 1] - scale[i];
+            density[i] = width > 1e-10 ? bcnts[i] / width : 0.0;
+        }
 
-    double total_weight() const
-    {
-        return std::accumulate(bcnts.begin(), bcnts.end(), 0.0);
-    }
+        for (size_t i = 1; i < N; i++)
+        {
+            double width = scale[i + 1] - scale[i - 1];
+            if (width < 1e-10)
+            {
+                continue;
+            }
+            double ratio = density[i - 1] > 1e-10 ? density[i] / density[i - 1] : 1.0;
+            double move_factor = 0.5 * std::tanh(std::log(ratio));
+            double new_boundary = scale[i] + move_factor * (scale[i + 1] - scale[i - 1]);
+            new_boundary = std::max(scale[i - 1] + width * 0.1, std::min(scale[i + 1] - width * 0.1, new_boundary));
+            scale[i] = 0.8 * scale[i] + 0.2 * new_boundary; // Smooth the boundary movement
+        }
 
-    size_t bucket_count() const { return N + 2; }
-    
-    double bucket_weight(size_t idx) const 
-    { 
-        return (idx < N + 2) ? bcnts[idx] : 0.0; 
+        double total = 0.0;
+        for (const auto &cnt : bcnts)
+        {
+            total += cnt;
+        }
+
+        double expected = total / N;
+
+        if (bcnts[0] > 1.5 * expected && scale[0] > 1e-10)
+        {
+            double expand = (scale[1] - scale[0]) * 0.5;
+            scale[0] -= expand;
+        }
+
+        if (bcnts[N - 1] > 1.5 * expected && scale[N] < 1e10)
+        {
+            double expand = (scale[N] - scale[N - 1]) * 0.5;
+            scale[N] += expand;
+        }
     }
 
   private:
+    const std::string name;
     const double ffactor;
-    const double min_val;
-    const double max_val;
-    std::array<double, N + 2> bcnts;
+    std::array<double, N> bcnts;
     std::array<double, N + 1> scale;
+    uint32_t count;
 };
 
 struct TimerCounter
