@@ -562,6 +562,12 @@ RetCode AudioCenter::connect(IToken itoken, OToken otoken, const std::string &ip
             AUDIO_ERROR_PRINT("Failed to add network destination %s for tokens %u -> %u: %s", ip.c_str(), itoken.tok,
                               otoken.tok, ret.what());
         }
+        else
+        {
+            AUDIO_INFO_PRINT("Successfully added network destination %s for tokens %u -> %u", ip.c_str(), itoken.tok,
+                             otoken.tok);
+        }
+
         return ret;
     }
 
@@ -578,6 +584,11 @@ RetCode AudioCenter::connect(IToken itoken, OToken otoken, const std::string &ip
     {
         AUDIO_ERROR_PRINT("Failed to connect stream %u -> %u: %s", itoken.tok, otoken.tok, ret.what());
     }
+    else
+    {
+        AUDIO_INFO_PRINT("Successfully connected stream %u -> %u", itoken.tok, otoken.tok);
+    }
+
     return ret;
 }
 
@@ -612,6 +623,12 @@ RetCode AudioCenter::disconnect(IToken itoken, OToken otoken, const std::string 
             AUDIO_ERROR_PRINT("Failed to remove network destination %s for tokens %u->%u: %s", ip.c_str(), itoken.tok,
                               otoken.tok, ret.what());
         }
+        else
+        {
+            AUDIO_INFO_PRINT("Successfully removed network destination %s for tokens %u->%u", ip.c_str(), itoken.tok,
+                             otoken.tok);
+        }
+
         return ret;
     }
 
@@ -628,6 +645,11 @@ RetCode AudioCenter::disconnect(IToken itoken, OToken otoken, const std::string 
     {
         AUDIO_ERROR_PRINT("Failed to disconnect stream %u -> %u: %s", itoken.tok, otoken.tok, ret.what());
     }
+    else
+    {
+        AUDIO_INFO_PRINT("Successfully disconnected stream %u -> %u", itoken.tok, otoken.tok);
+    }
+
     return ret;
 }
 

@@ -312,19 +312,12 @@ RetCode OAStream::mute(unsigned char itoken, const std::string &ip)
             {
                 session->enabled = false;
                 muted_count++;
+                AUDIO_INFO_PRINT("OAStream %u muted session: %u (IP: 0x%08X|0x%08X)", token, itoken,
+                                 session->uuid.sender_ip, session->uuid.gateway_ip);
             }
         }
 
-        if (muted_count > 0)
-        {
-            AUDIO_INFO_PRINT("Muted %d sessions with token %u", muted_count, itoken);
-            return RetCode::OK;
-        }
-        else
-        {
-            AUDIO_INFO_PRINT("No sessions found with token %u to mute", itoken);
-            return {RetCode::NOACTION, "Session not found"};
-        }
+        return muted_count > 0 ? RetCode::OK : RetCode(RetCode::NOACTION, "Session not found");
     }
     catch (const std::exception &e)
     {
@@ -352,19 +345,12 @@ RetCode OAStream::unmute(unsigned char itoken, const std::string &ip)
             {
                 session->enabled = true;
                 unmuted_count++;
+                AUDIO_INFO_PRINT("OAStream %u unmuted session: %u (IP: 0x%08X|0x%08X)", token, itoken,
+                                 session->uuid.sender_ip, session->uuid.gateway_ip);
             }
         }
 
-        if (unmuted_count > 0)
-        {
-            AUDIO_INFO_PRINT("Unmuted %d sessions with token %u (all IPs)", unmuted_count, itoken);
-            return RetCode::OK;
-        }
-        else
-        {
-            AUDIO_INFO_PRINT("No sessions found with token %u to unmute", itoken);
-            return {RetCode::NOACTION, "Session not found"};
-        }
+        return unmuted_count > 0 ? RetCode::OK : RetCode(RetCode::NOACTION, "Session not found");
     }
     catch (const std::exception &e)
     {
@@ -471,8 +457,8 @@ void OAStream::process_data()
             {
                 if (context->session.idle_count++ > SESSION_IDLE_TIMEOUT)
                 {
-                    AUDIO_INFO_PRINT("Removing empty session: %u (IP: 0x%08X|0x%08X)", context->uuid.sender_token,
-                                     context->uuid.sender_ip, context->uuid.gateway_ip);
+                    AUDIO_INFO_PRINT("OAStream %u Removing empty session: %u (IP: 0x%08X|0x%08X)", token,
+                                     context->uuid.sender_token, context->uuid.sender_ip, context->uuid.gateway_ip);
                     it = sessions.erase(it);
                     continue;
                 }
