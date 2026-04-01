@@ -55,6 +55,19 @@ typedef std::array<unsigned int, 2> AudioChannelMap;
 typedef void (*AudioInputCallBack)(const int16_t *data, unsigned int chan_num, unsigned int frame_num, void *user_ptr);
 
 /**
+ * @typedef StreamErrorCallback
+ * @brief Function prototype for stream fatal error callbacks
+ *
+ * This callback is invoked when a stream configured without auto-reset encounters
+ * a device read/write error other than OK or NOACTION and is stopped by the framework.
+ *
+ * @param token Stream token
+ * @param error_msg The terminal stream error message
+ * @param user_ptr User data pointer passed during callback registration
+ */
+typedef void (*StreamErrorCallback)(unsigned char token, std::string error_msg, void *user_ptr);
+
+/**
  * @enum UsrCallBackMode
  * @brief Callback modes for audio input processing
  * RAW: Raw data from real device
@@ -672,6 +685,17 @@ class AudioCenter
                               void *ptr);
 
     /**
+     * @brief Registers a global callback for fatal stream errors
+     *
+     * The callback is propagated to all existing streams during prepare(), and will
+     * also be synchronized immediately if this API is called after prepare().
+     *
+     * @param cb Callback function
+     * @param ptr User data pointer passed to the callback
+     */
+    void register_error_callback(StreamErrorCallback cb, void *ptr = nullptr);
+
+    /**
      * @brief Registers an adaptive filter for an input stream
      *
      * The LMS filter bank will be applied to the input stream to perform
@@ -829,8 +853,11 @@ class AudioCenter
     std::atomic<State> center_state;                            /**< Current state of the AudioCenter */
     std::map<unsigned char, std::shared_ptr<IAStream>> ias_map; /**< Map of input streams */
     std::map<unsigned char, std::shared_ptr<OAStream>> oas_map; /**< Map of output streams */
+    StreamErrorCallback stream_error_cb;
+    void *stream_error_cb_ptr;
 
     void setup_rpc_handlers();
+    void sync_error_callbacks();
 
     std::unique_ptr<INIReader> config;       /**< Configuration manager */
     std::shared_ptr<NetWorker> net_mgr;      /**< Network manager */

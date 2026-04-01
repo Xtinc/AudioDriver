@@ -91,13 +91,14 @@ class OAStream : public std::enable_shared_from_this<OAStream>
     RetCode unmute(unsigned char token, const std::string &ip = "");
     RetCode set_volume(unsigned int vol);
     AudioDeviceName name() const;
+    void set_error_callback(StreamErrorCallback cb, void *ptr);
 
     void register_listener(const std::shared_ptr<IAStream> &ias);
     void unregister_listener();
 
   private:
     void execute_loop(TimePointer tp, unsigned int cnt);
-    void process_data();
+    RetCode process_data();
     RetCode create_device(const AudioDeviceName &_name);
     void schedule_auto_reset();
     void reset_self();
@@ -131,6 +132,8 @@ class OAStream : public std::enable_shared_from_this<OAStream>
     std::mutex listener_mtx;
     istream_ptr listener;
     std::atomic_bool muted;
+    StreamErrorCallback error_cb;
+    void *error_cb_ptr;
 };
 
 class IAStream : public std::enable_shared_from_this<IAStream>
@@ -172,6 +175,7 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     RetCode set_volume(unsigned int vol);
     unsigned int get_volume() const;
     AudioDeviceName name() const;
+    void set_error_callback(StreamErrorCallback cb, void *ptr);
 
     void register_callback(AudioInputCallBack cb, unsigned int required_frames, UsrCallBackMode mode, void *ptr);
     void register_filter(filter_ptr &&lms_filter);
@@ -221,6 +225,8 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     UsrCallBack usr_cb;
     asio::steady_timer cb_timer;
     asio_strand cb_strand;
+    StreamErrorCallback error_cb;
+    void *error_cb_ptr;
 };
 
 class AudioPlayer : public std::enable_shared_from_this<AudioPlayer>

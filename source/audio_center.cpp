@@ -8,9 +8,15 @@
 #include <iomanip>
 #include <sstream>
 
+static void default_stream_error_callback(unsigned char token, std::string message, void *user_ptr)
+{
+    (void)user_ptr; // Unused in default callback
+    AUDIO_ERROR_PRINT("Stream error on token %u: %s", token, message.c_str());
+}
+
 // AudioCenter
 AudioCenter::AudioCenter(bool enable_network, const std::string &local_ip, unsigned short port)
-    : center_state(State::INIT)
+    : center_state(State::INIT), stream_error_cb(default_stream_error_callback), stream_error_cb_ptr(nullptr)
 {
     config = std::make_unique<INIReader>("audiocenter.ini");
     monitor = std::make_unique<AudioMonitor>(BG_SERVICE);
@@ -425,6 +431,7 @@ RetCode AudioCenter::prepare(bool enable_usb_detection)
 
     if (!enable_usb_detection)
     {
+        sync_error_callbacks();
         AUDIO_INFO_PRINT(
             "AudioCenter successfully prepared - transitioning from INIT to CONNECTING, disabling USB detection");
         return RetCode::OK;
@@ -458,6 +465,8 @@ RetCode AudioCenter::prepare(bool enable_usb_detection)
         ias_map[USR_DUMMY_IN.tok]->initialize_network(net_mgr, AudioCodecType::OPUS);
         oas_map[USR_DUMMY_OUT.tok]->initialize_network(net_mgr);
     }
+
+    sync_error_callbacks();
 
     monitor->RegisterCallback([this](AudioDeviceEvent event, const AudioDeviceInfo &info) {
         auto ias = ias_map.find(USR_DUMMY_IN.tok);
@@ -523,6 +532,37 @@ RetCode AudioCenter::prepare(bool enable_usb_detection)
     AUDIO_DEBUG_PRINT(
         "AudioCenter successfully prepared - transitioning from INIT to CONNECTING, enabling USB detection");
     return RetCode::OK;
+}
+
+void AudioCenter::register_error_callback(StreamErrorCallback cb, void *ptr)
+{
+    if (center_state.load() != State::INIT)
+    {
+        AUDIO_ERROR_PRINT("AudioCenter not in INIT state, cannot register error callback");
+        return;
+    }
+
+    stream_error_cb = cb;
+    stream_error_cb_ptr = ptr;
+}
+
+void AudioCenter::sync_error_callbacks()
+{
+    for (auto &entry : ias_map)
+    {
+        if (entry.second)
+        {
+            entry.second->set_error_callback(stream_error_cb, stream_error_cb_ptr);
+        }
+    }
+
+    for (auto &entry : oas_map)
+    {
+        if (entry.second)
+        {
+            entry.second->set_error_callback(stream_error_cb, stream_error_cb_ptr);
+        }
+    }
 }
 
 RetCode AudioCenter::connect(IToken itoken, OToken otoken, const std::string &ip, unsigned short port)

@@ -96,7 +96,7 @@ OAStream::OAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
       omap(_omap == AudioChannelMap{} ? (_ch == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP) : _omap), fs(_fs),
       ps(fs * ti / 1000), ch(_ch), usr_name(_name), oas_ready(false), exec_timer(BG_SERVICE),
       exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE), reset_strand(asio::make_strand(BG_SERVICE)),
-      volume(100), muted(false)
+      volume(100), muted(false), error_cb(nullptr), error_cb_ptr(nullptr)
 {
     DBG_ASSERT_LT(omap[0], ch);
     DBG_ASSERT_LT(omap[1], ch);
@@ -189,11 +189,6 @@ RetCode OAStream::stop()
     if (rst_order != ResetOrd::RESET_NONE)
     {
         reset_timer.cancel();
-    }
-
-    {
-        std::lock_guard<std::mutex> grd(session_mtx);
-        // sessions.clear();
     }
 
     return odevice->stop();
@@ -375,6 +370,12 @@ AudioDeviceName OAStream::name() const
     return usr_name;
 }
 
+void OAStream::set_error_callback(StreamErrorCallback cb, void *ptr)
+{
+    error_cb = cb;
+    error_cb_ptr = ptr;
+}
+
 void OAStream::register_listener(const std::shared_ptr<IAStream> &ias)
 {
     if (omap != ias->imap)
@@ -428,15 +429,37 @@ void OAStream::execute_loop(TimePointer tp, unsigned int cnt)
         }
 
         self->execute_loop(tp, cnt + 1);
-        self->process_data();
+        auto ret = self->process_data();
+        switch (ret.err)
+        {
+        case RetCode::OK:
+        case RetCode::NOACTION:
+            break;
+        case RetCode::ESTATE:
+            if (self->rst_order != ResetOrd::RESET_NONE)
+            {
+                AUDIO_INFO_PRINT("Device reset detected for OAStream token %u", self->token);
+                self->reset_self();
+                break;
+            }
+            // fall through
+        default:
+            AUDIO_ERROR_PRINT("OAStream token %u processing failed: %s", self->token, ret.what());
+            (void)self->stop();
+            if (self->error_cb)
+            {
+                self->error_cb(self->token, ret.what(), self->error_cb_ptr);
+            }
+            break;
+        }
     }));
 }
 
-void OAStream::process_data()
+RetCode OAStream::process_data()
 {
     if (!oas_ready)
     {
-        return;
+        return RetCode::NOACTION;
     }
 
     std::memset(databuf.get(), 0, ch * ps * sizeof(PCM_TYPE));
@@ -503,10 +526,9 @@ void OAStream::process_data()
     }
 
     auto ret = odevice->write(databuf.get(), ps * ch * sizeof(PCM_TYPE));
-    if (ret == RetCode::ESTATE && rst_order != ResetOrd::RESET_NONE)
+    if (ret != RetCode::OK && ret != RetCode::NOACTION)
     {
-        AUDIO_INFO_PRINT("Device reset detected for token %u", token);
-        reset_self();
+        return ret;
     }
 
     std::shared_ptr<IAStream> np;
@@ -519,6 +541,8 @@ void OAStream::process_data()
     {
         (void)np->direct_push(databuf.get(), ps * ch * sizeof(PCM_TYPE));
     }
+
+    return ret;
 }
 
 RetCode OAStream::create_device(const AudioDeviceName &_name)
@@ -637,7 +661,7 @@ IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
       exec_timer(BG_SERVICE), exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE),
       reset_strand(asio::make_strand(BG_SERVICE)), volume(100), muted(false),
       usr_cb{nullptr, 0, UsrCallBackMode::PROCESSED, nullptr}, cb_timer(BG_SERVICE),
-      cb_strand(asio::make_strand(BG_SERVICE))
+      cb_strand(asio::make_strand(BG_SERVICE)), error_cb(nullptr), error_cb_ptr(nullptr)
 {
     auto ret = create_device(_name);
     if (ret)
@@ -658,7 +682,7 @@ IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
       imap(_imap), priority(_priority), usr_name(_name), ias_ready(false), exec_timer(BG_SERVICE),
       exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE), reset_strand(asio::make_strand(BG_SERVICE)),
       volume(100), muted(false), usr_cb{nullptr, 0, UsrCallBackMode::PROCESSED, nullptr}, cb_timer(BG_SERVICE),
-      cb_strand(asio::make_strand(BG_SERVICE))
+      cb_strand(asio::make_strand(BG_SERVICE)), error_cb(nullptr), error_cb_ptr(nullptr)
 {
     DBG_ASSERT_GE(dev_ch, 2);
     DBG_ASSERT_LT(imap[0], dev_ch);
@@ -956,6 +980,12 @@ AudioDeviceName IAStream::name() const
     return usr_name;
 }
 
+void IAStream::set_error_callback(StreamErrorCallback cb, void *ptr)
+{
+    error_cb = cb;
+    error_cb_ptr = ptr;
+}
+
 void IAStream::register_callback(AudioInputCallBack cb, unsigned int required_frames, UsrCallBackMode mode, void *ptr)
 {
     usr_cb.cb = cb;
@@ -1003,9 +1033,28 @@ void IAStream::execute_loop(TimePointer tp, unsigned int cnt)
             return;
         }
         self->execute_loop(tp, cnt + 1);
-        if (self->process_data() == RetCode::INVSEEK)
+        auto ret = self->process_data();
+        switch (ret.err)
         {
-            self->ias_ready = false;
+        case RetCode::OK:
+        case RetCode::NOACTION:
+            break;
+        case RetCode::ESTATE:
+            if (self->rst_order != ResetOrd::RESET_NONE)
+            {
+                AUDIO_INFO_PRINT("Device reset detected for IAStream token %u", self->token);
+                self->reset_self();
+                break;
+            }
+            // fall through
+        default:
+            AUDIO_ERROR_PRINT("IAStream token %u processing failed: %s", self->token, ret.what());
+            (void)self->stop();
+            if (self->error_cb)
+            {
+                self->error_cb(self->token, ret.what(), self->error_cb_ptr);
+            }
+            break;
         }
     }));
 }
@@ -1014,18 +1063,11 @@ RetCode IAStream::process_data()
 {
     if (!ias_ready)
     {
-        return RetCode::FAILED;
+        return RetCode::NOACTION;
     }
 
     auto dev_fr = idevice->fs() * ti / 1000;
     auto ret = idevice->read(dev_buf.get(), dev_fr * idevice->ch() * sizeof(PCM_TYPE));
-
-    if (ret == RetCode::ESTATE && rst_order != ResetOrd::RESET_NONE)
-    {
-        AUDIO_INFO_PRINT("Device reset detected for token %u", token);
-        reset_self();
-        return RetCode::OK;
-    }
 
     if (ret != RetCode::OK && ret != RetCode::NOACTION)
     {
