@@ -95,8 +95,8 @@ OAStream::OAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
     : token(_token), ti(_ti), rst_order(reset_order),
       omap(_omap == AudioChannelMap{} ? (_ch == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP) : _omap), fs(_fs),
       ps(fs * ti / 1000), ch(_ch), usr_name(_name), oas_ready(false), exec_timer(BG_SERVICE),
-      exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE), reset_strand(asio::make_strand(BG_SERVICE)),
-      volume(100), muted(false), error_cb(nullptr), error_cb_ptr(nullptr)
+      exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE), volume(100), muted(false), error_cb(nullptr),
+      error_cb_ptr(nullptr)
 {
     DBG_ASSERT_LT(omap[0], ch);
     DBG_ASSERT_LT(omap[1], ch);
@@ -604,7 +604,7 @@ void OAStream::schedule_auto_reset()
     const auto reset_interval = std::chrono::minutes(rst_order == ResetOrd::RESET_HARD ? AUDIO_MAX_RESET_HARD_INTERVAL
                                                                                        : AUDIO_MAX_RESET_SOFT_INTERVAL);
     reset_timer.expires_from_now(reset_interval);
-    reset_timer.async_wait(asio::bind_executor(reset_strand, [self = shared_from_this()](const asio::error_code &ec) {
+    reset_timer.async_wait(asio::bind_executor(exec_strand, [self = shared_from_this()](const asio::error_code &ec) {
         if (ec)
         {
             AUDIO_DEBUG_PRINT("OAStream auto reset timer error: %s", ec.message().c_str());
@@ -633,7 +633,7 @@ void OAStream::schedule_auto_reset()
 
 void OAStream::reset_self()
 {
-    asio::post(reset_strand, [self = shared_from_this()]() {
+    asio::post(exec_strand, [self = shared_from_this()]() {
         (void)self->stop();
         self->odevice.reset();
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -658,9 +658,8 @@ IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
                    unsigned int _ch, ResetOrd reset_order, AudioPriority _priority)
     : token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(_ch), rst_order(reset_order), spf_ch(_ch),
       imap(_ch == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP), priority(_priority), usr_name(_name), ias_ready(false),
-      exec_timer(BG_SERVICE), exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE),
-      reset_strand(asio::make_strand(BG_SERVICE)), volume(100), muted(false),
-      usr_cb{nullptr, 0, UsrCallBackMode::PROCESSED, nullptr}, cb_timer(BG_SERVICE),
+      exec_timer(BG_SERVICE), exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE), volume(100),
+      muted(false), usr_cb{nullptr, 0, UsrCallBackMode::PROCESSED, nullptr}, cb_timer(BG_SERVICE),
       cb_strand(asio::make_strand(BG_SERVICE)), error_cb(nullptr), error_cb_ptr(nullptr)
 {
     auto ret = create_device(_name);
@@ -680,8 +679,8 @@ IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
                    unsigned int dev_ch, AudioChannelMap _imap, AudioPriority _priority)
     : token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(2), rst_order(ResetOrd::RESET_NONE), spf_ch(dev_ch),
       imap(_imap), priority(_priority), usr_name(_name), ias_ready(false), exec_timer(BG_SERVICE),
-      exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE), reset_strand(asio::make_strand(BG_SERVICE)),
-      volume(100), muted(false), usr_cb{nullptr, 0, UsrCallBackMode::PROCESSED, nullptr}, cb_timer(BG_SERVICE),
+      exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE), volume(100), muted(false),
+      usr_cb{nullptr, 0, UsrCallBackMode::PROCESSED, nullptr}, cb_timer(BG_SERVICE),
       cb_strand(asio::make_strand(BG_SERVICE)), error_cb(nullptr), error_cb_ptr(nullptr)
 {
     DBG_ASSERT_GE(dev_ch, 2);
@@ -1110,7 +1109,12 @@ RetCode IAStream::process_data()
         session->store(reinterpret_cast<const char *>(src), ps * ch * sizeof(PCM_TYPE));
     }
 
-    for (const auto &dest : dests)
+    destinations local_dests;
+    {
+        std::lock_guard<std::mutex> grd(dest_mtx);
+        local_dests = dests;
+    }
+    for (const auto &dest : local_dests)
     {
         if (auto np = dest.lock())
         {
@@ -1206,7 +1210,7 @@ void IAStream::schedule_auto_reset()
     const auto reset_interval = std::chrono::minutes(rst_order == ResetOrd::RESET_HARD ? AUDIO_MAX_RESET_HARD_INTERVAL
                                                                                        : AUDIO_MAX_RESET_SOFT_INTERVAL);
     reset_timer.expires_from_now(reset_interval);
-    reset_timer.async_wait(asio::bind_executor(reset_strand, [self = shared_from_this()](const asio::error_code &ec) {
+    reset_timer.async_wait(asio::bind_executor(exec_strand, [self = shared_from_this()](const asio::error_code &ec) {
         if (ec)
         {
             AUDIO_DEBUG_PRINT("Auto reset timer error: %s", ec.message().c_str());
@@ -1249,7 +1253,7 @@ void IAStream::schedule_callback()
             return;
         }
 
-        auto req_ch = self->usr_cb.mode == UsrCallBackMode::RAW ? self->idevice->ch() : self->ch;
+        auto req_ch = self->usr_cb.mode == UsrCallBackMode::RAW ? self->spf_ch : self->ch;
         if (self->session->load_aside(self->usr_cb.req_frs * req_ch * sizeof(PCM_TYPE)))
         {
             self->usr_cb.cb(reinterpret_cast<PCM_TYPE *>(self->session->data()), req_ch, self->usr_cb.req_frs,
@@ -1261,7 +1265,7 @@ void IAStream::schedule_callback()
 
 void IAStream::reset_self()
 {
-    asio::post(reset_strand, [self = shared_from_this()]() {
+    asio::post(exec_strand, [self = shared_from_this()]() {
         (void)self->stop();
         self->idevice.reset();
         std::this_thread::sleep_for(std::chrono::milliseconds(50));

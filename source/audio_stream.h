@@ -119,7 +119,6 @@ class OAStream : public std::enable_shared_from_this<OAStream>
     asio::steady_timer exec_timer;
     asio_strand exec_strand;
     asio::steady_timer reset_timer;
-    asio_strand reset_strand;
 
     obuffer_ptr mix_buf;
     obuffer_ptr databuf;
@@ -207,7 +206,6 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     asio::steady_timer exec_timer;
     asio_strand exec_strand;
     asio::steady_timer reset_timer;
-    asio_strand reset_strand;
 
     ibuffer_ptr usr_buf;
     ibuffer_ptr dev_buf;
