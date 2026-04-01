@@ -212,8 +212,19 @@ RetCode OAStream::restart(const AudioDeviceName &_name)
 
     if (np)
     {
-        np->reset2echo(_name, fs, ch);
-        np->start();
+        ret = np->reset2echo(_name, fs, ch);
+        if (!ret)
+        {
+            AUDIO_ERROR_PRINT("Failed to reset listener to echo: %s", ret.what());
+            return ret;
+        }
+
+        ret = np->start();
+        if (!ret)
+        {
+            AUDIO_ERROR_PRINT("Failed to start listener after reset: %s", ret.what());
+            return ret;
+        }
     }
     oas_ready = true;
     return start();
@@ -247,7 +258,15 @@ RetCode OAStream::direct_push(unsigned int chan, unsigned int frames, unsigned i
     }
 
     bool success = (*it)->session.store(reinterpret_cast<const char *>(data), frames * chan * sizeof(PCM_TYPE));
-    return success ? RetCode::OK : RetCode::NOACTION;
+    if (!success)
+    {
+        AUDIO_DEBUG_PRINT("OAStream %u session overflow: source=%u ip=0x%08X gw=0x%08X frames=%u ch=%u fs=%u prio=%u",
+                          token, source_id.sender_token, source_id.sender_ip, source_id.gateway_ip, frames, chan,
+                          sample_rate, enum2val(priority));
+        return RetCode::NOACTION;
+    }
+
+    return RetCode::OK;
 }
 
 void OAStream::pause()
@@ -438,13 +457,11 @@ void OAStream::execute_loop(TimePointer tp, unsigned int cnt)
         case RetCode::ESTATE:
             if (self->rst_order != ResetOrd::RESET_NONE)
             {
-                AUDIO_INFO_PRINT("Device reset detected for OAStream token %u", self->token);
                 self->reset_self();
                 break;
             }
             // fall through
         default:
-            AUDIO_ERROR_PRINT("OAStream token %u processing failed: %s", self->token, ret.what());
             (void)self->stop();
             if (self->error_cb)
             {
@@ -1041,13 +1058,11 @@ void IAStream::execute_loop(TimePointer tp, unsigned int cnt)
         case RetCode::ESTATE:
             if (self->rst_order != ResetOrd::RESET_NONE)
             {
-                AUDIO_INFO_PRINT("Device reset detected for IAStream token %u", self->token);
                 self->reset_self();
                 break;
             }
             // fall through
         default:
-            AUDIO_ERROR_PRINT("IAStream token %u processing failed: %s", self->token, ret.what());
             (void)self->stop();
             if (self->error_cb)
             {
@@ -1077,7 +1092,13 @@ RetCode IAStream::process_data()
     // raw data from device
     if (usr_cb.cb && usr_cb.mode == UsrCallBackMode::RAW)
     {
-        session->store(reinterpret_cast<const char *>(dev_buf.get()), dev_fr * idevice->ch() * sizeof(PCM_TYPE));
+        bool stored =
+            session->store(reinterpret_cast<const char *>(dev_buf.get()), dev_fr * idevice->ch() * sizeof(PCM_TYPE));
+        if (!stored)
+        {
+            AUDIO_DEBUG_PRINT("IAStream %u callback RAW session overflow: frames=%u ch=%u req_frames=%u", token, dev_fr,
+                              idevice->ch(), usr_cb.req_frs);
+        }
     }
 
     if (muted)
@@ -1106,7 +1127,12 @@ RetCode IAStream::process_data()
     // processed data from device
     if (usr_cb.cb && usr_cb.mode == UsrCallBackMode::PROCESSED)
     {
-        session->store(reinterpret_cast<const char *>(src), ps * ch * sizeof(PCM_TYPE));
+        bool stored = session->store(reinterpret_cast<const char *>(src), ps * ch * sizeof(PCM_TYPE));
+        if (!stored)
+        {
+            AUDIO_DEBUG_PRINT("IAStream %u callback PROCESSED session overflow: frames=%u ch=%u req_frames=%u", token,
+                              ps, ch, usr_cb.req_frs);
+        }
     }
 
     destinations local_dests;
@@ -1269,7 +1295,7 @@ void IAStream::reset_self()
         (void)self->stop();
         self->idevice.reset();
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        self->idevice = make_audio_driver(PHSY_IAS, self->usr_name, self->fs, self->ps, self->ch, self->rst_order);
+        self->idevice = make_audio_driver(PHSY_IAS, self->usr_name, self->fs, self->ps, self->spf_ch, self->rst_order);
         auto ret = self->idevice->open();
         if (!ret)
         {

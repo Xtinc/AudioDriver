@@ -386,7 +386,6 @@ RetCode NetWorker::register_receiver(uint8_t token, ReceiveCallback callback)
     else
     {
         receivers.emplace(token, std::move(callback));
-        // AUDIO_DEBUG_PRINT("Registered receiver for token %u", token);
         return {RetCode::OK, "Receiver registered"};
     }
 }
@@ -400,7 +399,6 @@ RetCode NetWorker::unregister_receiver(uint8_t token)
     }
 
     receivers.erase(it);
-    AUDIO_DEBUG_PRINT("Unregistered receiver for token %u", token);
     return {RetCode::OK, "Receiver unregistered"};
 }
 
@@ -438,14 +436,7 @@ RetCode NetWorker::unregister_sender(uint8_t sender_id)
 {
     std::lock_guard<std::mutex> lock(senders_mutex);
     auto removed = senders.erase(sender_id) > 0;
-
-    if (removed)
-    {
-        AUDIO_DEBUG_PRINT("Unregistered sender for token %u", sender_id);
-        return {RetCode::OK, "Sender unregistered"};
-    }
-
-    return {RetCode::NOACTION, "Sender not found"};
+    return removed ? RetCode{RetCode::OK, "Sender unregistered"} : RetCode{RetCode::NOACTION, "Sender not found"};
 }
 
 RetCode NetWorker::add_destination(uint8_t sender_id, uint8_t receiver_token, const std::string &ip, uint16_t port)
