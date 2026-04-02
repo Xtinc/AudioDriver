@@ -45,12 +45,9 @@ if(AUDIO_DRIVER_DEP_LIBS)
     set(OPUS_BUILD_SHARED_LIBRARY OFF CACHE BOOL "" FORCE)
     set(OPUS_BUILD_TESTING OFF CACHE BOOL "" FORCE)
     add_subdirectory(opus-1.5.2)
-
     aux_source_directory(source SOURCES)
-    aux_source_directory(source/bt BT_SOURCES)
-
     # Main library - include opus objects directly
-    add_library(bettyaudio ${SOURCES} ${BT_SOURCES} $<TARGET_OBJECTS:opus>)
+    add_library(bettyaudio ${SOURCES} $<TARGET_OBJECTS:opus>)
     target_include_directories(bettyaudio 
         PRIVATE source
         PUBLIC include
@@ -69,7 +66,6 @@ if(AUDIO_DRIVER_DEP_LIBS)
     set(GNU_CLANG_WARNING_FLAGS -Wall -Wextra -Wpedantic -Wshadow)
     
     target_compile_options(bettyaudio PRIVATE
-        $<$<CXX_COMPILER_ID:MSVC>:/W4>
         $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>>:${GNU_CLANG_WARNING_FLAGS}>
     )
 

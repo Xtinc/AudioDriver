@@ -15,9 +15,6 @@ target_link_libraries(test_locsampler bettyaudio)
 add_executable(test_lms_filter test_lms_filter.cpp)
 target_link_libraries(test_lms_filter bettyaudio)
 
-add_executable(bluetoothctl bluetooth_main.cpp)
-target_link_libraries(bluetoothctl bettyaudio)
-
 add_executable(test_magic_encoding test_magic_encoding.cpp)
 target_link_libraries(test_magic_encoding bettyaudio)
 

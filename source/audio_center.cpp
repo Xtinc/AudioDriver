@@ -618,7 +618,6 @@ RetCode AudioCenter::connect(IToken itoken, OToken otoken, const std::string &ip
         return {RetCode::EPARAM, "Invalid output token"};
     }
 
-    AUDIO_INFO_PRINT("Try to connect stream %u -> %u", itoken.tok, otoken.tok);
     auto ret = ias->second->connect(oas->second);
     if (!ret)
     {

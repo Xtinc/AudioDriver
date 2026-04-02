@@ -260,9 +260,9 @@ RetCode OAStream::direct_push(unsigned int chan, unsigned int frames, unsigned i
     bool success = (*it)->session.store(reinterpret_cast<const char *>(data), frames * chan * sizeof(PCM_TYPE));
     if (!success)
     {
-        AUDIO_DEBUG_PRINT("OAStream %u session overflow: source=%u ip=0x%08X gw=0x%08X frames=%u ch=%u fs=%u prio=%u",
-                          token, source_id.sender_token, source_id.sender_ip, source_id.gateway_ip, frames, chan,
-                          sample_rate, enum2val(priority));
+        AUDIO_DEBUG_PRINT("OAStream %u session overflow: %u (IP: 0x%08X|0x%08X) fr=%u ch=%u fs=%u prio=%u", token,
+                          source_id.sender_token, source_id.sender_ip, source_id.gateway_ip, frames, chan, sample_rate,
+                          enum2val(priority));
         return RetCode::NOACTION;
     }
 
