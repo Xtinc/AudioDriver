@@ -37,7 +37,6 @@
 
 constexpr unsigned char USER_MAX_AUDIO_TOKEN = 201;
 constexpr unsigned short NETWORK_AUDIO_TRANS_PORT = 52282;
-constexpr unsigned short NETWORK_AUDIO_SERVICE_PORT = 52280;
 
 typedef int16_t PCM_TYPE;
 typedef std::pair<std::string, unsigned int> AudioDeviceName;
@@ -512,8 +511,6 @@ class OAStream;
 class NetWorker;
 class AudioPlayer;
 class AudioMonitor;
-class RPCService;
-class RPCClient;
 
 /**
  * @class AudioCenter
@@ -676,7 +673,7 @@ class AudioCenter
      * @param required_frames Number of frames required for the callback
      * @param mode Callback mode:
      *             - RAW: Raw data from real device
-     *             - PROCESSED: Processed audio data from real device  
+     *             - PROCESSED: Processed audio data from real device
      *             - OBSERVER: Raw audio data from listener
      * @param ptr User data pointer to be passed to the callback function
      * @return RetCode indicating success or failure
@@ -825,19 +822,6 @@ class AudioCenter
      */
     RetCode set_player_volume(unsigned int vol);
 
-    /**
-     * @brief Enable remote procedure call service
-     * @param rpc_port Port for RPC service
-     * @return RetCode indicating success or failure
-     */
-    RetCode enable_rpc(unsigned short rpc_port = NETWORK_AUDIO_SERVICE_PORT);
-
-    /**
-     * @brief Disable remote procedure call service
-     * @return RetCode indicating success or failure
-     */
-    RetCode disable_rpc();
-
   private:
     /**
      * @enum State
@@ -856,15 +840,12 @@ class AudioCenter
     StreamErrorCallback stream_error_cb;
     void *stream_error_cb_ptr;
 
-    void setup_rpc_handlers();
-    void sync_error_callbacks();
-    void schedule_latency_query();
+    void schedule_latency_query(int interval_sec);
 
-    std::unique_ptr<INIReader> config;       /**< Configuration manager */
-    std::shared_ptr<NetWorker> net_mgr;      /**< Network manager */
-    std::unique_ptr<AudioMonitor> monitor;   /**< Audio device monitor */
-    std::shared_ptr<AudioPlayer> player;     /**< Audio player */
-    std::shared_ptr<RPCService> rpc_service; /**< RPC service */
+    std::unique_ptr<INIReader> config;     /**< Configuration manager */
+    std::shared_ptr<NetWorker> net_mgr;    /**< Network manager */
+    std::unique_ptr<AudioMonitor> monitor; /**< Audio device monitor */
+    std::shared_ptr<AudioPlayer> player;   /**< Audio player */
 };
 
 #endif

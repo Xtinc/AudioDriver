@@ -124,10 +124,6 @@ template <size_t N> class Histogram
         ema_update(val);
     }
 
-    // Returns the q-th quantile (q in [0,1]).
-    // During bootstrap: computed from sorted raw samples.
-    // After bootstrap:  linearly interpolated from the EMA histogram.
-    //                   Relies on the invariant sum(bcnts) == 1.0.
     double quantile(double q) const
     {
         if (q < 0.0 || q > 1.0)
@@ -138,7 +134,6 @@ template <size_t N> class Histogram
         //     AUDIO_DEBUG_PRINT("Bucket %zu: count=%.4f, scale=[%.2f, %.2f)", i, bcnts[i], scale[i], scale[i + 1]);
         // }
 
-        // Bootstrap phase: sort raw samples and interpolate.
         if (boot_n < BOOTSTRAP_MIN)
         {
             if (boot_n == 0)
@@ -154,7 +149,6 @@ template <size_t N> class Histogram
             return s[lo] + (pos - lo) * (s[hi] - s[lo]);
         }
 
-        // Steady state: sum(bcnts) == 1.0, so q is a direct cumulative target.
         double cum = 0.0;
         for (size_t i = 0; i < N; i++)
         {
@@ -172,8 +166,6 @@ template <size_t N> class Histogram
     }
 
   private:
-    // Accumulate raw samples; when BOOTSTRAP_MIN is reached, build the
-    // initial scale from [min, max] and frequency-normalize bcnts.
     void collect_boot(double val)
     {
         observed_min = (boot_n == 0) ? val : std::min(observed_min, val);
@@ -191,10 +183,6 @@ template <size_t N> class Histogram
             c /= static_cast<double>(boot_n); // normalize → sum == 1.0
     }
 
-    // EMA update. Invariant maintained:
-    //   before: sum(bcnts) == 1.0
-    //   decay:  sum → DECAY * 1.0
-    //   add:    sum → DECAY + (1 - DECAY) == 1.0  ✓
     void ema_update(double val)
     {
         if (val < scale[0])
@@ -210,7 +198,6 @@ template <size_t N> class Histogram
             equalize();
     }
 
-    // Return the bucket index for val within [scale[0], scale[N]].
     size_t bucket_of(double val) const
     {
         if (val <= scale[0])
@@ -227,17 +214,6 @@ template <size_t N> class Histogram
         return idx;
     }
 
-    // Histogram equalization in two steps:
-    //
-    //   1. Recompute interior boundaries at equal-weight quantile positions
-    //      (k/N for k=1..N-1). This moves scale to where mass actually is,
-    //      regardless of how concentrated the distribution is.
-    //
-    //   2. Redistribute bcnts proportionally by overlap area between old and
-    //      new buckets, preserving sum(bcnts) == 1.0.
-    //
-    // After equalization each bucket holds ~1/N weight and scale tracks the
-    // concentration of the distribution.
     void equalize()
     {
         // Step 1: compute new interior boundaries via a single O(N) pass.
@@ -262,13 +238,10 @@ template <size_t N> class Histogram
         while (qi < N)
             ns[qi++] = scale[N]; // tail guard for near-zero trailing buckets
 
-        // Step 2: by construction, each new bucket holds exactly 1/N of the
-        // total weight (that is how ns[] was computed in step 1).
         scale = ns;
         bcnts.fill(1.0 / N);
     }
 
-    // Build a uniform scale over [lo, hi] with N equal-width buckets.
     void build_scale(double lo, double hi)
     {
         if (hi - lo < 1e-10)
@@ -282,9 +255,9 @@ template <size_t N> class Histogram
             scale[i] = lo + i * step;
     }
 
-    std::array<double, N> bcnts;     // normalized weights, sum == 1.0 after bootstrap
-    std::array<double, N + 1> scale; // bucket boundaries; scale[0] and scale[N] auto-expand
-    uint64_t count;                  // total ema_update calls (used to trigger equalize)
+    std::array<double, N> bcnts;
+    std::array<double, N + 1> scale;
+    uint64_t count;
     std::array<double, BOOTSTRAP_MIN> boot_vals;
     size_t boot_n;
     double observed_min;

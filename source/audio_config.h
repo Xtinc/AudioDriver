@@ -1,47 +1,107 @@
 #ifndef AUDIO_CONFIG_H
 #define AUDIO_CONFIG_H
 
-#include <list>
 #include <map>
 #include <string>
-#include <mutex>
-
-struct DeviceConfig
-{
-    std::string input_device_id;
-    std::string input_device_name;
-    std::string output_device_id;
-    std::string output_device_name;
-    std::string enable_rpc;
-};
 
 class INIReader
 {
   public:
-    struct Section
+    struct Proxy
     {
-        std::string name;
-        std::map<std::string, std::string> values;
+        std::map<std::string, std::string> &data_;
+        const std::string key_;
+
+        Proxy &operator=(const std::string &v)
+        {
+            data_[key_] = v;
+            return *this;
+        }
+        Proxy &operator=(int v)
+        {
+            data_[key_] = std::to_string(v);
+            return *this;
+        }
+        Proxy &operator=(float v)
+        {
+            data_[key_] = std::to_string(v);
+            return *this;
+        }
+        Proxy &operator=(bool v)
+        {
+            data_[key_] = v ? "true" : "false";
+            return *this;
+        }
+
+        template <typename T> T cast(T default_val = T{}) const;
     };
 
     explicit INIReader(const std::string &filename);
     ~INIReader() = default;
 
-    bool SaveDeviceConfig(const DeviceConfig &config);
-    DeviceConfig LoadDeviceConfig();
+    Proxy operator[](const std::string &key)
+    {
+        return {data_, key};
+    }
+    bool save();
 
   private:
-    std::string get_string(const std::string &section, const std::string &key, const std::string &default_value = "");
-    void set_string(const std::string &section, const std::string &key, const std::string &value);
-    bool save();
     bool load();
     std::string trim(const std::string &str) const;
-    std::list<Section>::iterator find_section(const std::string &section_name);
 
-  private:
-    std::mutex mutex_;
     std::string filename_;
-    std::list<Section> sections_;
+    std::map<std::string, std::string> data_;
 };
+
+template <> inline std::string INIReader::Proxy::cast<std::string>(std::string dv) const
+{
+    auto it = data_.find(key_);
+    return it != data_.end() ? it->second : dv;
+}
+
+template <> inline int INIReader::Proxy::cast<int>(int dv) const
+{
+    auto it = data_.find(key_);
+    if (it == data_.end())
+    {
+        return dv;
+    }
+    try
+    {
+        return std::stoi(it->second);
+    }
+    catch (...)
+    {
+        return dv;
+    }
+}
+
+template <> inline float INIReader::Proxy::cast<float>(float dv) const
+{
+    auto it = data_.find(key_);
+    if (it == data_.end())
+    {
+        return dv;
+    }
+    try
+    {
+        return std::stof(it->second);
+    }
+    catch (...)
+    {
+        return dv;
+    }
+}
+
+template <> inline bool INIReader::Proxy::cast<bool>(bool dv) const
+{
+    auto it = data_.find(key_);
+    if (it == data_.end())
+    {
+        return dv;
+    }
+    const auto &v = it->second;
+    return v == "true" || v == "True";
+}
 
 #endif // AUDIO_CONFIG_H

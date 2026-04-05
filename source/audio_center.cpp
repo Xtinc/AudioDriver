@@ -2,8 +2,6 @@
 #include "audio_interface.h"
 #include "audio_monitor.h"
 #include "audio_network.h"
-#include "audio_remote_interface.h"
-#include "audio_rpc.h"
 #include "audio_stream.h"
 #include <iomanip>
 #include <sstream>
@@ -36,16 +34,6 @@ AudioCenter::~AudioCenter()
         if (!ret)
         {
             AUDIO_ERROR_PRINT("Failed to stop AudioCenter: %s", ret.what());
-        }
-    }
-
-    // Disable RPC service
-    if (rpc_service)
-    {
-        auto ret = disable_rpc();
-        if (!ret)
-        {
-            AUDIO_ERROR_PRINT("Failed to disable RPC: %s", ret.what());
         }
     }
 
@@ -422,16 +410,8 @@ RetCode AudioCenter::prepare(bool enable_usb_detection)
         return {RetCode::ESTATE, "AudioCenter not in INIT state"};
     }
 
-    auto cfg = config->LoadDeviceConfig();
-
-    if (cfg.enable_rpc == "true")
-    {
-        enable_rpc();
-    }
-
     if (!enable_usb_detection)
     {
-        sync_error_callbacks();
         AUDIO_INFO_PRINT(
             "AudioCenter successfully prepared - transitioning from INIT to CONNECTING, disabling USB detection");
         return RetCode::OK;
@@ -440,15 +420,17 @@ RetCode AudioCenter::prepare(bool enable_usb_detection)
     std::string default_usb_in = "null_iusb";
     std::string default_usb_out = "null_ousb";
 
-    if (monitor->DeviceExists(cfg.input_device_name))
+    auto idev_cfg_name = (*config)["HotPlug.InputDeviceName"].cast<std::string>("");
+    if (monitor->DeviceExists(idev_cfg_name))
     {
-        default_usb_in = cfg.input_device_name;
+        default_usb_in = idev_cfg_name;
         AUDIO_INFO_PRINT("Default input device found: %s", default_usb_in.c_str());
     }
 
-    if (monitor->DeviceExists(cfg.output_device_name))
+    auto odev_cfg_name = (*config)["HotPlug.OutputDeviceName"].cast<std::string>("");
+    if (monitor->DeviceExists(odev_cfg_name))
     {
-        default_usb_out = cfg.output_device_name;
+        default_usb_out = odev_cfg_name;
         AUDIO_INFO_PRINT("Default output device found: %s", default_usb_out.c_str());
     }
 
@@ -466,8 +448,6 @@ RetCode AudioCenter::prepare(bool enable_usb_detection)
         oas_map[USR_DUMMY_OUT.tok]->initialize_network(net_mgr);
     }
 
-    sync_error_callbacks();
-
     monitor->RegisterCallback([this](AudioDeviceEvent event, const AudioDeviceInfo &info) {
         auto ias = ias_map.find(USR_DUMMY_IN.tok);
         if (ias == ias_map.end())
@@ -483,8 +463,6 @@ RetCode AudioCenter::prepare(bool enable_usb_detection)
             return;
         }
 
-        DeviceConfig usr_cfg = config->LoadDeviceConfig();
-
         switch (event)
         {
         case AudioDeviceEvent::Added:
@@ -492,27 +470,25 @@ RetCode AudioCenter::prepare(bool enable_usb_detection)
             if (info.type == AudioDeviceType::Capture)
             {
                 ias->second->restart({info.id, 0});
-                usr_cfg.input_device_id = info.id;
-                usr_cfg.input_device_name = info.name + ",0";
-                config->SaveDeviceConfig(usr_cfg);
+                (*config)["HotPlug.InputDeviceID"] = info.id;
+                (*config)["HotPlug.InputDeviceName"] = info.name + ",0";
             }
             else if (info.type == AudioDeviceType::Playback)
             {
                 oas->second->restart({info.id, 0});
-                usr_cfg.output_device_id = info.id;
-                usr_cfg.output_device_name = info.name + ",0";
-                config->SaveDeviceConfig(usr_cfg);
+                (*config)["HotPlug.OutputDeviceID"] = info.id;
+                (*config)["HotPlug.OutputDeviceName"] = info.name + ",0";
             }
             else
             {
                 ias->second->restart({info.id, 0});
                 oas->second->restart({info.id, 0});
-                usr_cfg.input_device_id = info.id;
-                usr_cfg.input_device_name = info.name + ",0";
-                usr_cfg.output_device_id = info.id;
-                usr_cfg.output_device_name = info.name + ",0";
-                config->SaveDeviceConfig(usr_cfg);
+                (*config)["HotPlug.InputDeviceID"] = info.id;
+                (*config)["HotPlug.InputDeviceName"] = info.name + ",0";
+                (*config)["HotPlug.OutputDeviceID"] = info.id;
+                (*config)["HotPlug.OutputDeviceName"] = info.name + ",0";
             }
+            config->save();
             break;
         case AudioDeviceEvent::Removed:
             AUDIO_INFO_PRINT("Del device: %s", info.name.c_str());
@@ -544,25 +520,6 @@ void AudioCenter::register_error_callback(StreamErrorCallback cb, void *ptr)
 
     stream_error_cb = cb;
     stream_error_cb_ptr = ptr;
-}
-
-void AudioCenter::sync_error_callbacks()
-{
-    for (auto &entry : ias_map)
-    {
-        if (entry.second)
-        {
-            entry.second->set_error_callback(stream_error_cb, stream_error_cb_ptr);
-        }
-    }
-
-    for (auto &entry : oas_map)
-    {
-        if (entry.second)
-        {
-            entry.second->set_error_callback(stream_error_cb, stream_error_cb_ptr);
-        }
-    }
 }
 
 RetCode AudioCenter::connect(IToken itoken, OToken otoken, const std::string &ip, unsigned short port)
@@ -835,6 +792,7 @@ RetCode AudioCenter::start()
 
     for (const auto &pair : oas_map)
     {
+        pair.second->set_error_callback(stream_error_cb, stream_error_cb_ptr);
         auto ret = pair.second->start();
         if (!ret)
         {
@@ -844,6 +802,7 @@ RetCode AudioCenter::start()
 
     for (const auto &pair : ias_map)
     {
+        pair.second->set_error_callback(stream_error_cb, stream_error_cb_ptr);
         auto ret = pair.second->start();
         if (!ret)
         {
@@ -860,17 +819,24 @@ RetCode AudioCenter::start()
         }
     }
 
-    schedule_latency_query();
+    if ((*config)["Report.Latency"].cast<bool>(false))
+    {
+        auto interval = (*config)["Report.LatencyInterval"].cast<int>(60);
+        if (interval > 10)
+        {
+            schedule_latency_query(interval);
+        }
+    }
 
     AUDIO_DEBUG_PRINT("AudioCenter successfully started - transitioned to READY state");
     return RetCode::OK;
 }
 
-void AudioCenter::schedule_latency_query()
+void AudioCenter::schedule_latency_query(int interval_sec)
 {
     auto timer = std::make_shared<asio::steady_timer>(BG_SERVICE);
-    timer->expires_after(std::chrono::seconds(10));
-    timer->async_wait([this, timer](const asio::error_code &ec) {
+    timer->expires_after(std::chrono::seconds(interval_sec));
+    timer->async_wait([this, timer, interval_sec](const asio::error_code &ec) {
         if (ec || center_state.load() != State::READY)
         {
             return;
@@ -891,7 +857,7 @@ void AudioCenter::schedule_latency_query()
             }
         }
 
-        schedule_latency_query();
+        schedule_latency_query(interval_sec);
     });
 }
 
@@ -1175,194 +1141,4 @@ RetCode AudioCenter::set_player_volume(unsigned int vol)
     }
     AUDIO_INFO_PRINT("Player volume set to %u", vol);
     return ret;
-}
-
-RetCode AudioCenter::enable_rpc(unsigned short rpc_port)
-{
-    if (rpc_service)
-    {
-        return {RetCode::NOACTION, "RPC service already enabled"};
-    }
-
-    try
-    {
-        rpc_service = std::make_shared<RPCService>(BG_SERVICE, rpc_port);
-        setup_rpc_handlers();
-        return rpc_service->start();
-    }
-    catch (const std::exception &e)
-    {
-        AUDIO_ERROR_PRINT("Failed to enable RPC service: %s", e.what());
-        rpc_service.reset();
-        return {RetCode::EXCEPTION, "Failed to enable RPC service"};
-    }
-}
-
-RetCode AudioCenter::disable_rpc()
-{
-    if (!rpc_service)
-    {
-        return {RetCode::NOACTION, "RPC service not enabled"};
-    }
-
-    auto ret = rpc_service->stop();
-    rpc_service.reset();
-    return ret;
-}
-
-void AudioCenter::setup_rpc_handlers()
-{
-    if (!rpc_service)
-    {
-        AUDIO_ERROR_PRINT("RPC service not enabled");
-        return;
-    }
-
-    rpc_service->register_handler(RPCCommand::CONNECT, [this](const std::vector<uint8_t> &payload) -> RetCode {
-        if (payload.size() < 4)
-        {
-            return RetCode::EPARAM;
-        }
-
-        uint8_t itoken = payload[0];
-        uint8_t otoken = payload[1];
-        uint16_t port;
-        std::memcpy(&port, &payload[2], sizeof(uint16_t));
-
-        std::string ip(payload.begin() + 4, payload.end());
-        return connect(IToken(itoken), OToken(otoken), ip, port);
-    });
-
-    rpc_service->register_handler(RPCCommand::DISCONNECT, [this](const std::vector<uint8_t> &payload) -> RetCode {
-        if (payload.size() < 4)
-        {
-            return RetCode::EPARAM;
-        }
-
-        uint8_t itoken = payload[0];
-        uint8_t otoken = payload[1];
-        uint16_t port;
-        std::memcpy(&port, &payload[2], sizeof(uint16_t));
-
-        std::string ip(payload.begin() + 4, payload.end());
-        return disconnect(IToken(itoken), OToken(otoken), ip, port);
-    });
-
-    rpc_service->register_handler(RPCCommand::SET_VOLUME, [this](const std::vector<uint8_t> &payload) -> RetCode {
-        if (payload.size() < 5)
-        {
-            return RetCode::EPARAM;
-        }
-
-        uint8_t token = payload[0];
-        uint32_t volume;
-        std::memcpy(&volume, &payload[1], sizeof(uint32_t));
-        return set_volume(AudioToken(token), volume);
-    });
-
-    rpc_service->register_handler(RPCCommand::MUTE, [this](const std::vector<uint8_t> &payload) -> RetCode {
-        if (payload.size() < 3)
-        {
-            return RetCode::EPARAM;
-        }
-
-        uint8_t first_token = payload[0];
-        uint8_t second_token = payload[1];
-        uint8_t enable = payload[2];
-        std::string ip(payload.begin() + 3, payload.end());
-
-        if (second_token == 0xFF)
-        {
-            return mute(AudioToken(first_token), enable != 0);
-        }
-        else
-        {
-            return mute(IToken(first_token), OToken(second_token), enable != 0, ip);
-        }
-    });
-
-    rpc_service->register_handler(RPCCommand::PLAY, [this](const std::vector<uint8_t> &payload) -> RetCode {
-        if (payload.size() < 5)
-        {
-            return RetCode::EPARAM;
-        }
-
-        uint8_t otoken = payload[0];
-        int32_t cycles;
-        std::memcpy(&cycles, &payload[1], sizeof(int32_t));
-        std::string name(payload.begin() + 5, payload.end());
-
-        return play(name, cycles, OToken(otoken));
-    });
-
-    rpc_service->register_handler(RPCCommand::STOP_PLAY, [this](const std::vector<uint8_t> &payload) -> RetCode {
-        if (payload.empty())
-        {
-            return RetCode::EPARAM;
-        }
-
-        std::string path(payload.begin(), payload.end());
-        return stop(path);
-    });
-
-    rpc_service->register_handler(RPCCommand::SET_PLAYER_VOLUME,
-                                  [this](const std::vector<uint8_t> &payload) -> RetCode {
-                                      if (payload.size() < sizeof(uint32_t))
-                                      {
-                                          return RetCode::EPARAM;
-                                      }
-
-                                      uint32_t volume;
-                                      std::memcpy(&volume, payload.data(), sizeof(uint32_t));
-                                      return set_player_volume(volume);
-                                  });
-
-    AUDIO_INFO_PRINT("RPC handlers registered");
-}
-
-AudioRemoteClient::AudioRemoteClient(const std::string &server_ip, unsigned short server_port)
-    : rpc_client(std::make_unique<RPCClient>(BG_SERVICE, server_ip, server_port))
-{
-}
-
-AudioRemoteClient::~AudioRemoteClient() = default;
-
-RetCode AudioRemoteClient::connect_stream(IToken itoken, OToken otoken, const std::string &ip, unsigned short port)
-{
-    return rpc_client->connect_stream(itoken, otoken, ip, port);
-}
-
-RetCode AudioRemoteClient::disconnect_stream(IToken itoken, OToken otoken, const std::string &ip, unsigned short port)
-{
-    return rpc_client->disconnect_stream(itoken, otoken, ip, port);
-}
-
-RetCode AudioRemoteClient::set_volume(AudioToken token, unsigned int volume)
-{
-    return rpc_client->set_volume(token, volume);
-}
-
-RetCode AudioRemoteClient::mute(AudioToken token, bool enable)
-{
-    return rpc_client->mute(token, enable);
-}
-
-RetCode AudioRemoteClient::mute(IToken itoken, OToken otoken, bool enable, const std::string &ip)
-{
-    return rpc_client->mute(itoken, otoken, enable, ip);
-}
-
-RetCode AudioRemoteClient::play(const std::string &name, int cycles, OToken otoken, AudioPriority priority)
-{
-    return rpc_client->play(name, cycles, otoken, priority);
-}
-
-RetCode AudioRemoteClient::stop_play(const std::string &path)
-{
-    return rpc_client->stop_play(path);
-}
-
-RetCode AudioRemoteClient::set_player_volume(unsigned int volume)
-{
-    return rpc_client->set_player_volume(volume);
 }

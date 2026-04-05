@@ -45,7 +45,7 @@ if(AUDIO_DRIVER_DEP_LIBS)
     set(OPUS_BUILD_SHARED_LIBRARY OFF CACHE BOOL "" FORCE)
     set(OPUS_BUILD_TESTING OFF CACHE BOOL "" FORCE)
     add_subdirectory(opus-1.5.2)
-    aux_source_directory(source SOURCES)
+    file(GLOB SOURCES CONFIGURE_DEPENDS source/*.cpp)
     # Main library - include opus objects directly
     add_library(bettyaudio ${SOURCES} $<TARGET_OBJECTS:opus>)
     target_include_directories(bettyaudio 
