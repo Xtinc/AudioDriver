@@ -190,7 +190,10 @@ RetCode AlsaDriver::open()
     AUDIO_INFO_PRINT("ALSA device [%s] opened. fs = %u, ps = %u, chan = %u, min_chan = %u, max_chan = %u",
                      hw_name.c_str(), dev_fs, dev_ps, dev_ch, min_ch, max_ch);
 
-    timer_cnt = std::make_unique<TimerCounter>(hw_name, dev_ti);
+    if (rst_order == ResetOrd::RESET_HARD)
+    {
+        timer_cnt = std::make_unique<TimerCounter>(hw_name, dev_ti);
+    }
     return RetCode::OK;
 }
 
@@ -383,7 +386,7 @@ void AlsaDriver::write_loop()
             cptr -= result;
         }
 
-        if ((*timer_cnt)() && rst_order == ResetOrd::RESET_HARD)
+        if (rst_order == ResetOrd::RESET_HARD && timer_cnt && (*timer_cnt)())
         {
             AUDIO_DEBUG_PRINT("Alsa device [%s] write loop timeout", hw_name.c_str());
             ok = false;
@@ -431,7 +434,7 @@ void AlsaDriver::read_loop()
             AUDIO_DEBUG_PRINT("ALSA device [%s] buffer overflow", hw_name.c_str());
         }
 
-        if ((*timer_cnt)() && rst_order == ResetOrd::RESET_HARD)
+        if (rst_order == ResetOrd::RESET_HARD && timer_cnt && (*timer_cnt)())
         {
             AUDIO_DEBUG_PRINT("ALSA device [%s] read loop timeout", hw_name.c_str());
             ok = false;
@@ -719,7 +722,10 @@ RetCode WasapiDriver::open()
     io_buffer = std::make_unique<KFifo>(dev_ps * sizeof(PCM_TYPE), 4, dev_ch);
     AUDIO_INFO_PRINT("WASAPI %s device [%s] opened. fs = %u, ps = %u, chan = %u, min_chan = %u, max_chan = %u",
                      capture ? "capture" : "playback", hw_name.c_str(), dev_fs, dev_ps, dev_ch, min_ch, max_ch);
-    timer_cnt = std::make_unique<TimerCounter>(hw_name, 0xffff);
+    if (rst_order == ResetOrd::RESET_HARD)
+    {
+        timer_cnt = std::make_unique<TimerCounter>(hw_name, 0xffff);
+    }
 
 SAFE_EXIT:
     SafeRelease(&enumerator);
@@ -879,7 +885,7 @@ void WasapiDriver::write_loop()
             break;
         }
 
-        if ((*timer_cnt)() && rst_order == ResetOrd::RESET_HARD)
+        if (rst_order == ResetOrd::RESET_HARD && timer_cnt && (*timer_cnt)())
         {
             AUDIO_DEBUG_PRINT("WASAPI device [%s] write loop timeout", hw_name.c_str());
             ok = false;
@@ -970,7 +976,7 @@ void WasapiDriver::read_loop()
             }
         } while (packet_sz > 0);
 
-        if ((*timer_cnt)() && rst_order == ResetOrd::RESET_HARD)
+        if (rst_order == ResetOrd::RESET_HARD && timer_cnt && (*timer_cnt)())
         {
             AUDIO_DEBUG_PRINT("WASAPI device [%s] read loop timeout", hw_name.c_str());
             ok = false;

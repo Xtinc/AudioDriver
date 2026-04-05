@@ -31,8 +31,7 @@ struct TimerCounter
 {
     TimerCounter(const std::string &_name, unsigned int _threshold)
         : counter(0), avg_interval(0), name(_name), threshold(1000 * _threshold),
-          last_print_time(std::chrono::steady_clock::now()), last_cycle_time(std::chrono::steady_clock::now()),
-          sample_count(0)
+          last_cycle_time(std::chrono::steady_clock::now()), sample_count(0)
     {
     }
 
@@ -43,15 +42,6 @@ struct TimerCounter
         last_cycle_time = now;
 
         updateAverage(static_cast<unsigned int>(diff));
-
-        // Print the average interval every minute if the counter exceeds 50 per minute
-        if (now - last_print_time > std::chrono::minutes(1) && counter > 50)
-        {
-            AUDIO_ERROR_PRINT("%s time out %u in last 1 minutes. avg interval: %uus", name.c_str(), counter,
-                              avg_interval);
-            last_print_time = now;
-            counter = 0;
-        }
 
         if (sample_count < 100)
         {
@@ -92,7 +82,6 @@ struct TimerCounter
     unsigned int avg_interval;
     const std::string &name;
     unsigned int threshold;
-    std::chrono::steady_clock::time_point last_print_time;
     std::chrono::steady_clock::time_point last_cycle_time;
     unsigned int sample_count;
 };
