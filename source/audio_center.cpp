@@ -860,8 +860,39 @@ RetCode AudioCenter::start()
         }
     }
 
+    schedule_latency_query();
+
     AUDIO_DEBUG_PRINT("AudioCenter successfully started - transitioned to READY state");
     return RetCode::OK;
+}
+
+void AudioCenter::schedule_latency_query()
+{
+    auto timer = std::make_shared<asio::steady_timer>(BG_SERVICE);
+    timer->expires_after(std::chrono::seconds(10));
+    timer->async_wait([this, timer](const asio::error_code &ec) {
+        if (ec || center_state.load() != State::READY)
+        {
+            return;
+        }
+
+        for (auto &entry : ias_map)
+        {
+            if (entry.second)
+            {
+                entry.second->query_latency();
+            }
+        }
+        for (auto &entry : oas_map)
+        {
+            if (entry.second)
+            {
+                entry.second->query_latency();
+            }
+        }
+
+        schedule_latency_query();
+    });
 }
 
 RetCode AudioCenter::stop()

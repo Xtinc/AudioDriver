@@ -92,6 +92,7 @@ class OAStream : public std::enable_shared_from_this<OAStream>
     RetCode set_volume(unsigned int vol);
     AudioDeviceName name() const;
     void set_error_callback(StreamErrorCallback cb, void *ptr);
+    void query_latency() const;
 
     void register_listener(const std::shared_ptr<IAStream> &ias);
     void unregister_listener();
@@ -175,6 +176,7 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     unsigned int get_volume() const;
     AudioDeviceName name() const;
     void set_error_callback(StreamErrorCallback cb, void *ptr);
+    void query_latency() const;
 
     void register_callback(AudioInputCallBack cb, unsigned int required_frames, UsrCallBackMode mode, void *ptr);
     void register_filter(filter_ptr &&lms_filter);

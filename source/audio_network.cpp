@@ -20,6 +20,16 @@ KFifo::~KFifo()
     delete[] memory_addr;
 }
 
+double KFifo::write_water_level(double quantile) const
+{
+    return whist.quantile(quantile);
+}
+
+double KFifo::read_water_level(double quantile) const
+{
+    return rhist.quantile(quantile);
+}
+
 bool KFifo::store(const char *input_addr, size_t write_length)
 {
     if (!input_addr || write_length == 0)
@@ -28,6 +38,7 @@ bool KFifo::store(const char *input_addr, size_t write_length)
     }
 
     std::lock_guard<std::mutex> lck(io_mtx);
+    whist.add(static_cast<double>(length));
     size_t space = available_space();
     size_t actual_write = std::min(write_length, space);
 
@@ -61,6 +72,7 @@ bool KFifo::load(char *output_addr, size_t read_length)
         return false;
     }
 
+    rhist.add(static_cast<double>(length));
     auto actual_read = std::min<size_t>(read_length, length);
     if (actual_read == 0)
     {
@@ -97,6 +109,7 @@ bool KFifo::load_aside(size_t read_length)
     }
 
     std::lock_guard<std::mutex> lck(io_mtx);
+    rhist.add(static_cast<double>(length));
     if (read_length > length)
     {
         return false;

@@ -44,6 +44,8 @@ class AlsaDriver final : public AudioDevice
     RetCode stop() override;
     RetCode write(const char *data, size_t len) override;
     RetCode read(char *data, size_t len) override;
+    double wlatency() const override;
+    double rlatency() const override;
 
   private:
     int xrun_recovery(int err);
@@ -299,6 +301,16 @@ RetCode AlsaDriver::read(char *data, size_t len)
         return {RetCode::NOACTION, "Buffer empty"};
     }
     return RetCode::OK;
+}
+
+double AlsaDriver::wlatency() const
+{
+    return io_buffer->write_water_level() * 1000.0 / (dev_fs * dev_ch * sizeof(PCM_TYPE));
+}
+
+double AlsaDriver::rlatency() const
+{
+    return io_buffer->read_water_level() * 1000.0 / (dev_fs * dev_ch * sizeof(PCM_TYPE));
 }
 
 int AlsaDriver::xrun_recovery(int err)
@@ -586,6 +598,8 @@ class WasapiDriver final : public AudioDevice
     RetCode stop() override;
     RetCode write(const char *data, size_t len) override;
     RetCode read(char *data, size_t len) override;
+    double wlatency() const override;
+    double rlatency() const override;
 
   private:
     void write_loop();
@@ -801,6 +815,16 @@ RetCode WasapiDriver::read(char *data, size_t len)
     return {RetCode::OK, "Success"};
 }
 
+double WasapiDriver::wlatency() const
+{
+    return io_buffer->write_water_level() * 1000.0 / (dev_fs * dev_ch * sizeof(PCM_TYPE));
+}
+
+double WasapiDriver::rlatency() const
+{
+    return io_buffer->read_water_level() * 1000.0 / (dev_fs * dev_ch * sizeof(PCM_TYPE));
+}
+
 void WasapiDriver::write_loop()
 {
     bool ok = true;
@@ -997,6 +1021,8 @@ class WaveDevice final : public AudioDevice
     RetCode stop() override;
     RetCode write(const char *data, size_t len) override;
     RetCode read(char *data, size_t len) override;
+    double wlatency() const override;
+    double rlatency() const override;
 
   private:
     std::string generate_next_filename();
@@ -1201,6 +1227,16 @@ RetCode WaveDevice::read(char *data, size_t len)
     return ret;
 }
 
+double WaveDevice::wlatency() const
+{
+    return 0.0;
+}
+
+double WaveDevice::rlatency() const
+{
+    return 0.0;
+}
+
 // Echo device
 class SimuDevice final : public AudioDevice
 {
@@ -1213,6 +1249,8 @@ class SimuDevice final : public AudioDevice
     RetCode stop() override;
     RetCode write(const char *data, size_t len) override;
     RetCode read(char *data, size_t len) override;
+    double wlatency() const override;
+    double rlatency() const override;
 };
 
 SimuDevice::SimuDevice(const std::string &name, bool capture, unsigned int fs, unsigned int ps, unsigned int ch)
@@ -1278,6 +1316,16 @@ RetCode SimuDevice::read(char *data, size_t len)
     return io_buffer->load(data, len) ? RetCode::OK : RetCode::NOACTION;
 }
 
+double SimuDevice::wlatency() const
+{
+    return io_buffer->write_water_level() * 1000.0 / (dev_fs * dev_ch * sizeof(PCM_TYPE));
+}
+
+double SimuDevice::rlatency() const
+{
+    return io_buffer->read_water_level() * 1000.0 / (dev_fs * dev_ch * sizeof(PCM_TYPE));
+}
+
 // Null device
 class NullDevice final : public AudioDevice
 {
@@ -1290,6 +1338,8 @@ class NullDevice final : public AudioDevice
     RetCode stop() override;
     RetCode write(const char *data, size_t len) override;
     RetCode read(char *data, size_t len) override;
+    double wlatency() const override;
+    double rlatency() const override;
 };
 
 NullDevice::NullDevice(const std::string &name, bool capture, unsigned int fs, unsigned int ps, unsigned int ch)
@@ -1352,6 +1402,16 @@ RetCode NullDevice::read(char * /*data*/, size_t /*len*/)
     }
 
     return {RetCode::OK, "Success"};
+}
+
+double NullDevice::wlatency() const
+{
+    return 0.0;
+}
+
+double NullDevice::rlatency() const
+{
+    return 0.0;
 }
 
 std::unique_ptr<AudioDevice> make_audio_driver(int type, const AudioDeviceName &name, unsigned int fs, unsigned int ps,

@@ -395,6 +395,21 @@ void OAStream::set_error_callback(StreamErrorCallback cb, void *ptr)
     error_cb_ptr = ptr;
 }
 
+void OAStream::query_latency() const
+{
+    asio::post(exec_strand, [self = shared_from_this()]() {
+        if (!self->oas_ready)
+        {
+            AUDIO_ERROR_PRINT("Device not ready for latency query");
+            return;
+        }
+
+        double write_latency_ms = self->odevice->wlatency();
+        double read_latency_ms = self->odevice->rlatency();
+        AUDIO_INFO_PRINT("OAStream %u latency[w=%.2fms,r=%.2fms]", self->token, write_latency_ms, read_latency_ms);
+    });
+}
+
 void OAStream::register_listener(const std::shared_ptr<IAStream> &ias)
 {
     if (omap != ias->imap)
@@ -1002,6 +1017,19 @@ void IAStream::set_error_callback(StreamErrorCallback cb, void *ptr)
     error_cb_ptr = ptr;
 }
 
+void IAStream::query_latency() const
+{
+    asio::post(exec_strand, [self = shared_from_this()]() {
+        if (!self->ias_ready)
+        {
+            return;
+        }
+        double write_latency_ms = self->idevice->wlatency();
+        double read_latency_ms = self->idevice->rlatency();
+        AUDIO_INFO_PRINT("IAStream %u latency[w=%.2fms,r=%.2fms]", self->token, write_latency_ms, read_latency_ms);
+    });
+}
+
 void IAStream::register_callback(AudioInputCallBack cb, unsigned int required_frames, UsrCallBackMode mode, void *ptr)
 {
     usr_cb.cb = cb;
@@ -1063,6 +1091,7 @@ void IAStream::execute_loop(TimePointer tp, unsigned int cnt)
             }
             // fall through
         default:
+            // ias_ready changed to false
             (void)self->stop();
             if (self->error_cb)
             {

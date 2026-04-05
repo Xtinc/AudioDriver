@@ -1,12 +1,13 @@
 #include "audio_driver.h"
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <random>
+#include <stdexcept>
 #include <vector>
-#include <chrono>
 
-// Test reporting function
 void test_check(bool condition, const std::string &test_name)
 {
     if (!condition)
@@ -14,261 +15,216 @@ void test_check(bool condition, const std::string &test_name)
         std::cout << "FAILED: " << test_name << std::endl;
         assert(false);
     }
-    else
+    std::cout << "PASSED: " << test_name << std::endl;
+}
+
+double exact_quantile(std::vector<double> values, double x)
+{
+    if (values.empty())
     {
-        std::cout << "PASSED: " << test_name << std::endl;
+        throw std::runtime_error("exact_quantile requires non-empty input");
+    }
+    std::sort(values.begin(), values.end());
+    if (values.size() == 1)
+    {
+        return values[0];
+    }
+
+    const double rank = x * static_cast<double>(values.size() - 1);
+    const size_t low = static_cast<size_t>(rank);
+    const size_t high = (low + 1 < values.size()) ? low + 1 : low;
+    const double frac = rank - static_cast<double>(low);
+    return values[low] * (1.0 - frac) + values[high] * frac;
+}
+
+void expect_near(double actual, double expected, double tol, const std::string &name)
+{
+    if (std::fabs(actual - expected) > tol)
+    {
+        std::cout << "FAILED: " << name << " actual=" << actual << " expected=" << expected << " tol=" << tol
+                  << std::endl;
+        assert(false);
+    }
+    std::cout << "PASSED: " << name << std::endl;
+}
+
+void test_quantile_invalid_argument()
+{
+    Histogram<16> hist;
+
+    bool threw_neg = false;
+    try
+    {
+        (void)hist.quantile(-1e-6);
+    }
+    catch (const std::invalid_argument &)
+    {
+        threw_neg = true;
+    }
+
+    bool threw_gt1 = false;
+    try
+    {
+        (void)hist.quantile(1.000001);
+    }
+    catch (const std::invalid_argument &)
+    {
+        threw_gt1 = true;
+    }
+
+    test_check(threw_neg && threw_gt1, "quantile_invalid_argument_range");
+}
+
+void test_quantile_bootstrap_exactness()
+{
+    Histogram<10> hist; // BOOTSTRAP_TARGET = 32
+    std::vector<double> samples;
+    samples.reserve(20);
+
+    for (size_t i = 0; i < 20; ++i)
+    {
+        double v = 0.2 + 0.01 * static_cast<double>(i % 7) + 0.0007 * static_cast<double>(i);
+        samples.push_back(v);
+        hist.add(v);
+    }
+
+    const std::array<double, 5> qs = {0.0, 0.1, 0.5, 0.9, 1.0};
+    for (double q : qs)
+    {
+        const double expected = exact_quantile(samples, q);
+        const double actual = hist.quantile(q);
+        expect_near(actual, expected, 1e-12, "bootstrap_exactness_q=" + std::to_string(q));
     }
 }
 
-// Test basic construction and initialization
-void test_basic_construction()
+void test_quantile_transition_continuity()
 {
-    Histogram<10> hist("test_histogram");
-    
-    // 验证初始状态 - print方法应该能正常工作
-    std::string output = hist.print();
-    test_check(!output.empty(), "basic_construction - print should not be empty");
-    
-    std::cout << "初始直方图:\n" << output << std::endl;
-}
+    Histogram<10> hist; // BOOTSTRAP_TARGET = 32
+    std::vector<double> samples;
+    samples.reserve(64);
 
-// Test single value addition
-void test_single_value_add()
-{
-    Histogram<5> hist("single_value");
-    
-    // 添加范围内的值
-    hist.add(0.5);
-    std::string output1 = hist.print();
-    test_check(!output1.empty(), "single_value_add - after adding 0.5");
-    
-    // 添加边界值
-    hist.add(0.0);
-    hist.add(1.0);
-    std::string output2 = hist.print();
-    test_check(!output2.empty(), "single_value_add - after adding boundary values");
-    
-    std::cout << "添加边界值后:\n" << output2 << std::endl;
-}
-
-// Test out-of-range values
-void test_out_of_range_values()
-{
-    Histogram<5> hist("out_of_range");
-    
-    // 添加超出初始范围的值
-    hist.add(-1.0);  // 小于最小值
-    hist.add(2.0);   // 大于最大值
-    
-    std::string output = hist.print();
-    test_check(!output.empty(), "out_of_range_values - should handle values outside initial range");
-    
-    std::cout << "超出范围值测试:\n" << output << std::endl;
-}
-
-// Test normal distribution
-void test_normal_distribution()
-{
-    Histogram<20> hist("normal_distribution");
-    
-    // 生成正态分布数据
-    std::default_random_engine generator(12345); // 固定种子
-    std::normal_distribution<double> normal_dist(0.5, 0.1);
-    
-    for (int i = 0; i < 1000; ++i)
+    for (size_t i = 0; i < 31; ++i)
     {
-        double value = normal_dist(generator);
-        hist.add(value);
+        const double v = -0.4 + 0.03 * static_cast<double>(i % 11) + 0.0005 * static_cast<double>(i);
+        samples.push_back(v);
+        hist.add(v);
     }
-    
-    std::string output = hist.print();
-    test_check(!output.empty(), "normal_distribution - should handle 1000 samples");
-    
-    std::cout << "正态分布测试 (均值=0.5, 标准差=0.1):\n" << output << std::endl;
+
+    const double before = hist.quantile(0.5);
+
+    const double bridge = 0.1234;
+    samples.push_back(bridge);
+    hist.add(bridge); // Transition happens here.
+
+    const double after = hist.quantile(0.5);
+    const double exact = exact_quantile(samples, 0.5);
+
+    // Transition to bucket mode should not produce a large jump.
+    test_check(std::fabs(after - before) < 0.15, "transition_continuity_jump_bound");
+    // After transition, estimate should still stay near exact sample median.
+    expect_near(after, exact, 0.10, "transition_continuity_median_accuracy");
 }
 
-// Test uniform distribution
-void test_uniform_distribution()
+void test_quantile_monotonicity_and_bounds()
 {
-    Histogram<15> hist("uniform_distribution");
-    
-    // 生成均匀分布数据
-    std::default_random_engine generator(54321); // 固定种子
-    std::uniform_real_distribution<double> uniform_dist(0.0, 1.0);
-    
-    for (int i = 0; i < 1000; ++i)
+    Histogram<32> hist;
+    std::mt19937 rng(123456);
+    std::uniform_real_distribution<double> dist(-2.5, 3.0);
+
+    double min_v = std::numeric_limits<double>::infinity();
+    double max_v = -std::numeric_limits<double>::infinity();
+    for (size_t i = 0; i < 12000; ++i)
     {
-        double value = uniform_dist(generator);
-        hist.add(value);
+        const double v = dist(rng);
+        min_v = std::min(min_v, v);
+        max_v = std::max(max_v, v);
+        hist.add(v);
     }
-    
-    std::string output = hist.print();
-    test_check(!output.empty(), "uniform_distribution - should handle uniform data");
-    
-    std::cout << "均匀分布测试:\n" << output << std::endl;
-}
 
-// Test extreme values
-void test_extreme_values()
-{
-    Histogram<10> hist("extreme_values");
-    
-    // 添加极端值
-    hist.add(-1000.0);
-    hist.add(1000.0);
-    hist.add(0.0);
-    hist.add(0.5);
-    
-    std::string output = hist.print();
-    test_check(!output.empty(), "extreme_values - should handle very large/small values");
-    
-    std::cout << "极值测试:\n" << output << std::endl;
-}
+    double prev = hist.quantile(0.0);
+    test_check(prev >= min_v - 1e-9 && prev <= max_v + 1e-9, "bounds_q0_in_sample_range");
 
-// Test adaptive adjustment
-void test_adaptive_adjustment()
-{
-    Histogram<8> hist("adaptive");
-    
-    // 先添加一些集中在某个范围的值
-    for (int i = 0; i < 50; ++i)
+    for (size_t i = 1; i <= 100; ++i)
     {
-        hist.add(0.4 + (i % 10) * 0.01);  // 0.4 到 0.49
+        const double q = static_cast<double>(i) / 100.0;
+        const double cur = hist.quantile(q);
+        test_check(cur + 1e-10 >= prev, "quantile_monotonic_step_" + std::to_string(i));
+        test_check(cur >= min_v - 1e-9 && cur <= max_v + 1e-9, "bounds_q_in_sample_range_" + std::to_string(i));
+        prev = cur;
     }
-    
-    std::string output1 = hist.print();
-    std::cout << "集中值后:\n" << output1 << std::endl;
-    
-    // 然后添加一些分散的值  
-    for (int i = 0; i < 50; ++i)
-    {
-        hist.add(0.1 + (i % 50) * 0.016);  // 0.1 到 0.884
-    }
-    
-    std::string output2 = hist.print();
-    test_check(!output2.empty(), "adaptive_adjustment - should adapt to changing distributions");
-    
-    std::cout << "分散值后:\n" << output2 << std::endl;
 }
 
-// Test forgetting factor effect
-void test_forgetting_factor()
+void test_quantile_uniform_accuracy()
 {
-    Histogram<6> hist("forgetting_factor");
-    
-    // 添加早期数据
-    for (int i = 0; i < 200; ++i)
+    Histogram<40> hist;
+    std::mt19937 rng(42);
+    std::uniform_real_distribution<double> dist(0.0, 1.0);
+
+    for (size_t i = 0; i < 60000; ++i)
+    {
+        hist.add(dist(rng));
+    }
+
+    expect_near(hist.quantile(0.1), 0.1, 0.08, "uniform_q10_accuracy");
+    expect_near(hist.quantile(0.5), 0.5, 0.08, "uniform_q50_accuracy");
+    expect_near(hist.quantile(0.9), 0.9, 0.08, "uniform_q90_accuracy");
+}
+
+void test_quantile_recent_data_shift()
+{
+    Histogram<24> hist;
+
+    for (size_t i = 0; i < 5000; ++i)
     {
         hist.add(0.2);
     }
-    
-    std::string output1 = hist.print();
-    std::cout << "早期数据 (0.2):\n" << output1 << std::endl;
-    
-    // 添加新数据
-    for (int i = 0; i < 200; ++i)
+    const double before = hist.quantile(0.5);
+
+    for (size_t i = 0; i < 5000; ++i)
     {
         hist.add(0.8);
     }
-    
-    std::string output2 = hist.print();
-    test_check(!output2.empty(), "forgetting_factor - should weight recent data more heavily");
-    
-    std::cout << "新数据后 (0.8):\n" << output2 << std::endl;
+    const double after = hist.quantile(0.5);
+
+    test_check(before < 0.35, "recent_shift_before_low");
+    test_check(after > 0.65, "recent_shift_after_high");
+    test_check(after > before + 0.2, "recent_shift_median_moves_right");
 }
 
-// Test edge cases
-void test_edge_cases()
+void test_quantile_constant_signal()
 {
-    // 最小桶数
-    Histogram<3> hist_min("min_buckets");
-    hist_min.add(0.5);
-    std::string output_min = hist_min.print();
-    test_check(!output_min.empty(), "edge_cases - minimum bucket count (3)");
-    
-    // 相同值的多次添加
-    Histogram<5> hist_same("same_values");
-    for (int i = 0; i < 100; ++i)
+    Histogram<12> hist;
+    for (size_t i = 0; i < 4000; ++i)
     {
-        hist_same.add(0.5);
+        hist.add(0.5);
     }
-    std::string output_same = hist_same.print();
-    test_check(!output_same.empty(), "edge_cases - many identical values");
-    
-    std::cout << "相同值测试:\n" << output_same << std::endl;
-}
 
-// Test performance
-void test_performance()
-{
-    Histogram<20> hist("performance");
-    
-    auto start = std::chrono::high_resolution_clock::now();
-    
-    // 添加大量数据
-    for (int i = 0; i < 10000; ++i)
-    {
-        hist.add(static_cast<double>(i) / 10000.0);
-    }
-    
-    auto end = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-    
-    std::cout << "性能测试: " << duration.count() << " 微秒用于10000次添加" << std::endl;
-    
-    std::string output = hist.print();
-    test_check(!output.empty(), "performance - should handle 10000 additions efficiently");
-    
-    // 性能应该在合理范围内（比如每次添加不超过1微秒）
-    test_check(duration.count() < 10000, "performance - should complete within 10ms");
-}
-
-// Test histogram boundary conditions
-void test_boundary_conditions()
-{
-    Histogram<4> hist("boundary");
-    
-    // 测试空的直方图打印
-    std::string empty_output = hist.print();
-    test_check(!empty_output.empty(), "boundary_conditions - empty histogram should still print");
-    
-    // 添加一个值然后验证桶的使用
-    hist.add(0.25);  // 应该落入第一个桶
-    hist.add(0.75);  // 应该落入后面的桶
-    
-    std::string filled_output = hist.print();
-    test_check(filled_output.length() >= empty_output.length(), 
-               "boundary_conditions - filled histogram should have more output");
-    
-    std::cout << "边界条件测试:\n" << filled_output << std::endl;
+    expect_near(hist.quantile(0.1), 0.5, 0.03, "constant_q10");
+    expect_near(hist.quantile(0.5), 0.5, 0.03, "constant_q50");
+    expect_near(hist.quantile(0.9), 0.5, 0.03, "constant_q90");
 }
 
 int main()
 {
-    std::cout << "=== Histogram 类测试开始 ===" << std::endl;
-    
+    std::cout << "=== Histogram Quantile 数学验证开始 ===" << std::endl;
+
     try
     {
-        test_basic_construction();
-        test_single_value_add();
-        test_out_of_range_values();
-        test_normal_distribution();
-        test_uniform_distribution();
-        test_extreme_values();
-        test_adaptive_adjustment();
-        test_forgetting_factor();
-        test_edge_cases();
-        test_performance();
-        test_boundary_conditions();
-        
-        std::cout << "=== 所有测试完成 ===" << std::endl;
-        
+        test_quantile_invalid_argument();
+        test_quantile_bootstrap_exactness();
+        test_quantile_transition_continuity();
+        test_quantile_monotonicity_and_bounds();
+        test_quantile_uniform_accuracy();
+        test_quantile_recent_data_shift();
+        test_quantile_constant_signal();
+
+        std::cout << "=== 所有数学验证通过 ===" << std::endl;
     }
     catch (const std::exception &e)
     {
         std::cout << "测试期间发生异常: " << e.what() << std::endl;
         return 1;
     }
-    
+
     return 0;
 }

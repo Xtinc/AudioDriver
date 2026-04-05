@@ -858,6 +858,7 @@ class AudioCenter
 
     void setup_rpc_handlers();
     void sync_error_callbacks();
+    void schedule_latency_query();
 
     std::unique_ptr<INIReader> config;       /**< Configuration manager */
     std::shared_ptr<NetWorker> net_mgr;      /**< Network manager */

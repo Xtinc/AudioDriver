@@ -10,7 +10,7 @@ int main()
     center.create(10_itk, {"default", 0}, AudioBandWidth::Full, AudioPeriodSize::INR_10MS, 2);
     center.create(120_otk, {"default", 0}, AudioBandWidth::Full, AudioPeriodSize::INR_10MS, 2);
     center.prepare(false);
-    center.connect(10_itk, 120_otk, "127.0.0.1");
+    center.connect(10_itk, 120_otk);
     center.start();
     // center.set_player_volume(20);
 

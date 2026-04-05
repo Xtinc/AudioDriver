@@ -27,139 +27,6 @@ enum class ResetOrd
     RESET_HARD
 };
 
-template <size_t N = 20> class Histogram
-{
-    static_assert(N > 2, "Histogram must have at least 3 buckets (including underflow and overflow)");
-
-  public:
-    Histogram(const std::string &_name) : ffactor(0.99), name(_name), count(0)
-    {
-        std::fill(bcnts.begin(), bcnts.end(), 1.0 / N);
-        constexpr auto min_val = 0.0;
-        constexpr auto max_val = 1.0;
-        constexpr auto delta = (max_val - min_val) / N;
-        for (size_t i = 0; i < N + 1; i++)
-        {
-            scale[i] = min_val + i * delta;
-        }
-    }
-
-    void add(double val)
-    {
-        double sum = 0.0;
-        for (auto &cnt : bcnts)
-        {
-            cnt *= ffactor;
-            sum += cnt;
-        }
-
-        size_t bucket_idx;
-        if (val < scale[0])
-        {
-            bucket_idx = 0;
-            scale[0] = val;
-        }
-        else if (val > scale[N])
-        {
-            bucket_idx = N - 1;
-            scale[N] = val;
-        }
-        else
-        {
-            auto iter = std::lower_bound(scale.begin(), scale.begin() + N + 1, val);
-            bucket_idx = std::distance(scale.begin(), iter);
-            if (bucket_idx > 0)
-            {
-                bucket_idx--;
-            }
-        }
-
-        bcnts[bucket_idx] += 2.0 - ffactor - sum;
-
-        if (count++ % 100 == 0)
-        {
-            adjust_scale();
-        }
-    }
-
-    std::string print() const
-    {
-        constexpr size_t BUFFER_SZ = 50 * N;
-        char buffer[BUFFER_SZ]{};
-        size_t offset = 0;
-
-        for (size_t i = 0; i < N; i++)
-        {
-            if (bcnts[i] < 5e-4)
-            {
-                continue;
-            }
-
-            int len = snprintf(buffer + offset, BUFFER_SZ - offset, "[%6.2e, %6.2e): %6.2f%%\n", scale[i], scale[i + 1],
-                               bcnts[i] * 100.0);
-
-            if (len < 0 || offset + len >= BUFFER_SZ)
-            {
-                break;
-            }
-            offset += static_cast<size_t>(len);
-        }
-
-        return std::string(buffer);
-    }
-
-    void adjust_scale()
-    {
-        std::array<double, N> density;
-        for (size_t i = 0; i < N; i++)
-        {
-            double width = scale[i + 1] - scale[i];
-            density[i] = width > 1e-10 ? bcnts[i] / width : 0.0;
-        }
-
-        for (size_t i = 1; i < N; i++)
-        {
-            double width = scale[i + 1] - scale[i - 1];
-            if (width < 1e-10)
-            {
-                continue;
-            }
-            double ratio = density[i - 1] > 1e-10 ? density[i] / density[i - 1] : 1.0;
-            double move_factor = 0.5 * std::tanh(std::log(ratio));
-            double new_boundary = scale[i] + move_factor * (scale[i + 1] - scale[i - 1]);
-            new_boundary = std::max(scale[i - 1] + width * 0.1, std::min(scale[i + 1] - width * 0.1, new_boundary));
-            scale[i] = 0.8 * scale[i] + 0.2 * new_boundary; // Smooth the boundary movement
-        }
-
-        double total = 0.0;
-        for (const auto &cnt : bcnts)
-        {
-            total += cnt;
-        }
-
-        double expected = total / N;
-
-        if (bcnts[0] > 1.5 * expected && scale[0] > 1e-10)
-        {
-            double expand = (scale[1] - scale[0]) * 0.5;
-            scale[0] -= expand;
-        }
-
-        if (bcnts[N - 1] > 1.5 * expected && scale[N] < 1e10)
-        {
-            double expand = (scale[N] - scale[N - 1]) * 0.5;
-            scale[N] += expand;
-        }
-    }
-
-  private:
-    const std::string name;
-    const double ffactor;
-    std::array<double, N> bcnts;
-    std::array<double, N + 1> scale;
-    uint32_t count;
-};
-
 struct TimerCounter
 {
     TimerCounter(const std::string &_name, unsigned int _threshold)
@@ -239,7 +106,8 @@ class AudioDevice
     virtual RetCode stop() = 0;
     virtual RetCode write(const char *data, size_t len) = 0;
     virtual RetCode read(char *data, size_t len) = 0;
-
+    virtual double wlatency() const = 0;
+    virtual double rlatency() const = 0;
     bool is_running() const
     {
         return hstate == STREAM_RUNNING;
