@@ -4,7 +4,6 @@
 #include "audio_network.h"
 #include "audio_stream.h"
 #include <iomanip>
-#include <sstream>
 
 static void default_stream_error_callback(unsigned char token, std::string message, void *user_ptr)
 {
@@ -410,103 +409,109 @@ RetCode AudioCenter::prepare(bool enable_usb_detection)
         return {RetCode::ESTATE, "AudioCenter not in INIT state"};
     }
 
-    if (!enable_usb_detection)
+    if (enable_usb_detection)
     {
-        AUDIO_INFO_PRINT(
-            "AudioCenter successfully prepared - transitioning from INIT to CONNECTING, disabling USB detection");
-        return RetCode::OK;
-    }
+        std::string default_usb_in = "null_iusb";
+        std::string default_usb_out = "null_ousb";
 
-    std::string default_usb_in = "null_iusb";
-    std::string default_usb_out = "null_ousb";
-
-    auto idev_cfg_name = (*config)["HotPlug.InputDeviceName"].cast<std::string>("");
-    if (monitor->DeviceExists(idev_cfg_name))
-    {
-        default_usb_in = idev_cfg_name;
-        AUDIO_INFO_PRINT("Default input device found: %s", default_usb_in.c_str());
-    }
-
-    auto odev_cfg_name = (*config)["HotPlug.OutputDeviceName"].cast<std::string>("");
-    if (monitor->DeviceExists(odev_cfg_name))
-    {
-        default_usb_out = odev_cfg_name;
-        AUDIO_INFO_PRINT("Default output device found: %s", default_usb_out.c_str());
-    }
-
-    ias_map.emplace(USR_DUMMY_IN.tok,
-                    std::make_shared<IAStream>(USR_DUMMY_IN.tok, AudioDeviceName(default_usb_in, 0),
-                                               enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2,
-                                               ResetOrd::RESET_NONE, AudioPriority::MEDIUM));
-    oas_map.emplace(USR_DUMMY_OUT.tok,
-                    std::make_shared<OAStream>(USR_DUMMY_OUT.tok, AudioDeviceName(default_usb_out, 0),
-                                               enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2,
-                                               ResetOrd::RESET_NONE));
-    if (net_mgr)
-    {
-        ias_map[USR_DUMMY_IN.tok]->initialize_network(net_mgr, AudioCodecType::OPUS);
-        oas_map[USR_DUMMY_OUT.tok]->initialize_network(net_mgr);
-    }
-
-    monitor->RegisterCallback([this](AudioDeviceEvent event, const AudioDeviceInfo &info) {
-        auto ias = ias_map.find(USR_DUMMY_IN.tok);
-        if (ias == ias_map.end())
+        auto idev_cfg_name = (*config)["HotPlug.InputDeviceName"].cast<std::string>("");
+        if (monitor->DeviceExists(idev_cfg_name))
         {
-            AUDIO_ERROR_PRINT("Dummy input stream not found");
-            return;
+            default_usb_in = idev_cfg_name;
+            AUDIO_INFO_PRINT("Default input device found: %s", default_usb_in.c_str());
         }
 
-        auto oas = oas_map.find(USR_DUMMY_OUT.tok);
-        if (oas == oas_map.end())
+        auto odev_cfg_name = (*config)["HotPlug.OutputDeviceName"].cast<std::string>("");
+        if (monitor->DeviceExists(odev_cfg_name))
         {
-            AUDIO_ERROR_PRINT("Dummy output stream not found");
-            return;
+            default_usb_out = odev_cfg_name;
+            AUDIO_INFO_PRINT("Default output device found: %s", default_usb_out.c_str());
         }
 
-        switch (event)
+        ias_map.emplace(USR_DUMMY_IN.tok,
+                        std::make_shared<IAStream>(USR_DUMMY_IN.tok, AudioDeviceName(default_usb_in, 0),
+                                                   enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full),
+                                                   2, ResetOrd::RESET_NONE, AudioPriority::MEDIUM));
+        oas_map.emplace(USR_DUMMY_OUT.tok,
+                        std::make_shared<OAStream>(USR_DUMMY_OUT.tok, AudioDeviceName(default_usb_out, 0),
+                                                   enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full),
+                                                   2, ResetOrd::RESET_NONE));
+        if (net_mgr)
         {
-        case AudioDeviceEvent::Added:
-            AUDIO_INFO_PRINT("New device: %s", info.name.c_str());
-            if (info.type == AudioDeviceType::Capture)
-            {
-                ias->second->restart({info.id, 0});
-                (*config)["HotPlug.InputDeviceID"] = info.id;
-                (*config)["HotPlug.InputDeviceName"] = info.name + ",0";
-            }
-            else if (info.type == AudioDeviceType::Playback)
-            {
-                oas->second->restart({info.id, 0});
-                (*config)["HotPlug.OutputDeviceID"] = info.id;
-                (*config)["HotPlug.OutputDeviceName"] = info.name + ",0";
-            }
-            else
-            {
-                ias->second->restart({info.id, 0});
-                oas->second->restart({info.id, 0});
-                (*config)["HotPlug.InputDeviceID"] = info.id;
-                (*config)["HotPlug.InputDeviceName"] = info.name + ",0";
-                (*config)["HotPlug.OutputDeviceID"] = info.id;
-                (*config)["HotPlug.OutputDeviceName"] = info.name + ",0";
-            }
-            config->save();
-            break;
-        case AudioDeviceEvent::Removed:
-            AUDIO_INFO_PRINT("Del device: %s", info.name.c_str());
-            if (ias->second->name().first == info.id)
-            {
-                ias->second->restart({"null_usb", 0});
-            }
-            if (oas->second->name().first == info.id)
-            {
-                oas->second->restart({"null_usb", 0});
-            }
-            break;
-        default:
-            break;
+            ias_map[USR_DUMMY_IN.tok]->initialize_network(net_mgr, AudioCodecType::OPUS);
+            oas_map[USR_DUMMY_OUT.tok]->initialize_network(net_mgr);
         }
-    });
-    AUDIO_DEBUG_PRINT(
-        "AudioCenter successfully prepared - transitioning from INIT to CONNECTING, enabling USB detection");
+
+        monitor->RegisterCallback([this](AudioDeviceEvent event, const AudioDeviceInfo &info) {
+            auto ias = ias_map.find(USR_DUMMY_IN.tok);
+            if (ias == ias_map.end())
+            {
+                AUDIO_ERROR_PRINT("Dummy input stream not found");
+                return;
+            }
+
+            auto oas = oas_map.find(USR_DUMMY_OUT.tok);
+            if (oas == oas_map.end())
+            {
+                AUDIO_ERROR_PRINT("Dummy output stream not found");
+                return;
+            }
+
+            switch (event)
+            {
+            case AudioDeviceEvent::Added:
+                AUDIO_INFO_PRINT("New device: %s", info.name.c_str());
+                if (info.type == AudioDeviceType::Capture)
+                {
+                    ias->second->restart({info.id, 0});
+                    (*config)["HotPlug.InputDeviceID"] = info.id;
+                    (*config)["HotPlug.InputDeviceName"] = info.name + ",0";
+                }
+                else if (info.type == AudioDeviceType::Playback)
+                {
+                    oas->second->restart({info.id, 0});
+                    (*config)["HotPlug.OutputDeviceID"] = info.id;
+                    (*config)["HotPlug.OutputDeviceName"] = info.name + ",0";
+                }
+                else
+                {
+                    ias->second->restart({info.id, 0});
+                    oas->second->restart({info.id, 0});
+                    (*config)["HotPlug.InputDeviceID"] = info.id;
+                    (*config)["HotPlug.InputDeviceName"] = info.name + ",0";
+                    (*config)["HotPlug.OutputDeviceID"] = info.id;
+                    (*config)["HotPlug.OutputDeviceName"] = info.name + ",0";
+                }
+                config->save();
+                break;
+            case AudioDeviceEvent::Removed:
+                AUDIO_INFO_PRINT("Del device: %s", info.name.c_str());
+                if (ias->second->name().first == info.id)
+                {
+                    ias->second->restart({"null_usb", 0});
+                }
+                if (oas->second->name().first == info.id)
+                {
+                    oas->second->restart({"null_usb", 0});
+                }
+                break;
+            default:
+                break;
+            }
+        });
+    }
+
+    for (const auto &e : config->get_connections())
+    {
+        auto ret = connect(IToken(e.itoken), OToken(e.token), e.ip, e.port);
+        if (!ret)
+        {
+            AUDIO_ERROR_PRINT("Connection config: connect %u->%u failed: %s", e.itoken, e.token, ret.what());
+        }
+    }
+
+    AUDIO_DEBUG_PRINT("AudioCenter successfully prepared - transitioning from INIT to CONNECTING, %s USB detection",
+                      enable_usb_detection ? "with" : "without");
     return RetCode::OK;
 }
 

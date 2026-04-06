@@ -4,13 +4,15 @@
 
 INIReader::INIReader(const std::string &filename) : filename_(filename)
 {
-    (void)load();
-    data_["HotPlug.InputDeviceID"] = "";
-    data_["HotPlug.InputDeviceName"] = "";
-    data_["HotPlug.OutputDeviceID"] = "";
-    data_["HotPlug.OutputDeviceName"] = "";
-    data_["Report.Latency"] = "false";
-    data_["Report.LatencyInterval"] = "60";
+    if (!load())
+    {
+        data_["HotPlug.InputDeviceID"] = "";
+        data_["HotPlug.InputDeviceName"] = "";
+        data_["HotPlug.OutputDeviceID"] = "";
+        data_["HotPlug.OutputDeviceName"] = "";
+        data_["Report.Latency"] = "false";
+        data_["Report.LatencyInterval"] = "60";
+    }
 }
 
 bool INIReader::save()
@@ -31,6 +33,10 @@ bool INIReader::save()
         }
         std::string sec = kv.first.substr(0, dot);
         std::string key = kv.first.substr(dot + 1);
+        if (sec.find(':') != std::string::npos)
+        {
+            continue;
+        }
         if (sec != cur_section)
         {
             if (!cur_section.empty())
@@ -71,13 +77,90 @@ bool INIReader::load()
             continue;
         }
 
+        if (current_section.empty())
+        {
+            continue;
+        }
+
         size_t pos = line.find('=');
-        if (pos != std::string::npos && !current_section.empty())
+        if (pos != std::string::npos)
         {
             data_[current_section + "." + trim(line.substr(0, pos))] = trim(line.substr(pos + 1));
         }
     }
     return true;
+}
+
+std::vector<INIReader::ConnectionEntry> INIReader::get_connections() const
+{
+    // Keys have the form "Connection:<itoken>.<index>.<field>"
+    const std::string match = "Connection:";
+    std::map<std::string, ConnectionEntry> entries;
+
+    for (const auto &kv : data_)
+    {
+        if (kv.first.compare(0, match.size(), match) != 0)
+        {
+            continue;
+        }
+        std::string rest = kv.first.substr(match.size()); // "<itoken>.<index>.<field>"
+        size_t dot = rest.rfind('.');
+        if (dot == std::string::npos)
+        {
+            continue;
+        }
+        const std::string group = rest.substr(0, dot);
+        const std::string field = rest.substr(dot + 1);
+        auto &e = entries[group];
+        try
+        {
+            if (field == "token")
+            {
+                int v = std::stoi(kv.second);
+                if (v >= 0 && v <= 254)
+                    e.token = static_cast<unsigned char>(v);
+            }
+            else if (field == "ip")
+            {
+                e.ip = kv.second;
+            }
+            else if (field == "port")
+            {
+                e.port = static_cast<unsigned short>(std::stoi(kv.second));
+            }
+        }
+        catch (...)
+        {
+        }
+    }
+
+    std::vector<ConnectionEntry> result;
+    for (auto &p : entries)
+    {
+        if (p.second.token == 0xFF) // token field was absent or invalid
+        {
+            continue;
+        }
+        size_t dot = p.first.find('.');
+        if (dot == std::string::npos)
+        {
+            continue;
+        }
+        try
+        {
+            int ival = std::stoi(p.first.substr(0, dot));
+            if (ival < 0 || ival > 254)
+            {
+                continue;
+            }
+            p.second.itoken = static_cast<unsigned char>(ival);
+            result.push_back(std::move(p.second));
+        }
+        catch (...)
+        {
+        }
+    }
+    return result;
 }
 
 std::string INIReader::trim(const std::string &str) const

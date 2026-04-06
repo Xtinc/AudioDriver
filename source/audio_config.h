@@ -3,6 +3,7 @@
 
 #include <map>
 #include <string>
+#include <vector>
 
 class INIReader
 {
@@ -44,6 +45,15 @@ class INIReader
         return {data_, key};
     }
     bool save();
+
+    struct ConnectionEntry
+    {
+        unsigned char itoken;
+        unsigned char token = 0xFF; // 0xFF = not set
+        std::string ip;
+        unsigned short port = 0;
+    };
+    std::vector<ConnectionEntry> get_connections() const;
 
   private:
     bool load();
