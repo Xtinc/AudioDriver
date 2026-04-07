@@ -557,17 +557,16 @@ RetCode AudioCenter::connect(IToken itoken, OToken otoken, const std::string &ip
             return {RetCode::FAILED, "Network not enabled"};
         }
 
-        AUDIO_INFO_PRINT("Try to connect stream %u -> %u on %s", itoken.tok, otoken.tok, ip.c_str());
         auto ret = net_mgr->add_destination(itoken.tok, otoken.tok, ip, port);
         if (!ret)
         {
-            AUDIO_ERROR_PRINT("Failed to add network destination %s for tokens %u -> %u: %s", ip.c_str(), itoken.tok,
-                              otoken.tok, ret.what());
+            AUDIO_ERROR_PRINT("Failed to add network destination %s:%u for tokens %u -> %u: %s", ip.c_str(), port,
+                              itoken.tok, otoken.tok, ret.what());
         }
         else
         {
-            AUDIO_INFO_PRINT("Successfully added network destination %s for tokens %u -> %u", ip.c_str(), itoken.tok,
-                             otoken.tok);
+            AUDIO_INFO_PRINT("Successfully added network destination %s:%u for tokens %u -> %u", ip.c_str(), port,
+                             itoken.tok, otoken.tok);
         }
 
         return ret;

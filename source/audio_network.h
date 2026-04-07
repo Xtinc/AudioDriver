@@ -129,11 +129,6 @@ template <size_t N> class Histogram
         if (q < 0.0 || q > 1.0)
             return std::numeric_limits<double>::quiet_NaN();
 
-        // for (size_t i = 0; i < N; i++)
-        // {
-        //     AUDIO_DEBUG_PRINT("Bucket %zu: count=%.4f, scale=[%.2f, %.2f)", i, bcnts[i], scale[i], scale[i + 1]);
-        // }
-
         if (boot_n < BOOTSTRAP_MIN)
         {
             if (boot_n == 0)
@@ -486,13 +481,16 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
         std::unique_ptr<int16_t[]> decode_buffer;
         NetState stats;
 
-        DecoderContext(unsigned int ch, unsigned int sr) : decoder(nullptr)
+        DecoderContext(unsigned int ch, unsigned int sr, AudioCodecType codec) : decoder(nullptr)
         {
-            int error;
-            decoder = opus_decoder_create(sr, ch, &error);
-            if (error == OPUS_OK && decoder)
+            if (codec == AudioCodecType::OPUS)
             {
-                decode_buffer = std::make_unique<int16_t[]>(NETWORK_MAX_FRAMES * ch);
+                int error;
+                decoder = opus_decoder_create(sr, ch, &error);
+                if (error == OPUS_OK && decoder)
+                {
+                    decode_buffer = std::make_unique<int16_t[]>(NETWORK_MAX_FRAMES * ch);
+                }
             }
         }
 
@@ -553,7 +551,7 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     void handle_receive(const asio::error_code &error, std::size_t bytes_transferred,
                         const asio::ip::udp::endpoint &sender_endpoint);
     void retry_receive_with_backoff();
-    DecoderContext &get_decoder(SourceUUID sid, unsigned int channels, unsigned int sample_rate);
+    DecoderContext &get_decoder(SourceUUID sid, unsigned int channels, unsigned int sample_rate, AudioCodecType codec);
 
     void process_and_deliver_audio(const DataPacket *header, const uint8_t *opus_data, size_t opus_size,
                                    SourceUUID source_id);

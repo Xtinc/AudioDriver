@@ -139,21 +139,7 @@ NetState::NetState() : last_report_time(std::chrono::steady_clock::now())
 
 void NetState::reset()
 {
-    last_sequence = 0;
-    last_timestamp = 0;
-    last_arrival_time = 0;
-    packets_received = 0;
-    packets_lost = 0;
-    total_jitter = 0.0;
-    max_jitter = 0.0;
-    packets_out_of_order = 0;
-    period_packets_received = 0;
-    period_packets_lost = 0;
-    period_total_jitter = 0.0;
-    period_packets_out_of_order = 0;
-    highest_sequence_seen = 0;
-    first_packet = true;
-    last_report_time = std::chrono::steady_clock::now();
+    *this = NetState();
 }
 
 bool NetState::update(uint32_t sequence, uint64_t timestamp, NetStatInfos &stats)
@@ -672,12 +658,13 @@ void NetWorker::retry_receive_with_backoff()
     });
 }
 
-NetWorker::DecoderContext &NetWorker::get_decoder(SourceUUID sid, unsigned int channels, unsigned int sample_rate)
+NetWorker::DecoderContext &NetWorker::get_decoder(SourceUUID sid, unsigned int channels, unsigned int sample_rate,
+                                                  AudioCodecType codec)
 {
     auto it = decoders.find(sid);
     if (it == decoders.end())
     {
-        auto result = decoders.emplace(sid, DecoderContext(channels, sample_rate));
+        auto result = decoders.emplace(sid, DecoderContext(channels, sample_rate, codec));
         return result.first->second;
     }
 
@@ -702,7 +689,7 @@ void NetWorker::process_and_deliver_audio(const DataPacket *header, const uint8_
     AudioCodecType codec_type = DataPacket::decode_magic_codec(header->magic_num);
     AudioPriority priority = DataPacket::decode_magic_priority(header->magic_num);
 
-    auto &decoder_context = get_decoder(ssid, channels, sample_rate);
+    auto &decoder_context = get_decoder(ssid, channels, sample_rate, codec_type);
     NetStatInfos stats{};
     if (decoder_context.update_stats(sequence, timestamp, stats) &&
         (stats.packets_lost > 0 || stats.packets_out_of_order > 0))
