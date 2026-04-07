@@ -126,7 +126,7 @@ class OAStream : public std::enable_shared_from_this<OAStream>
     odevice_ptr odevice;
     std::atomic_uint volume;
 
-    std::mutex session_mtx;
+    mutable std::mutex session_mtx;
     std::list<context_ptr> sessions;
     network_ptr networker;
     std::mutex listener_mtx;

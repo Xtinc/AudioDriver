@@ -406,7 +406,32 @@ void OAStream::query_latency() const
 
         double write_latency_ms = self->odevice->wlatency();
         double read_latency_ms = self->odevice->rlatency();
-        AUDIO_INFO_PRINT("OAStream %u latency[w=%.2fms,r=%.2fms]", self->token, write_latency_ms, read_latency_ms);
+        {
+            std::lock_guard<std::mutex> lck(self->session_mtx);
+            size_t buf_size = 64 + self->sessions.size() * 48;
+            auto buffer = new char[buf_size];
+            auto ptr = buffer;
+            auto len =
+                snprintf(ptr, buf_size, "LAC %03u [w=%.2fms,r=%.2fms]", self->token, write_latency_ms, read_latency_ms);
+            ptr += len;
+            buf_size -= len;
+
+            int idx = 0;
+            for (auto &ctx : self->sessions)
+            {
+                double session_wlatency = ctx->session.write_water_level() * 1000.0 /
+                                          (ctx->sampler.src_fs * ctx->sampler.src_ch * sizeof(PCM_TYPE));
+                double session_rlatency = ctx->session.read_water_level() * 1000.0 /
+                                          (ctx->sampler.src_fs * ctx->sampler.src_ch * sizeof(PCM_TYPE));
+                len = snprintf(ptr, buf_size, "\n\t%02d.%03u@0x%08X|0x%08X [w=%.2fms,r=%.2fms]", idx++,
+                               ctx->uuid.sender_token, ctx->uuid.sender_ip, ctx->uuid.gateway_ip, session_wlatency,
+                               session_rlatency);
+                ptr += len;
+                buf_size -= len;
+            }
+            AUDIO_INFO_PRINT("%s", buffer);
+            delete[] buffer;
+        }
     });
 }
 
@@ -1026,7 +1051,7 @@ void IAStream::query_latency() const
         }
         double write_latency_ms = self->idevice->wlatency();
         double read_latency_ms = self->idevice->rlatency();
-        AUDIO_INFO_PRINT("IAStream %u latency[w=%.2fms,r=%.2fms]", self->token, write_latency_ms, read_latency_ms);
+        AUDIO_INFO_PRINT("LAC %03u [w=%.2fms,r=%.2fms]", self->token, write_latency_ms, read_latency_ms);
     });
 }
 
