@@ -66,6 +66,11 @@ struct NetStatInfos
     uint32_t packets_received;
     uint32_t packets_lost;
     uint32_t packets_out_of_order;
+    // Always valid (not limited to the periodic report window):
+    // > 0  : in-order gap (number of missing packets before this one)
+    // == 0 : consecutive, first packet, or duplicate
+    // < 0  : out-of-order arrival
+    int32_t seq_gap{0};
 };
 
 class NetState
@@ -76,20 +81,15 @@ class NetState
     void reset();
 
   private:
-    uint32_t last_sequence{0};
+    // Jitter tracking (RFC 3550): timestamps of the most recently processed packet
     uint64_t last_timestamp{0};
     uint64_t last_arrival_time{0};
 
-    uint32_t packets_received{0};
-    uint32_t packets_lost{0};
-    double total_jitter{0.0};
-    double max_jitter{0.0};
-
-    uint32_t packets_out_of_order{0};
-
+    // Per-period counters — reset every report interval
     uint32_t period_packets_received{0};
     uint32_t period_packets_lost{0};
     double period_total_jitter{0.0};
+    double period_max_jitter{0.0};
     uint32_t period_packets_out_of_order{0};
 
     uint32_t highest_sequence_seen{0};
@@ -430,6 +430,8 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
                 if (error == OPUS_OK && encoder)
                 {
                     encode_buffer = std::make_unique<uint8_t[]>(NETWORK_MAX_BUFFER_SIZE);
+                    opus_encoder_ctl(encoder, OPUS_SET_INBAND_FEC(1));
+                    opus_encoder_ctl(encoder, OPUS_SET_PACKET_LOSS_PERC(5));
                 }
             }
             else
@@ -479,7 +481,9 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     {
         ::OpusDecoder *decoder;
         std::unique_ptr<int16_t[]> decode_buffer;
+        std::unique_ptr<int16_t[]> fec_buffer;
         NetState stats;
+        int last_frames{0};
 
         DecoderContext(unsigned int ch, unsigned int sr, AudioCodecType codec) : decoder(nullptr)
         {
@@ -490,6 +494,7 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
                 if (error == OPUS_OK && decoder)
                 {
                     decode_buffer = std::make_unique<int16_t[]>(NETWORK_MAX_FRAMES * ch);
+                    fec_buffer = std::make_unique<int16_t[]>(NETWORK_MAX_FRAMES * ch);
                 }
             }
         }
@@ -506,7 +511,8 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
         DecoderContext &operator=(const DecoderContext &) = delete;
 
         DecoderContext(DecoderContext &&other) noexcept
-            : decoder(other.decoder), decode_buffer(std::move(other.decode_buffer)), stats(std::move(other.stats))
+            : decoder(other.decoder), decode_buffer(std::move(other.decode_buffer)),
+              fec_buffer(std::move(other.fec_buffer)), stats(std::move(other.stats)), last_frames(other.last_frames)
         {
             other.decoder = nullptr;
         }
@@ -517,7 +523,9 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
             {
                 decoder = other.decoder;
                 decode_buffer = std::move(other.decode_buffer);
+                fec_buffer = std::move(other.fec_buffer);
                 stats = std::move(other.stats);
+                last_frames = other.last_frames;
                 other.decoder = nullptr;
             }
             return *this;
