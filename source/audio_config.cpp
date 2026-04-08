@@ -12,6 +12,8 @@ INIReader::INIReader(const std::string &filename) : filename_(filename)
         data_["HotPlug.OutputDeviceName"] = "";
         data_["Report.Latency"] = "false";
         data_["Report.LatencyInterval"] = "60";
+        data_["Log.DebugPrint"] = "false";
+        (void)save();
     }
 }
 

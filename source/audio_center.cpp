@@ -3,7 +3,15 @@
 #include "audio_monitor.h"
 #include "audio_network.h"
 #include "audio_stream.h"
+#include <atomic>
 #include <iomanip>
+
+static std::atomic<bool> s_audio_debug_enabled{false};
+
+bool audio_is_debug_enabled()
+{
+    return s_audio_debug_enabled.load(std::memory_order_relaxed);
+}
 
 static void default_stream_error_callback(unsigned char token, std::string message, void *user_ptr)
 {
@@ -16,6 +24,7 @@ AudioCenter::AudioCenter(bool enable_network, const std::string &local_ip, unsig
     : center_state(State::INIT), stream_error_cb(default_stream_error_callback), stream_error_cb_ptr(nullptr)
 {
     config = std::make_unique<INIReader>("audiocenter.ini");
+    s_audio_debug_enabled.store((*config)["Log.DebugPrint"].cast<bool>(false), std::memory_order_relaxed);
     monitor = std::make_unique<AudioMonitor>(BG_SERVICE);
     player = std::make_shared<AudioPlayer>(USER_MAX_AUDIO_TOKEN);
     if (enable_network)
