@@ -227,6 +227,7 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     asio_strand cb_strand;
     StreamErrorCallback error_cb;
     void *error_cb_ptr;
+    bool direct_mode;
 };
 
 class AudioPlayer : public std::enable_shared_from_this<AudioPlayer>

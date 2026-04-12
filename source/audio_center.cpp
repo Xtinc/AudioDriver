@@ -363,23 +363,21 @@ RetCode AudioCenter::create(IToken itoken, OToken otoken, StreamFlags flags, Aud
     try
     {
         std::shared_ptr<IAStream> new_stream;
-        if (oas->second->omap == DEFAULT_MONO_MAP)
+        const auto &oas_ptr = oas->second;
+        if (oas_ptr->omap == DEFAULT_MONO_MAP)
         {
-            new_stream = std::make_shared<IAStream>(itoken.tok, AudioDeviceName("null_dummy", 0),
-                                                    enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full),
-                                                    1, ResetOrd::RESET_NONE, priority);
+            new_stream = std::make_shared<IAStream>(itoken.tok, AudioDeviceName("null_dummy", 0), oas_ptr->ti,
+                                                    enum2val(AudioBandWidth::Full), 1, DEFAULT_MONO_MAP, priority);
         }
-        else if (oas->second->omap == DEFAULT_DUAL_MAP)
+        else if (oas_ptr->omap == DEFAULT_DUAL_MAP)
         {
-            new_stream = std::make_shared<IAStream>(itoken.tok, AudioDeviceName("null_dummy", 0),
-                                                    enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full),
-                                                    2, ResetOrd::RESET_NONE, priority);
+            new_stream = std::make_shared<IAStream>(itoken.tok, AudioDeviceName("null_dummy", 0), oas_ptr->ti,
+                                                    enum2val(AudioBandWidth::Full), 2, DEFAULT_DUAL_MAP, priority);
         }
         else
         {
-            new_stream = std::make_shared<IAStream>(itoken.tok, AudioDeviceName("null_dummy", 0),
-                                                    enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full),
-                                                    99, oas->second->omap, priority);
+            new_stream = std::make_shared<IAStream>(itoken.tok, AudioDeviceName("null_dummy", 0), oas_ptr->ti,
+                                                    enum2val(AudioBandWidth::Full), 99, oas_ptr->omap, priority);
         }
 
         if (has_flag(flags, StreamFlags::Network) && net_mgr)
@@ -835,7 +833,7 @@ RetCode AudioCenter::start()
     if ((*config)["Report.Latency"].cast<bool>(false))
     {
         auto interval = (*config)["Report.LatencyInterval"].cast<int>(60);
-        if (interval > 10)
+        if (interval >= 10)
         {
             schedule_latency_query(interval);
         }

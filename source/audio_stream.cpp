@@ -437,15 +437,15 @@ void OAStream::query_latency() const
 
 void OAStream::register_listener(const std::shared_ptr<IAStream> &ias)
 {
-    if (omap != ias->imap)
-    {
-        AUDIO_ERROR_PRINT("Channel map mismatch: (%u,%u) vs (%u,%u)", omap[0], omap[1], ias->imap[0], ias->imap[1]);
-        return;
-    }
-
     if (!ias)
     {
         AUDIO_ERROR_PRINT("Invalid IAStream pointer for token %u", token);
+        return;
+    }
+
+    if (omap != ias->imap)
+    {
+        AUDIO_ERROR_PRINT("Channel map mismatch: (%u,%u) vs (%u,%u)", omap[0], omap[1], ias->imap[0], ias->imap[1]);
         return;
     }
 
@@ -1146,13 +1146,7 @@ RetCode IAStream::process_data()
     // raw data from device
     if (usr_cb.cb && usr_cb.mode == UsrCallBackMode::RAW)
     {
-        bool stored =
-            session->store(reinterpret_cast<const char *>(dev_buf.get()), dev_fr * idevice->ch() * sizeof(PCM_TYPE));
-        if (!stored)
-        {
-            AUDIO_DEBUG_PRINT("IAStream %u callback RAW session overflow: frames=%u ch=%u req_frames=%u", token, dev_fr,
-                              idevice->ch(), usr_cb.req_frs);
-        }
+        (void)session->store(reinterpret_cast<const char *>(dev_buf.get()), dev_fr * idevice->ch() * sizeof(PCM_TYPE));
     }
 
     if (muted)
@@ -1178,15 +1172,9 @@ RetCode IAStream::process_data()
 
     PCM_TYPE *src = &oview.data()[0];
 
-    // processed data from device
     if (usr_cb.cb && usr_cb.mode == UsrCallBackMode::PROCESSED)
     {
-        bool stored = session->store(reinterpret_cast<const char *>(src), ps * ch * sizeof(PCM_TYPE));
-        if (!stored)
-        {
-            AUDIO_DEBUG_PRINT("IAStream %u callback PROCESSED session overflow: frames=%u ch=%u req_frames=%u", token,
-                              ps, ch, usr_cb.req_frs);
-        }
+        (void)session->store(reinterpret_cast<const char *>(src), ps * ch * sizeof(PCM_TYPE));
     }
 
     destinations local_dests;

@@ -876,9 +876,13 @@ void WasapiDriver::write_loop()
         if (!io_buffer->load(reinterpret_cast<char *>(data), frames * dev_ch * sizeof(PCM_TYPE)))
         {
             AUDIO_DEBUG_PRINT("WASAPI device [%s] buffer underflow", hw_name.c_str());
+            hr = render->ReleaseBuffer(frames, AUDCLNT_BUFFERFLAGS_SILENT);
+        }
+        else
+        {
+            hr = render->ReleaseBuffer(frames, 0);
         }
 
-        hr = render->ReleaseBuffer(frames, 0);
         if (FAILED(hr))
         {
             ok = false;

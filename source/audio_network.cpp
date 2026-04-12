@@ -688,6 +688,15 @@ void NetWorker::process_and_deliver_audio(const DataPacket *header, const uint8_
             stats.packets_received, stats.packets_lost, stats.packets_out_of_order);
     }
 
+    // First packet may report seq_gap == 0 and must be accepted.
+    // Duplicate packets (seq_gap == 0 after first decode) and out-of-order
+    // packets (seq_gap < 0) are dropped to avoid inflating playout latency.
+    // if (stats.seq_gap < 0 || (stats.seq_gap == 0 && ctx.last_frames > 0))
+    // {
+    //     AUDIO_DEBUG_PRINT("Drop stale packet seq=%u gap=%d sender=%u", sequence, stats.seq_gap, ssid.sender_token);
+    //     return;
+    // }
+
     if (codec_type == AudioCodecType::OPUS)
     {
         if (!ctx.decoder || !ctx.decode_buffer)
@@ -697,7 +706,7 @@ void NetWorker::process_and_deliver_audio(const DataPacket *header, const uint8_
             return;
         }
 
-        // ── Concealment before decoding the current packet ───────────────────
+        // Concealment before decoding the current packet
         // seq_gap == 1 : consecutive, nothing to do
         // seq_gap >= 2 : gap detected
         //   · FEC  — Opus embeds redundancy for the packet immediately preceding
@@ -736,7 +745,6 @@ void NetWorker::process_and_deliver_audio(const DataPacket *header, const uint8_
             }
         }
 
-        // ── Decode current packet ────────────────────────────────────────────
         int decoded_frames = opus_decode(ctx.decoder, opus_data, static_cast<opus_int32>(opus_size),
                                          ctx.decode_buffer.get(), NETWORK_MAX_FRAMES, /*decode_fec=*/0);
         if (decoded_frames < 0)
@@ -746,7 +754,6 @@ void NetWorker::process_and_deliver_audio(const DataPacket *header, const uint8_
             return;
         }
 
-        // Only update last_frames for in-order packets to keep FEC/PLC frame-count reliable
         if (stats.seq_gap >= 0)
         {
             ctx.last_frames = decoded_frames;
