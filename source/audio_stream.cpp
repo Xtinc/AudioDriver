@@ -96,7 +96,12 @@ OAStream::OAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
       omap(_omap == AudioChannelMap{} ? (_ch == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP) : _omap), fs(_fs),
       ps(fs * ti / 1000), ch(_ch), usr_name(_name), oas_ready(false), exec_timer(BG_SERVICE),
       exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE), volume(100), muted(false), error_cb(nullptr),
-      error_cb_ptr(nullptr)
+      error_cb_ptr(nullptr), drift_pi_(/* Kp */ 1e-4, /* Ki */ 1e-4,
+                                       /* target_ms */ 1.0 * _ti,
+                                       /* dt_s */ static_cast<double>(_ti) / 1000.0,
+                                       /* out_min */ 0.995, /* out_max */ 1.005,
+                                       /* integral_clamp */ 1e3,
+                                       /* warmup */ 64)
 {
     DBG_ASSERT_LT(omap[0], ch);
     DBG_ASSERT_LT(omap[1], ch);
@@ -251,7 +256,7 @@ RetCode OAStream::direct_push(unsigned int chan, unsigned int frames, unsigned i
         unsigned int std_fr = (std::max)(frames, sample_rate * ti / 1000);
         auto imap = chan == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP;
         sessions.emplace_back(std::make_unique<SessionContext>(source_id, sample_rate, chan, fs, ch, std_fr, imap, omap,
-                                                               enum2val(priority)));
+                                                               enum2val(priority), ti));
         it = std::prev(sessions.end());
         AUDIO_INFO_PRINT("%u receiver New connection: %u (IP: 0x%08X|0x%08X)", token, source_id.sender_token,
                          source_id.sender_ip, source_id.gateway_ip);
@@ -408,11 +413,11 @@ void OAStream::query_latency() const
         double read_latency_ms = self->odevice->rlatency();
         {
             std::lock_guard<std::mutex> lck(self->session_mtx);
-            size_t buf_size = 64 + self->sessions.size() * 48;
+            size_t buf_size = 64 + self->sessions.size() * 64;
             auto buffer = new char[buf_size];
             auto ptr = buffer;
-            auto len =
-                snprintf(ptr, buf_size, "LAC %03u [w=%.2fms,r=%.2fms]", self->token, write_latency_ms, read_latency_ms);
+            auto len = snprintf(ptr, buf_size, "LAC %03u [w=%.2fms,r=%.2fms,adj=%.5f]", self->token, write_latency_ms,
+                                read_latency_ms, self->oa_drift_adj_);
             ptr += len;
             buf_size -= len;
 
@@ -519,6 +524,10 @@ RetCode OAStream::process_data()
         return RetCode::NOACTION;
     }
 
+    // PI clock drift compensation: adjust FIFO drain rate to stabilise odevice write-buffer level.
+    // See doc/clock_drift_compensation.md for full derivation.
+    oa_drift_adj_ = drift_pi_.update(odevice->wlatency());
+
     std::memset(databuf.get(), 0, ch * ps * sizeof(PCM_TYPE));
 
     {
@@ -529,9 +538,10 @@ RetCode OAStream::process_data()
         for (auto it = sessions.begin(); it != sessions.end();)
         {
             auto &context = *it;
-            unsigned int session_frames = context->sampler.src_fs * ti / 1000;
+            const unsigned int nominal_frames = context->sampler.src_fs * ti / 1000;
+            const auto adj_frames = static_cast<unsigned int>(std::lround(nominal_frames * oa_drift_adj_));
             unsigned int session_channels = context->sampler.src_ch;
-            bool has_data = context->session.load_aside(session_frames * session_channels * sizeof(PCM_TYPE));
+            bool has_data = context->session.load_aside(adj_frames * session_channels * sizeof(PCM_TYPE));
 
             if (!has_data)
             {
@@ -564,13 +574,17 @@ RetCode OAStream::process_data()
                 continue;
             }
 
-            unsigned int session_frames = context->sampler.src_fs * ti / 1000;
+            const unsigned int nominal_frames = context->sampler.src_fs * ti / 1000;
+            const auto adj_frames = static_cast<unsigned int>(std::lround(nominal_frames * oa_drift_adj_));
             unsigned int session_channels = context->sampler.src_ch;
             auto *session_source = reinterpret_cast<PCM_TYPE *>(context->session.data());
-            InterleavedView<const PCM_TYPE> iview(session_source, session_frames, session_channels);
+            InterleavedView<const PCM_TYPE> iview(session_source, adj_frames, session_channels);
             InterleavedView<PCM_TYPE> oview(reinterpret_cast<PCM_TYPE *>(mix_buf.get()), ps, ch);
 
             context->effector.decide_fade_type(highest_priority, context->priority);
+            // Apply the same adj to the resampler step so that with adj_frames input
+            // and effective_step = step * adj, output count stays constant at dst_fr.
+            context->sampler.set_ratio_adjust(oa_drift_adj_);
             auto ret = context->sampler.process(iview, oview, volume.load(), &context->effector);
             if (ret != RetCode::OK)
             {

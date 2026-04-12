@@ -84,6 +84,13 @@ SincInterpolator::SincInterpolator(int _order, int _precision, unsigned int _cha
 
 SincInterpolator::~SincInterpolator() = default;
 
+void SincInterpolator::set_ratio_adjust(double adj)
+{
+    constexpr double MIN_ADJ = 0.995;
+    constexpr double MAX_ADJ = 1.005;
+    ratio_adjust_ = (adj < MIN_ADJ) ? MIN_ADJ : (adj > MAX_ADJ ? MAX_ADJ : adj);
+}
+
 void SincInterpolator::process(ArrayView<const float> in, ArrayView<float> out, unsigned int ch)
 {
     const auto isize = in.size();
@@ -98,10 +105,11 @@ void SincInterpolator::process(ArrayView<const float> in, ArrayView<float> out, 
     size_t wr_pos = 0u;
     const auto prev_ptr = prev.get() + ch * order * 2;
 
+    const double effective_step = step * ratio_adjust_;
     while (x < avail)
     {
         out[wr_pos++] = interpolator(x, in.data(), prev_ptr);
-        x += step;
+        x += effective_step;
     }
 
     left[ch] = x - avail;
@@ -204,11 +212,13 @@ LocSampler::LocSampler(unsigned int sfs, unsigned int sch, unsigned int dfs, uns
     DBG_ASSERT_LE(ochan_map[0], dst_ch);
     DBG_ASSERT_LE(ochan_map[1], dst_ch);
 
-    // Allocate buffers for audio processing
+    // Allocate buffers for audio processing with ~1% overhead to absorb ±0.5% adj_session_frames variation
     auto src_fr = src_fs * ti / 1000;
     auto dst_fr = dst_fs * ti / 1000;
-    analysis_ibuffer = std::make_unique<ChannelBuffer<float>>(src_fr, std::max(src_ch, dst_ch));
-    analysis_obuffer = std::make_unique<ChannelBuffer<float>>(dst_fr, real_ochan);
+    auto src_fr_max = src_fr + src_fr / 100 + 2;
+    auto dst_fr_max = dst_fr + dst_fr / 100 + 2;
+    analysis_ibuffer = std::make_unique<ChannelBuffer<float>>(src_fr_max, std::max(src_ch, dst_ch));
+    analysis_obuffer = std::make_unique<ChannelBuffer<float>>(dst_fr_max, real_ochan);
     volume_controller = std::make_unique<VolumeController>(static_cast<float>(dst_fs), real_ochan);
 
     // Create resampler if needed
@@ -229,6 +239,19 @@ LocSampler::LocSampler(unsigned int sfs, unsigned int sch, unsigned int dfs, uns
 
 LocSampler::~LocSampler() = default;
 
+void LocSampler::set_ratio_adjust(double adj)
+{
+    if (resampler)
+    {
+        resampler->set_ratio_adjust(adj);
+    }
+}
+
+double LocSampler::get_ratio_adjust() const
+{
+    return resampler ? resampler->get_ratio_adjust() : 1.0;
+}
+
 RetCode LocSampler::process(const InterleavedView<const PCM_TYPE> &input, const InterleavedView<PCM_TYPE> &output,
                             unsigned int gain, FadeEffect *effetor) const
 {
@@ -239,11 +262,11 @@ RetCode LocSampler::process(const InterleavedView<const PCM_TYPE> &input, const 
     const auto obuffer = analysis_obuffer.get();
     ibuffer->set_num_channels(std::max(real_ochan, real_ichan));
 
-    // Validate buffer sizes
-    DBG_ASSERT_LE(input.size(), src_fr * src_ch);
+    // Validate buffer sizes – input may be slightly above/below nominal src_fr due to drift adj
+    DBG_ASSERT_LE(input.size(), analysis_ibuffer->num_frames() * src_ch);
     DBG_ASSERT_LE(output.size(), dst_fr * dst_ch);
 
-    if (input.size() > src_fr * src_ch || output.size() > dst_fr * dst_ch)
+    if (input.size() > analysis_ibuffer->num_frames() * src_ch || output.size() > dst_fr * dst_ch)
     {
         return RetCode::EPARAM;
     }
@@ -263,10 +286,12 @@ RetCode LocSampler::process(const InterleavedView<const PCM_TYPE> &input, const 
 
     // Step 3: Perform sample rate conversion if needed
     // To Convert sample rate from src_fs to dst_fs
+    // Pass the actual input frame count so SincInterpolator only processes fresh samples.
+    // Combined with effective_step = step * ratio_adjust_, output count stays constant at dst_fr.
     ChannelBuffer<float> *buf_ptr = ibuffer;
     if (dst_fs != src_fs)
     {
-        convert_sample_rate(ibuffer, obuffer);
+        convert_sample_rate(ibuffer, obuffer, input.samples_per_channel());
         buf_ptr = analysis_obuffer.get();
     }
 
@@ -360,17 +385,19 @@ void LocSampler::convert_channels(ChannelBuffer<float> *io) const
     }
 }
 
-void LocSampler::convert_sample_rate(ChannelBuffer<float> *input, ChannelBuffer<float> *output) const
+void LocSampler::convert_sample_rate(ChannelBuffer<float> *input, ChannelBuffer<float> *output,
+                                     size_t actual_src_frames) const
 {
     // Ensure input and output have the same number of channels
     DBG_ASSERT_EQ(input->num_channels(), output->num_channels());
     const auto channels = input->num_channels();
 
-    // Apply resampling if source and destination sample rates differ
+    // Apply resampling if source and destination sample rates differ.
+    // Use actual_src_frames (not buffer capacity) so the resampler sees only fresh data.
     for (size_t c = 0; c < channels; c++)
     {
-        // Resample each channel separately
-        resampler->process(input->channels_view()[c], output->channels_view()[c], static_cast<unsigned int>(c));
+        ArrayView<const float> in_view(input->channels_view()[c].data(), actual_src_frames);
+        resampler->process(in_view, output->channels_view()[c], static_cast<unsigned int>(c));
     }
 }
 

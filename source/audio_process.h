@@ -18,6 +18,90 @@
 void mix_channels(const int16_t *ssrc, unsigned int chan, unsigned int frames_num, int16_t *output);
 
 /**
+ * @brief Generic PI controller for scalar feedback loops.
+ *
+ * Output is clamped to [out_min, out_max]. An optional warmup period suppresses
+ * updates until enough samples have been collected for stable feedback.
+ *
+ * Usage per period:
+ * @code
+ *   double adj = pi.update(measured_value);
+ * @endcode
+ */
+class PIController
+{
+  public:
+    /**
+     * @param kp          Proportional gain
+     * @param ki          Integral gain
+     * @param target      Desired setpoint
+     * @param dt          Period length in seconds
+     * @param out_min     Lower output clamp
+     * @param out_max     Upper output clamp
+     * @param integral_clamp  Symmetric integral anti-windup limit
+     * @param warmup_cycles   Number of initial calls to skip (returns 1.0 during warmup)
+     */
+    PIController(double kp, double ki, double target, double dt, double out_min, double out_max, double integral_clamp,
+                 unsigned int warmup_cycles = 64)
+        : kp_(kp), ki_(ki), target_(target), dt_(dt), out_min_(out_min), out_max_(out_max),
+          integral_clamp_(integral_clamp), warmup_cycles_(warmup_cycles)
+    {
+    }
+
+    /**
+     * @brief Feeds a new measurement and returns the updated output.
+     *
+     * @param measured Current feedback value
+     * @return Clamped PI output (1.0 during warmup)
+     */
+    double update(double measured)
+    {
+        if (warmup_ < warmup_cycles_)
+        {
+            ++warmup_;
+            return 1.0;
+        }
+
+        const double e = target_ - measured;
+        integral_ += e * dt_;
+        if (integral_ > integral_clamp_)
+            integral_ = integral_clamp_;
+        else if (integral_ < -integral_clamp_)
+            integral_ = -integral_clamp_;
+
+        const double out = 1.0 + kp_ * e + ki_ * integral_;
+        last_output_ = out < out_min_ ? out_min_ : (out > out_max_ ? out_max_ : out);
+        return last_output_;
+    }
+
+    double output() const
+    {
+        return last_output_;
+    }
+
+    void reset()
+    {
+        integral_ = 0.0;
+        warmup_ = 0;
+        last_output_ = 1.0;
+    }
+
+  private:
+    const double kp_;
+    const double ki_;
+    const double target_;
+    const double dt_;
+    const double out_min_;
+    const double out_max_;
+    const double integral_clamp_;
+    const unsigned int warmup_cycles_;
+
+    double integral_ = 0.0;
+    double last_output_ = 1.0;
+    unsigned int warmup_ = 0;
+};
+
+/**
  * @brief Implements a sinc interpolation based resampler
  */
 class SincInterpolator
@@ -44,6 +128,20 @@ class SincInterpolator
      */
     void process(ArrayView<const float> in, ArrayView<float> out, unsigned int ch);
 
+    /**
+     * @brief Sets the ratio adjustment for clock drift compensation.
+     *
+     * Scales the nominal step by adj so that when the input is also scaled by adj,
+     * the output frame count remains exactly dst_fr.
+     * @param adj Multiplier for step (clamped to [0.995, 1.005])
+     */
+    void set_ratio_adjust(double adj);
+
+    double get_ratio_adjust() const
+    {
+        return ratio_adjust_;
+    }
+
   private:
     float kernel_func(double x, double cutoff) const;
 
@@ -53,7 +151,8 @@ class SincInterpolator
     const int order;
     const int quan;
     const unsigned int chan;
-    const double step;
+    const double step;          ///< Nominal step = src_fs / dst_fs
+    double ratio_adjust_ = 1.0; ///< PI-controlled multiplier; effective_step = step * ratio_adjust_
 
     std::vector<double> left;
     std::vector<bool> ready;
@@ -194,6 +293,14 @@ class LocSampler
     RetCode process(const InterleavedView<const PCM_TYPE> &input, const InterleavedView<PCM_TYPE> &output,
                     unsigned int gain, FadeEffect *effetor = nullptr) const;
 
+    /**
+     * @brief Propagates ratio adjustment to the internal SincInterpolator.
+     *
+     * No-op when src_fs == dst_fs (no resampler allocated).
+     */
+    void set_ratio_adjust(double adj);
+    double get_ratio_adjust() const;
+
   public:
     const unsigned int src_fs;
     const unsigned int src_ch;
@@ -242,7 +349,7 @@ class LocSampler
      * @param input Input audio data at source sample rate
      * @param output Output audio data at destination sample rate
      */
-    void convert_sample_rate(ChannelBuffer<float> *input, ChannelBuffer<float> *output) const;
+    void convert_sample_rate(ChannelBuffer<float> *input, ChannelBuffer<float> *output, size_t actual_src_frames) const;
 };
 
 #endif

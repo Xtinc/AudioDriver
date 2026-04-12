@@ -55,13 +55,20 @@ class OAStream : public std::enable_shared_from_this<OAStream>
         LocSampler sampler;
         FadeEffect effector;
 
+        // PI controller state for clock drift compensation
+        double drift_integral_ = 0.0;
+        double drift_target_bytes_ = 0.0;
+        unsigned int drift_warmup_ = 0;
+
         SessionContext(SourceUUID source_uuid, unsigned int src_fs, unsigned int src_ch, unsigned int dst_fs,
                        unsigned int dst_ch, unsigned int max_frames, const AudioChannelMap &imap,
-                       const AudioChannelMap &omap, unsigned int priority_value)
+                       const AudioChannelMap &omap, unsigned int priority_value, unsigned int ti_ms)
             : uuid(source_uuid), enabled(true), priority(priority_value),
-              session(max_frames * sizeof(PCM_TYPE), 2, src_ch),
+              session(max_frames * sizeof(PCM_TYPE), 3, src_ch),
               sampler(src_fs, src_ch, dst_fs, dst_ch, max_frames, imap, omap), effector(static_cast<float>(dst_fs))
         {
+            // Target: 1 playback periods worth of buffered bytes (≈10ms @ 10ms ti)
+            drift_target_bytes_ = static_cast<double>(src_fs) * (1.0 * ti_ms / 1000.0) * src_ch * sizeof(PCM_TYPE);
         }
     };
 
@@ -134,6 +141,11 @@ class OAStream : public std::enable_shared_from_this<OAStream>
     std::atomic_bool muted;
     StreamErrorCallback error_cb;
     void *error_cb_ptr;
+
+    // PI controller for device-buffer clock drift compensation
+    // target = 2×ti ms, dt = ti/1000 s, output clamped to [0.995, 1.005]
+    PIController drift_pi_;
+    double oa_drift_adj_ = 1.0;
 };
 
 class IAStream : public std::enable_shared_from_this<IAStream>

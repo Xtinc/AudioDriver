@@ -20,3 +20,6 @@ target_link_libraries(test_magic_encoding bettyaudio)
 
 add_executable(test_histogram test_histogram.cpp)
 target_link_libraries(test_histogram bettyaudio)
+
+add_executable(test_pi_controller test_pi_controller.cpp)
+target_link_libraries(test_pi_controller bettyaudio)
