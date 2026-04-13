@@ -184,14 +184,15 @@ bool NetState::update(uint32_t sequence, uint64_t timestamp, NetStatInfos &stats
     }
     // seq_diff == 0: duplicate, ignore
 
-    // Jitter (RFC 3550 §6.4.1): only for non-duplicate, non-severely-out-of-order packets
-    if (seq_diff >= 0 && last_timestamp > 0 && timestamp > 0)
+    // Jitter (RFC 3550 §6.4.1): only for non-duplicate, non-out-of-order packets
+    if (seq_diff > 0 && last_timestamp > 0 && timestamp > 0)
     {
         int64_t send_interval = static_cast<int64_t>(timestamp) - static_cast<int64_t>(last_timestamp);
         int64_t arrival_interval = static_cast<int64_t>(arrival_time) - static_cast<int64_t>(last_arrival_time);
         double jitter = std::abs(static_cast<double>(arrival_interval - send_interval));
         period_total_jitter += jitter;
         period_max_jitter = std::max(period_max_jitter, jitter);
+        period_jitter_samples++;
     }
 
     last_timestamp = timestamp;
@@ -205,7 +206,7 @@ bool NetState::update(uint32_t sequence, uint64_t timestamp, NetStatInfos &stats
     // Populate periodic report
     uint32_t total = period_packets_received + period_packets_lost;
     stats.packet_loss_rate = (total > 0) ? static_cast<double>(period_packets_lost) / total * 100.0 : 0.0;
-    stats.average_jitter = (period_packets_received > 0) ? period_total_jitter / period_packets_received : 0.0;
+    stats.average_jitter = (period_jitter_samples > 0) ? period_total_jitter / period_jitter_samples : 0.0;
     stats.max_jitter = period_max_jitter;
     stats.packets_received = period_packets_received;
     stats.packets_lost = period_packets_lost;
@@ -217,6 +218,7 @@ bool NetState::update(uint32_t sequence, uint64_t timestamp, NetStatInfos &stats
     period_packets_out_of_order = 0;
     period_total_jitter = 0.0;
     period_max_jitter = 0.0;
+    period_jitter_samples = 0;
     last_report_time = now;
 
     return true;
@@ -341,9 +343,6 @@ RetCode NetWorker::stop()
         std::lock_guard<std::mutex> lock(senders_mutex);
         senders.clear();
     }
-
-    receivers.clear();
-    decoders.clear();
 
     AUDIO_INFO_PRINT("NetWorker stopped");
     return {RetCode::OK, "Stopped"};
@@ -659,7 +658,7 @@ NetWorker::DecoderContext &NetWorker::get_decoder(SourceUUID sid, unsigned int c
 void NetWorker::process_and_deliver_audio(const DataPacket *header, const uint8_t *opus_data, size_t opus_size,
                                           SourceUUID ssid)
 {
-    if (!opus_data || opus_size == 0)
+    if (!header || !opus_data || opus_size == 0)
     {
         return;
     }
@@ -669,6 +668,11 @@ void NetWorker::process_and_deliver_audio(const DataPacket *header, const uint8_
     const auto sample_rate = header->sample_rate;
     const auto sequence = header->sequence;
     const auto timestamp = header->timestamp;
+
+    if (channels == 0 || sample_rate == 0)
+    {
+        return;
+    }
 
     AudioCodecType codec_type = DataPacket::decode_magic_codec(header->magic_num);
     AudioPriority priority = DataPacket::decode_magic_priority(header->magic_num);
@@ -696,11 +700,11 @@ void NetWorker::process_and_deliver_audio(const DataPacket *header, const uint8_
     // First packet may report seq_gap == 0 and must be accepted.
     // Duplicate packets (seq_gap == 0 after first decode) and out-of-order
     // packets (seq_gap < 0) are dropped to avoid inflating playout latency.
-    // if (stats.seq_gap < 0 || (stats.seq_gap == 0 && ctx.last_frames > 0))
-    // {
-    //     AUDIO_DEBUG_PRINT("Drop stale packet seq=%u gap=%d sender=%u", sequence, stats.seq_gap, ssid.sender_token);
-    //     return;
-    // }
+    if (stats.seq_gap < 0 || (stats.seq_gap == 0 && ctx.last_frames > 0))
+    {
+        AUDIO_DEBUG_PRINT("Drop stale packet seq=%u gap=%d sender=%u", sequence, stats.seq_gap, ssid.sender_token);
+        return;
+    }
 
     if (codec_type == AudioCodecType::OPUS)
     {
@@ -729,12 +733,8 @@ void NetWorker::process_and_deliver_audio(const DataPacket *header, const uint8_
             {
                 deliver(channels, static_cast<unsigned int>(fec_frames), sample_rate, ctx.fec_buffer.get(), ssid,
                         priority);
-                AUDIO_DEBUG_PRINT("FEC recovered %d frames before seq %u (sender %u)", fec_frames, sequence,
-                                  ssid.sender_token);
-            }
-            else
-            {
-                AUDIO_DEBUG_PRINT("FEC failed before seq %u: %s", sequence, opus_strerror(fec_frames));
+                // AUDIO_DEBUG_PRINT("FEC recovered %d frames before seq %u (sender %u)", fec_frames, sequence,
+                //                   ssid.sender_token);
             }
 
             // PLC: conceal any remaining missing packets (gap > 2)
@@ -770,6 +770,10 @@ void NetWorker::process_and_deliver_audio(const DataPacket *header, const uint8_
     else // PCM — pass through directly
     {
         int decoded_frames = static_cast<int>(opus_size / (channels * sizeof(int16_t)));
+        if (decoded_frames <= 0)
+        {
+            return;
+        }
         deliver(channels, static_cast<unsigned int>(decoded_frames), sample_rate,
                 reinterpret_cast<const int16_t *>(opus_data), ssid, priority);
     }

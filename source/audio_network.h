@@ -90,6 +90,7 @@ class NetState
     uint32_t period_packets_lost{0};
     double period_total_jitter{0.0};
     double period_max_jitter{0.0};
+    uint32_t period_jitter_samples{0};
     uint32_t period_packets_out_of_order{0};
 
     uint32_t highest_sequence_seen{0};
