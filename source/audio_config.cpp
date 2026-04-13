@@ -10,8 +10,9 @@ INIReader::INIReader(const std::string &filename) : filename_(filename)
         data_["HotPlug.InputDeviceName"] = "";
         data_["HotPlug.OutputDeviceID"] = "";
         data_["HotPlug.OutputDeviceName"] = "";
+        data_["Report.Interval"] = "60";
         data_["Report.Latency"] = "false";
-        data_["Report.LatencyInterval"] = "60";
+        data_["Report.NetStats"] = "false";
         data_["Log.DebugPrint"] = "false";
         (void)save();
     }

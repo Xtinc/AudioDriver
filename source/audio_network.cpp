@@ -1,8 +1,8 @@
 #include "audio_network.h"
 #include "audio_stream.h"
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
-#include <set>
 
 // KFifo
 KFifo::KFifo(size_t blk_sz, size_t blk_num, unsigned int channel)
@@ -138,19 +138,11 @@ bool KFifo::load_aside(size_t read_length)
 }
 
 // NetState implementation
-NetState::NetState() : last_report_time(std::chrono::steady_clock::now())
-{
-}
-
-void NetState::reset()
-{
-    *this = NetState();
-}
-
-bool NetState::update(uint32_t sequence, uint64_t timestamp, NetStatInfos &stats)
+void NetState::update(uint32_t sequence, uint64_t timestamp, NetStatInfos &stats)
 {
     auto now = std::chrono::steady_clock::now();
     uint64_t arrival_time = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+    stats.seq_gap = 0;
 
     period_packets_received++;
 
@@ -161,7 +153,7 @@ bool NetState::update(uint32_t sequence, uint64_t timestamp, NetStatInfos &stats
         last_timestamp = timestamp;
         last_arrival_time = arrival_time;
         stats.seq_gap = 0;
-        return false;
+        return;
     }
 
     // Signed difference handles uint32_t wrap-around correctly
@@ -197,29 +189,30 @@ bool NetState::update(uint32_t sequence, uint64_t timestamp, NetStatInfos &stats
 
     last_timestamp = timestamp;
     last_arrival_time = arrival_time;
+}
 
-    if (now - last_report_time < std::chrono::minutes(1))
+bool NetState::snapshot(NetStatInfos &stats)
+{
+    uint32_t total = period_packets_received + period_packets_lost;
+    if (total == 0 && period_packets_out_of_order == 0)
     {
         return false;
     }
 
-    // Populate periodic report
-    uint32_t total = period_packets_received + period_packets_lost;
     stats.packet_loss_rate = (total > 0) ? static_cast<double>(period_packets_lost) / total * 100.0 : 0.0;
     stats.average_jitter = (period_jitter_samples > 0) ? period_total_jitter / period_jitter_samples : 0.0;
     stats.max_jitter = period_max_jitter;
     stats.packets_received = period_packets_received;
     stats.packets_lost = period_packets_lost;
     stats.packets_out_of_order = period_packets_out_of_order;
+    stats.seq_gap = 0;
 
-    // Reset period counters
     period_packets_received = 0;
     period_packets_lost = 0;
     period_packets_out_of_order = 0;
     period_total_jitter = 0.0;
     period_max_jitter = 0.0;
     period_jitter_samples = 0;
-    last_report_time = now;
 
     return true;
 }
@@ -252,13 +245,13 @@ static RetCode resolve_endpoint(const std::string &ip, uint16_t port, asio::ip::
 }
 
 NetWorker::NetWorker(asio::io_context &ioc, uint16_t port, const std::string &local_ip)
-    : retry_count(0), io_context(ioc), running(false), local_session_ip(0),
+    : receive_strand(asio::make_strand(ioc)), running(false), local_session_ip(0),
       receive_buffer(new char[NETWORK_MAX_BUFFER_SIZE])
 {
     try
     {
         // Create receive socket and bind to specific port
-        receive_socket = std::make_unique<udp::socket>(io_context);
+        receive_socket = std::make_unique<udp::socket>(ioc);
         receive_socket->open(udp::v4());
 
         asio::socket_base::receive_buffer_size option_recv(262144); // 256KB
@@ -273,7 +266,7 @@ NetWorker::NetWorker(asio::io_context &ioc, uint16_t port, const std::string &lo
         }
 
         // Create send socket without binding to specific port
-        send_socket = std::make_unique<udp::socket>(io_context);
+        send_socket = std::make_unique<udp::socket>(ioc);
         send_socket->open(udp::v4());
 
         asio::socket_base::send_buffer_size option_send(262144); // 256KB
@@ -589,22 +582,24 @@ RetCode NetWorker::send_audio(uint8_t sender_id, const int16_t *data, unsigned i
 void NetWorker::start_receive_loop()
 {
     auto self = shared_from_this();
-    auto endpoint = std::make_shared<asio::ip::udp::endpoint>();
-    receive_socket->async_receive_from(asio::buffer(receive_buffer.get(), NETWORK_MAX_BUFFER_SIZE), *endpoint,
-                                       [self, endpoint](const asio::error_code &error, std::size_t bytes_transferred) {
-                                           self->handle_receive(error, bytes_transferred, *endpoint);
-                                       });
+    receive_socket->async_receive_from(
+        asio::buffer(receive_buffer.get(), NETWORK_MAX_BUFFER_SIZE), receive_endpoint,
+        asio::bind_executor(receive_strand, [self](const asio::error_code &error, std::size_t bytes_transferred) {
+            self->handle_receive(error, bytes_transferred);
+        }));
 }
 
-void NetWorker::handle_receive(const asio::error_code &error, std::size_t bytes_transferred,
-                               const asio::ip::udp::endpoint &sender_endpoint)
+void NetWorker::handle_receive(const asio::error_code &error, std::size_t bytes_transferred)
 {
     if (error)
     {
         if (error != asio::error::operation_aborted)
         {
             AUDIO_DEBUG_PRINT("Receive error: %s", error.message().c_str());
-            retry_receive_with_backoff();
+            if (running)
+            {
+                start_receive_loop();
+            }
         }
         return;
     }
@@ -615,7 +610,7 @@ void NetWorker::handle_receive(const asio::error_code &error, std::size_t bytes_
         auto data_header = reinterpret_cast<const DataPacket *>(receive_buffer.get());
         const auto *payload = reinterpret_cast<const uint8_t *>(receive_buffer.get() + sizeof(DataPacket));
         size_t payload_size = bytes_transferred - sizeof(DataPacket);
-        auto gateway_ip = sender_endpoint.address().is_v4() ? sender_endpoint.address().to_v4().to_uint() : 0;
+        auto gateway_ip = receive_endpoint.address().is_v4() ? receive_endpoint.address().to_v4().to_uint() : 0;
         process_and_deliver_audio(data_header, payload, payload_size,
                                   SourceUUID{data_header->session_ip, gateway_ip, data_header->sender_id});
     }
@@ -626,19 +621,67 @@ void NetWorker::handle_receive(const asio::error_code &error, std::size_t bytes_
     }
 }
 
-void NetWorker::retry_receive_with_backoff()
+void NetWorker::query_stats()
 {
-    int delay_ms = std::min(100 * (1 << retry_count), 30000);
-    retry_count = std::min(retry_count + 1, 8);
-
     auto self = shared_from_this();
-    auto timer = std::make_shared<asio::steady_timer>(io_context);
-    timer->expires_after(std::chrono::milliseconds(delay_ms));
-    timer->async_wait([self, timer](const asio::error_code &ec) {
-        if (!ec && self->running)
+    asio::post(receive_strand, [self]() {
+        size_t buf_size = 64 + self->decoders.size() * 192;
+        auto buffer = new char[buf_size];
+        auto ptr = buffer;
+        size_t remain = buf_size;
+        unsigned int line_no = 0;
+
+        for (auto &entry : self->decoders)
         {
-            self->start_receive_loop();
+            auto &source_id = entry.first;
+            auto &ctx = entry.second;
+            NetStatInfos stats{};
+            if (!ctx.stats.snapshot(stats))
+            {
+                continue;
+            }
+
+            if (line_no == 0)
+            {
+                int len = snprintf(ptr, remain, "NETSTATS");
+                if (len > 0)
+                {
+                    size_t used = static_cast<size_t>(len);
+                    if (used >= remain)
+                    {
+                        used = remain - 1;
+                    }
+                    ptr += used;
+                    remain -= used;
+                }
+            }
+
+            line_no++;
+
+            int len =
+                snprintf(ptr, remain,
+                         "\n    [%u]. 0x%08X|0x%08X:%u loss=%.2f%% jit_avg=%.2fms jit_max=%.2fms rx=%u lost=%u ooo=%u",
+                         line_no, source_id.sender_ip, source_id.gateway_ip, source_id.sender_token,
+                         stats.packet_loss_rate, stats.average_jitter, stats.max_jitter, stats.packets_received,
+                         stats.packets_lost, stats.packets_out_of_order);
+            if (len > 0)
+            {
+                size_t used = static_cast<size_t>(len);
+                if (used >= remain)
+                {
+                    used = remain - 1;
+                }
+                ptr += used;
+                remain -= used;
+            }
         }
+
+        if (line_no > 0)
+        {
+            AUDIO_INFO_PRINT("%s", buffer);
+        }
+
+        delete[] buffer;
     });
 }
 
@@ -689,13 +732,7 @@ void NetWorker::process_and_deliver_audio(const DataPacket *header, const uint8_
     auto &ctx = get_decoder(ssid, channels, sample_rate, codec_type);
 
     NetStatInfos stats{};
-    if (ctx.update_stats(sequence, timestamp, stats) && (stats.packets_lost > 0 || stats.packets_out_of_order > 0))
-    {
-        AUDIO_INFO_PRINT(
-            "NETSTATS(0x%08X|0x%08X:%u) : [loss] %.2f%%, [jitter] %.2fms, [received] %u, [lost] %u, [out-of-order] %u",
-            ssid.sender_ip, ssid.gateway_ip, ssid.sender_token, stats.packet_loss_rate, stats.average_jitter,
-            stats.packets_received, stats.packets_lost, stats.packets_out_of_order);
-    }
+    ctx.update_stats(sequence, timestamp, stats);
 
     // First packet may report seq_gap == 0 and must be accepted.
     // Duplicate packets (seq_gap == 0 after first decode) and out-of-order

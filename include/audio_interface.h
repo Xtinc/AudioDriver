@@ -840,7 +840,7 @@ class AudioCenter
     StreamErrorCallback stream_error_cb;
     void *stream_error_cb_ptr;
 
-    void schedule_latency_query(int interval_sec);
+    void schedule_query(int interval_sec, bool latency, bool net_stats);
 
     std::unique_ptr<INIReader> config;     /**< Configuration manager */
     std::shared_ptr<NetWorker> net_mgr;    /**< Network manager */

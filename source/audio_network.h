@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
-#include <deque>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -76,9 +75,8 @@ struct NetStatInfos
 class NetState
 {
   public:
-    NetState();
-    bool update(uint32_t sequence, uint64_t timestamp, NetStatInfos &stats);
-    void reset();
+    void update(uint32_t sequence, uint64_t timestamp, NetStatInfos &stats);
+    bool snapshot(NetStatInfos &stats);
 
   private:
     // Jitter tracking (RFC 3550): timestamps of the most recently processed packet
@@ -95,7 +93,6 @@ class NetState
 
     uint32_t highest_sequence_seen{0};
     bool first_packet{true};
-    std::chrono::steady_clock::time_point last_report_time;
 };
 
 template <size_t N> class Histogram
@@ -532,9 +529,9 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
             return *this;
         }
 
-        bool update_stats(uint32_t sequence, uint64_t timestamp, NetStatInfos &stats_info)
+        void update_stats(uint32_t sequence, uint64_t timestamp, NetStatInfos &stats_info)
         {
-            return stats.update(sequence, timestamp, stats_info);
+            stats.update(sequence, timestamp, stats_info);
         }
     };
 
@@ -554,12 +551,11 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     RetCode register_receiver(uint8_t token, ReceiveCallback callback);
     RetCode unregister_receiver(uint8_t token);
     RetCode clear_all_destinations(uint8_t sender_id);
+    void NetWorker::query_stats();
 
   private:
     void start_receive_loop();
-    void handle_receive(const asio::error_code &error, std::size_t bytes_transferred,
-                        const asio::ip::udp::endpoint &sender_endpoint);
-    void retry_receive_with_backoff();
+    void handle_receive(const asio::error_code &error, std::size_t bytes_transferred);
     DecoderContext &get_decoder(SourceUUID sid, unsigned int channels, unsigned int sample_rate, AudioCodecType codec);
 
     void process_and_deliver_audio(const DataPacket *header, const uint8_t *opus_data, size_t opus_size,
@@ -570,15 +566,14 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
                           AudioCodecType codec_type, AudioPriority priority);
 
   private:
-    int retry_count;
-
-    asio::io_context &io_context;
+    asio::strand<asio::io_context::executor_type> receive_strand;
     std::atomic<bool> running;
     uint32_t local_session_ip;
 
     std::unique_ptr<asio::ip::udp::socket> receive_socket;
     std::unique_ptr<asio::ip::udp::socket> send_socket;
     std::unique_ptr<char[]> receive_buffer;
+    asio::ip::udp::endpoint receive_endpoint;
     std::map<uint8_t, SenderContext> senders;
     std::mutex senders_mutex;
 

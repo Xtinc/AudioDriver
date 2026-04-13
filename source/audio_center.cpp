@@ -830,45 +830,51 @@ RetCode AudioCenter::start()
         }
     }
 
-    if ((*config)["Report.Latency"].cast<bool>(false))
+    auto interval = (*config)["Report.Interval"].cast<int>(60);
+    if (interval >= 10)
     {
-        auto interval = (*config)["Report.LatencyInterval"].cast<int>(60);
-        if (interval >= 10)
-        {
-            schedule_latency_query(interval);
-        }
+        schedule_query(interval, (*config)["Report.Latency"].cast<bool>(false),
+                       (*config)["Report.NetStats"].cast<bool>(false));
     }
 
     AUDIO_DEBUG_PRINT("AudioCenter successfully started - transitioned to READY state");
     return RetCode::OK;
 }
 
-void AudioCenter::schedule_latency_query(int interval_sec)
+void AudioCenter::schedule_query(int interval_sec, bool latency, bool net_stats)
 {
     auto timer = std::make_shared<asio::steady_timer>(BG_SERVICE);
     timer->expires_after(std::chrono::seconds(interval_sec));
-    timer->async_wait([this, timer, interval_sec](const asio::error_code &ec) {
+    timer->async_wait([this, timer, interval_sec, latency, net_stats](const asio::error_code &ec) {
         if (ec || center_state.load() != State::READY)
         {
             return;
         }
 
-        for (auto &entry : ias_map)
+        if (net_mgr && net_stats)
         {
-            if (entry.second)
-            {
-                entry.second->query_latency();
-            }
+            net_mgr->query_stats();
         }
-        for (auto &entry : oas_map)
+
+        if (latency)
         {
-            if (entry.second)
+            for (auto &entry : ias_map)
             {
-                entry.second->query_latency();
+                if (entry.second)
+                {
+                    entry.second->query_latency();
+                }
+            }
+            for (auto &entry : oas_map)
+            {
+                if (entry.second)
+                {
+                    entry.second->query_latency();
+                }
             }
         }
 
-        schedule_latency_query(interval_sec);
+        schedule_query(interval_sec, latency, net_stats);
     });
 }
 

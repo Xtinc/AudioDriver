@@ -253,8 +253,8 @@ RetCode OAStream::direct_push(unsigned int chan, unsigned int frames, unsigned i
         sessions.emplace_back(std::make_unique<SessionContext>(source_id, sample_rate, chan, fs, ch, std_fr, imap, omap,
                                                                enum2val(priority)));
         it = std::prev(sessions.end());
-        AUDIO_INFO_PRINT("%u receiver New connection: %u (IP: 0x%08X|0x%08X)", token, source_id.sender_token,
-                         source_id.sender_ip, source_id.gateway_ip);
+        AUDIO_INFO_PRINT("%u receiver New connection: 0x%08X|0x%08X:%u", token, source_id.sender_ip,
+                         source_id.gateway_ip, source_id.sender_token);
     }
 
     bool success = (*it)->session.store(reinterpret_cast<const char *>(data), frames * chan * sizeof(PCM_TYPE));
@@ -412,7 +412,7 @@ void OAStream::query_latency() const
             auto buffer = new char[buf_size];
             auto ptr = buffer;
             auto len =
-                snprintf(ptr, buf_size, "LAC %03u [w=%.2fms,r=%.2fms]", self->token, write_latency_ms, read_latency_ms);
+                snprintf(ptr, buf_size, "LAC %u [w=%.2fms,r=%.2fms]", self->token, write_latency_ms, read_latency_ms);
             ptr += len;
             buf_size -= len;
 
@@ -423,8 +423,8 @@ void OAStream::query_latency() const
                                           (ctx->sampler.src_fs * ctx->sampler.src_ch * sizeof(PCM_TYPE));
                 double session_rlatency = ctx->session.read_water_level() * 1000.0 /
                                           (ctx->sampler.src_fs * ctx->sampler.src_ch * sizeof(PCM_TYPE));
-                len = snprintf(ptr, buf_size, "\n\t%02d.%03u@0x%08X|0x%08X [w=%.2fms,r=%.2fms]", idx++,
-                               ctx->uuid.sender_token, ctx->uuid.sender_ip, ctx->uuid.gateway_ip, session_wlatency,
+                len = snprintf(ptr, buf_size, "\n    [%d]. 0x%08X|0x%08X:%u [w=%.2fms,r=%.2fms]", ++idx,
+                               ctx->uuid.sender_ip, ctx->uuid.gateway_ip, ctx->uuid.sender_token, session_wlatency,
                                session_rlatency);
                 ptr += len;
                 buf_size -= len;
@@ -1051,7 +1051,7 @@ void IAStream::query_latency() const
         }
         double write_latency_ms = self->idevice->wlatency();
         double read_latency_ms = self->idevice->rlatency();
-        AUDIO_INFO_PRINT("LAC %03u [w=%.2fms,r=%.2fms]", self->token, write_latency_ms, read_latency_ms);
+        AUDIO_INFO_PRINT("LAC %u [w=%.2fms,r=%.2fms]", self->token, write_latency_ms, read_latency_ms);
     });
 }
 
