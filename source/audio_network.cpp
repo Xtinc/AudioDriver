@@ -37,31 +37,36 @@ bool KFifo::store(const char *input_addr, size_t write_length)
         return false;
     }
 
-    std::lock_guard<std::mutex> lck(io_mtx);
-    whist.add(static_cast<double>(length));
-    size_t space = available_space();
-    size_t actual_write = std::min(write_length, space);
-
-    if (actual_write == 0)
+    if (write_length > max_length)
     {
         return false;
     }
 
-    if (max_length - tail >= actual_write)
+    std::lock_guard<std::mutex> lck(io_mtx);
+    whist.add(static_cast<double>(length));
+    size_t space = available_space();
+    if (write_length > space)
     {
-        memcpy(memory_addr + tail, input_addr, actual_write);
-        tail = (tail + actual_write == max_length) ? 0 : tail + actual_write;
+        size_t drop_length = write_length - space;
+        head = (head + drop_length) % max_length;
+        length -= drop_length;
+    }
+
+    if (max_length - tail >= write_length)
+    {
+        memcpy(memory_addr + tail, input_addr, write_length);
+        tail = (tail + write_length == max_length) ? 0 : tail + write_length;
     }
     else
     {
         size_t first_part = max_length - tail;
         memcpy(memory_addr + tail, input_addr, first_part);
-        memcpy(memory_addr, input_addr + first_part, actual_write - first_part);
-        tail = actual_write - first_part;
+        memcpy(memory_addr, input_addr + first_part, write_length - first_part);
+        tail = write_length - first_part;
     }
 
-    length += actual_write;
-    return actual_write == write_length;
+    length += write_length;
+    return true;
 }
 
 bool KFifo::load(char *output_addr, size_t read_length)
