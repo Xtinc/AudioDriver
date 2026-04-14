@@ -161,11 +161,14 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     RetCode stop();
     RetCode initialize_network(const std::shared_ptr<NetWorker> &nw, AudioCodecType codec);
     RetCode restart(const AudioDeviceName &_name);
-    RetCode reset2echo(const AudioDeviceName &_name, unsigned int _fs, unsigned int _ch);
     RetCode connect(const std::shared_ptr<OAStream> &oas);
     RetCode disconnect(const std::shared_ptr<OAStream> &oas);
-    RetCode direct_push(const char *data, size_t len) const;
     RetCode clear_all_connections();
+
+    // Called by OAStream when this IAStream is used as a render sink (listener mode).
+    // Replaces device I/O with direct in-thread processing driven by the OAStream.
+    void init_as_render_sink(unsigned int src_fs, unsigned int src_ch);
+    void process_render(const char *data, size_t len);
 
     void pause();
     void resume();
@@ -185,7 +188,6 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     void execute_loop(TimePointer tp, unsigned int cnt);
     RetCode process_data();
     RetCode create_device(const AudioDeviceName &_name);
-    RetCode create_device(const AudioDeviceName &_name, unsigned int _fs, unsigned int _ch);
     RetCode swap_device(idevice_ptr &new_device);
     void schedule_auto_reset();
     void schedule_callback();
@@ -228,6 +230,7 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     StreamErrorCallback error_cb;
     void *error_cb_ptr;
     bool direct_mode;
+    unsigned int render_src_ch;
 };
 
 class AudioPlayer : public std::enable_shared_from_this<AudioPlayer>

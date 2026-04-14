@@ -212,12 +212,7 @@ RetCode OAStream::restart(const AudioDeviceName &_name)
 
     if (np)
     {
-        ret = np->reset2echo(_name, fs, ch);
-        if (!ret)
-        {
-            AUDIO_ERROR_PRINT("Failed to reset listener to echo: %s", ret.what());
-            return ret;
-        }
+        np->init_as_render_sink(fs, ch);
 
         ret = np->start();
         if (!ret)
@@ -449,12 +444,7 @@ void OAStream::register_listener(const std::shared_ptr<IAStream> &ias)
         return;
     }
 
-    auto ret = ias->reset2echo({odevice->hw_name, 0}, fs, ch);
-    if (!ret)
-    {
-        AUDIO_ERROR_PRINT("Failed to reset echo: %s", ret.what());
-        return;
-    }
+    ias->init_as_render_sink(fs, ch);
 
     std::lock_guard<std::mutex> grd(listener_mtx);
     listener = ias;
@@ -596,7 +586,7 @@ RetCode OAStream::process_data()
 
     if (np)
     {
-        (void)np->direct_push(databuf.get(), ps * ch * sizeof(PCM_TYPE));
+        np->process_render(databuf.get(), ps * ch * sizeof(PCM_TYPE));
     }
 
     return ret;
@@ -717,7 +707,8 @@ IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
       imap(_ch == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP), priority(_priority), usr_name(_name), ias_ready(false),
       exec_timer(BG_SERVICE), exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE), volume(100),
       muted(false), usr_cb{nullptr, 0, UsrCallBackMode::PROCESSED, nullptr}, cb_timer(BG_SERVICE),
-      cb_strand(asio::make_strand(BG_SERVICE)), error_cb(nullptr), error_cb_ptr(nullptr)
+      cb_strand(asio::make_strand(BG_SERVICE)), error_cb(nullptr), error_cb_ptr(nullptr), direct_mode(false),
+      render_src_ch(0)
 {
     auto ret = create_device(_name);
     if (ret)
@@ -738,7 +729,8 @@ IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
       imap(_imap), priority(_priority), usr_name(_name), ias_ready(false), exec_timer(BG_SERVICE),
       exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE), volume(100), muted(false),
       usr_cb{nullptr, 0, UsrCallBackMode::PROCESSED, nullptr}, cb_timer(BG_SERVICE),
-      cb_strand(asio::make_strand(BG_SERVICE)), error_cb(nullptr), error_cb_ptr(nullptr)
+      cb_strand(asio::make_strand(BG_SERVICE)), error_cb(nullptr), error_cb_ptr(nullptr), direct_mode(false),
+      render_src_ch(0)
 {
     DBG_ASSERT_GE(dev_ch, 2);
     DBG_ASSERT_LT(imap[0], dev_ch);
@@ -792,23 +784,20 @@ RetCode IAStream::restart(const AudioDeviceName &_name)
     return start();
 }
 
-RetCode IAStream::reset2echo(const AudioDeviceName &_name, unsigned int _fs, unsigned int _ch)
+void IAStream::init_as_render_sink(unsigned int src_fs, unsigned int src_ch)
 {
-    if (rst_order != ResetOrd::RESET_NONE)
-    {
-        return {RetCode::FAILED, "Auto reset enabled, manual reset not allowed"};
-    }
-
     stop();
 
-    auto ret = create_device(_name, _fs, _ch);
-    if (!ret)
-    {
-        AUDIO_ERROR_PRINT("Failed to create device: %s", ret.what());
-    }
+    auto src_ps = src_fs * ti / 1000;
+    auto new_sampler = std::make_unique<LocSampler>(src_fs, src_ch, fs, ch, src_ps, imap,
+                                                    ch == 1 ? DEFAULT_MONO_MAP : DEFAULT_DUAL_MAP);
+    auto new_usr_buf = std::make_unique<char[]>(ps * ch * sizeof(PCM_TYPE));
 
+    sampler = std::move(new_sampler);
+    usr_buf = std::move(new_usr_buf);
+    render_src_ch = src_ch;
+    direct_mode = true;
     ias_ready = true;
-    return ret;
 }
 
 RetCode IAStream::start()
@@ -816,6 +805,16 @@ RetCode IAStream::start()
     if (!ias_ready)
     {
         return {RetCode::FAILED, "Device not ready"};
+    }
+
+    if (direct_mode)
+    {
+        // Render-sink mode: driven by OAStream, no device I/O or timer loop needed.
+        if (usr_cb.cb)
+        {
+            schedule_callback();
+        }
+        return RetCode::OK;
     }
 
     auto ret = idevice->start();
@@ -855,6 +854,11 @@ RetCode IAStream::stop()
     if (usr_cb.cb)
     {
         cb_timer.cancel();
+    }
+
+    if (direct_mode)
+    {
+        return RetCode::OK;
     }
 
     return idevice->stop();
@@ -987,15 +991,64 @@ void IAStream::resume()
     execute_loop({}, 0);
 }
 
-RetCode IAStream::direct_push(const char *data, size_t len) const
+void IAStream::process_render(const char *data, size_t len)
 {
+    if (!ias_ready || muted)
+    {
+        return;
+    }
+
+    unsigned int src_fr = static_cast<unsigned int>(len) / (sizeof(PCM_TYPE) * render_src_ch);
+
     if (usr_cb.cb && usr_cb.mode == UsrCallBackMode::OBSERVER)
     {
-        auto dev_ch = idevice->ch();
-        usr_cb.cb(reinterpret_cast<const PCM_TYPE *>(data), dev_ch,
-                  static_cast<unsigned int>(len) / (sizeof(PCM_TYPE) * dev_ch), usr_cb.ptr);
+        usr_cb.cb(reinterpret_cast<const PCM_TYPE *>(data), render_src_ch, src_fr, usr_cb.ptr);
     }
-    return idevice->write(data, len);
+
+    if (usr_cb.cb && usr_cb.mode == UsrCallBackMode::RAW)
+    {
+        (void)session->store(data, len);
+    }
+
+    InterleavedView<PCM_TYPE> iview(reinterpret_cast<PCM_TYPE *>(const_cast<char *>(data)), src_fr, render_src_ch);
+    InterleavedView<PCM_TYPE> oview(reinterpret_cast<PCM_TYPE *>(usr_buf.get()), ps, ch);
+
+    if (filter_bank)
+    {
+        filter_bank->process(iview);
+    }
+
+    auto ret = sampler->process(iview, oview, volume.load());
+    if (ret != RetCode::OK)
+    {
+        AUDIO_DEBUG_PRINT("process_render: resample failed: %s", ret.what());
+        return;
+    }
+
+    PCM_TYPE *src = &oview.data()[0];
+
+    if (usr_cb.cb && usr_cb.mode == UsrCallBackMode::PROCESSED)
+    {
+        (void)session->store(reinterpret_cast<const char *>(src), ps * ch * sizeof(PCM_TYPE));
+    }
+
+    destinations local_dests;
+    {
+        std::lock_guard<std::mutex> grd(dest_mtx);
+        local_dests = dests;
+    }
+    for (const auto &dest : local_dests)
+    {
+        if (auto np = dest.lock())
+        {
+            np->direct_push(ch, ps, fs, src, SourceUUID{0, 0, token}, priority);
+        }
+    }
+
+    if (auto np = networker.lock())
+    {
+        np->send_audio(token, src, ps, priority);
+    }
 }
 
 bool IAStream::available() const
@@ -1202,11 +1255,7 @@ RetCode IAStream::process_data()
 RetCode IAStream::create_device(const AudioDeviceName &_name)
 {
     std::unique_ptr<AudioDevice> new_device;
-    if (_name.first == "echo")
-    {
-        new_device = make_audio_driver(ECHO_IAS, _name, fs, ps, spf_ch, ResetOrd::RESET_NONE);
-    }
-    else if (_name.first.substr(0, 4) == "null")
+    if (_name.first.substr(0, 4) == "null")
     {
         new_device = make_audio_driver(NULL_IAS, _name, fs, ps, spf_ch, ResetOrd::RESET_NONE);
     }
@@ -1231,23 +1280,6 @@ RetCode IAStream::create_device(const AudioDeviceName &_name)
         return ret;
     }
 
-    return swap_device(new_device);
-}
-
-RetCode IAStream::create_device(const AudioDeviceName &_name, unsigned int _fs, unsigned int _ch)
-{
-    auto new_device = make_audio_driver(ECHO_IAS, _name, _fs, _fs * ti / 1000, _ch, ResetOrd::RESET_NONE);
-    if (!new_device)
-    {
-        return {RetCode::FAILED, "Failed to create audio driver"};
-    }
-
-    auto ret = new_device->open();
-    if (!ret)
-    {
-        AUDIO_ERROR_PRINT("Failed to open capture device [%s]: %s", _name.first.c_str(), ret.what());
-        return ret;
-    }
     return swap_device(new_device);
 }
 

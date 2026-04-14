@@ -1247,95 +1247,6 @@ double WaveDevice::rlatency() const
     return 0.0;
 }
 
-// Echo device
-class SimuDevice final : public AudioDevice
-{
-  public:
-    SimuDevice(const std::string &name, bool capture, unsigned int fs, unsigned int ps, unsigned int ch);
-    ~SimuDevice() override;
-
-    RetCode open() override;
-    RetCode start() override;
-    RetCode stop() override;
-    RetCode write(const char *data, size_t len) override;
-    RetCode read(char *data, size_t len) override;
-    double wlatency() const override;
-    double rlatency() const override;
-};
-
-SimuDevice::SimuDevice(const std::string &name, bool capture, unsigned int fs, unsigned int ps, unsigned int ch)
-    : AudioDevice(name, capture, fs, ps, ch, ResetOrd::RESET_NONE)
-{
-}
-
-SimuDevice::~SimuDevice()
-{
-    (void)stop();
-}
-
-RetCode SimuDevice::open()
-{
-    hstate = STREAM_OPENED;
-    io_buffer = std::make_unique<KFifo>(dev_ps * sizeof(PCM_TYPE), 4, dev_ch);
-    AUDIO_INFO_PRINT("Simu device [%s] opened. fs = %u, ps = %u, chan = %u", hw_name.c_str(), dev_fs, dev_ps, dev_ch);
-    return {RetCode::OK, "Success"};
-}
-
-RetCode SimuDevice::start()
-{
-    Mode expected = STREAM_OPENED;
-    if (!hstate.compare_exchange_strong(expected, STREAM_RUNNING) &&
-        !(expected = STREAM_STOPPED, hstate.compare_exchange_strong(expected, STREAM_RUNNING)))
-    {
-        return {RetCode::FAILED, "stream not opened or stopped"};
-    }
-
-    AUDIO_INFO_PRINT("Simu device [%s] started", hw_name.c_str());
-    return {RetCode::OK, "Success"};
-}
-
-RetCode SimuDevice::stop()
-{
-    Mode expected = STREAM_RUNNING;
-    if (!hstate.compare_exchange_strong(expected, STREAM_STOPPED))
-    {
-        return {RetCode::OK, "Not running"};
-    }
-
-    AUDIO_INFO_PRINT("Simu device [%s] stopped", hw_name.c_str());
-    return {RetCode::OK, "Success"};
-}
-
-RetCode SimuDevice::write(const char *data, size_t len)
-{
-    if (hstate != STREAM_RUNNING)
-    {
-        return {RetCode::FAILED, "Device not running"};
-    }
-
-    return io_buffer->store(data, len) ? RetCode::OK : RetCode::NOACTION;
-}
-
-RetCode SimuDevice::read(char *data, size_t len)
-{
-    if (hstate != STREAM_RUNNING)
-    {
-        return {RetCode::FAILED, "Device not running"};
-    }
-
-    return io_buffer->load(data, len) ? RetCode::OK : RetCode::NOACTION;
-}
-
-double SimuDevice::wlatency() const
-{
-    return io_buffer->write_water_level() * 1000.0 / (dev_fs * dev_ch * sizeof(PCM_TYPE));
-}
-
-double SimuDevice::rlatency() const
-{
-    return io_buffer->read_water_level() * 1000.0 / (dev_fs * dev_ch * sizeof(PCM_TYPE));
-}
-
 // Null device
 class NullDevice final : public AudioDevice
 {
@@ -1452,10 +1363,6 @@ std::unique_ptr<AudioDevice> make_audio_driver(int type, const AudioDeviceName &
     else if (type == WAVE_OAS)
     {
         return std::make_unique<WaveDevice>(name.first, false, fs, ps, ch, name.second);
-    }
-    else if (type == ECHO_IAS)
-    {
-        return std::make_unique<SimuDevice>(name.first + "_echo", true, fs, ps, ch);
     }
     else if (type == NULL_IAS)
     {
