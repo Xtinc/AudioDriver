@@ -646,7 +646,7 @@ void NetWorker::query_stats()
 
             int len = snprintf(
                 ptr, remain,
-                "\n    [%u]. (0x%08X|0x%08X:%u) -> %u loss=%.2f%% jit_avg=%.2fms jit_max=%.2fms rx=%u lost=%u ooo=%u",
+                "\n    [%u]. 0x%08X|0x%08X:%u -> %u loss=%.2f%% jit_avg=%.2fms jit_max=%.2fms rx=%u lost=%u ooo=%u",
                 line_no, source_id.sender_ip, source_id.gateway_ip, source_id.sender_token, source_id.receiver_token,
                 stats.packet_loss_rate, stats.average_jitter, stats.max_jitter, stats.packets_received,
                 stats.packets_lost, stats.packets_out_of_order);

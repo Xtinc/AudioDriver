@@ -418,7 +418,7 @@ void OAStream::query_latency() const
                                           (ctx->sampler.src_fs * ctx->sampler.src_ch * sizeof(PCM_TYPE));
                 double session_rlatency = ctx->session.read_water_level() * 1000.0 /
                                           (ctx->sampler.src_fs * ctx->sampler.src_ch * sizeof(PCM_TYPE));
-                len = snprintf(ptr, buf_size, "\n    [%d]. (0x%08X|0x%08X:%u) [w=%.2fms,r=%.2fms]", ++idx,
+                len = snprintf(ptr, buf_size, "\n    [%d]. 0x%08X|0x%08X:%u [w=%.2fms,r=%.2fms]", ++idx,
                                ctx->uuid.sender_ip, ctx->uuid.gateway_ip, ctx->uuid.sender_token, session_wlatency,
                                session_rlatency);
                 ptr += len;
