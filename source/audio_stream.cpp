@@ -248,7 +248,7 @@ RetCode OAStream::direct_push(unsigned int chan, unsigned int frames, unsigned i
         sessions.emplace_back(std::make_unique<SessionContext>(source_id, sample_rate, chan, fs, ch, std_fr, imap, omap,
                                                                enum2val(priority)));
         it = std::prev(sessions.end());
-        AUDIO_INFO_PRINT("%u receiver New connection: 0x%08X|0x%08X:%u", token, source_id.sender_ip,
+        AUDIO_INFO_PRINT("%u receiver New connection: (0x%08X|0x%08X:%u)", token, source_id.sender_ip,
                          source_id.gateway_ip, source_id.sender_token);
     }
 
@@ -418,7 +418,7 @@ void OAStream::query_latency() const
                                           (ctx->sampler.src_fs * ctx->sampler.src_ch * sizeof(PCM_TYPE));
                 double session_rlatency = ctx->session.read_water_level() * 1000.0 /
                                           (ctx->sampler.src_fs * ctx->sampler.src_ch * sizeof(PCM_TYPE));
-                len = snprintf(ptr, buf_size, "\n    [%d]. 0x%08X|0x%08X:%u [w=%.2fms,r=%.2fms]", ++idx,
+                len = snprintf(ptr, buf_size, "\n    [%d]. (0x%08X|0x%08X:%u) [w=%.2fms,r=%.2fms]", ++idx,
                                ctx->uuid.sender_ip, ctx->uuid.gateway_ip, ctx->uuid.sender_token, session_wlatency,
                                session_rlatency);
                 ptr += len;
@@ -1041,7 +1041,7 @@ void IAStream::process_render(const char *data, size_t len)
     {
         if (auto np = dest.lock())
         {
-            np->direct_push(ch, ps, fs, src, SourceUUID{0, 0, token}, priority);
+            np->direct_push(ch, ps, fs, src, SourceUUID{0, 0, token, np->token}, priority);
         }
     }
 
@@ -1239,7 +1239,7 @@ RetCode IAStream::process_data()
     {
         if (auto np = dest.lock())
         {
-            np->direct_push(ch, ps, fs, src, SourceUUID{0, 0, token}, priority);
+            np->direct_push(ch, ps, fs, src, SourceUUID{0, 0, token, np->token}, priority);
         }
     }
 

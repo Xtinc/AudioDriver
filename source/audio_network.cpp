@@ -176,7 +176,7 @@ void NetState::update(uint32_t sequence, uint64_t timestamp, NetStatInfos &stats
     }
     // seq_diff == 0: duplicate, ignore
 
-    // Jitter (RFC 3550 §6.4.1): only for non-duplicate, non-out-of-order packets
+    // Jitter (RFC 3550 6.4.1): only for non-duplicate, non-out-of-order packets
     if (seq_diff > 0 && last_timestamp > 0 && timestamp > 0)
     {
         int64_t send_interval = static_cast<int64_t>(timestamp) - static_cast<int64_t>(last_timestamp);
@@ -611,8 +611,9 @@ void NetWorker::handle_receive(const asio::error_code &error, std::size_t bytes_
         const auto *payload = reinterpret_cast<const uint8_t *>(receive_buffer.get() + sizeof(DataPacket));
         size_t payload_size = bytes_transferred - sizeof(DataPacket);
         auto gateway_ip = receive_endpoint.address().is_v4() ? receive_endpoint.address().to_v4().to_uint() : 0;
-        process_and_deliver_audio(data_header, payload, payload_size,
-                                  SourceUUID{data_header->session_ip, gateway_ip, data_header->sender_id});
+        process_and_deliver_audio(
+            data_header, payload, payload_size,
+            SourceUUID{data_header->session_ip, gateway_ip, data_header->sender_id, data_header->receiver_id});
     }
 
     if (running)
@@ -641,29 +642,14 @@ void NetWorker::query_stats()
                 continue;
             }
 
-            if (line_no == 0)
-            {
-                int len = snprintf(ptr, remain, "NETSTATS");
-                if (len > 0)
-                {
-                    size_t used = static_cast<size_t>(len);
-                    if (used >= remain)
-                    {
-                        used = remain - 1;
-                    }
-                    ptr += used;
-                    remain -= used;
-                }
-            }
-
             line_no++;
 
-            int len =
-                snprintf(ptr, remain,
-                         "\n    [%u]. 0x%08X|0x%08X:%u loss=%.2f%% jit_avg=%.2fms jit_max=%.2fms rx=%u lost=%u ooo=%u",
-                         line_no, source_id.sender_ip, source_id.gateway_ip, source_id.sender_token,
-                         stats.packet_loss_rate, stats.average_jitter, stats.max_jitter, stats.packets_received,
-                         stats.packets_lost, stats.packets_out_of_order);
+            int len = snprintf(
+                ptr, remain,
+                "\n    [%u]. (0x%08X|0x%08X:%u) -> %u loss=%.2f%% jit_avg=%.2fms jit_max=%.2fms rx=%u lost=%u ooo=%u",
+                line_no, source_id.sender_ip, source_id.gateway_ip, source_id.sender_token, source_id.receiver_token,
+                stats.packet_loss_rate, stats.average_jitter, stats.max_jitter, stats.packets_received,
+                stats.packets_lost, stats.packets_out_of_order);
             if (len > 0)
             {
                 size_t used = static_cast<size_t>(len);
@@ -678,7 +664,7 @@ void NetWorker::query_stats()
 
         if (line_no > 0)
         {
-            AUDIO_INFO_PRINT("%s", buffer);
+            AUDIO_INFO_PRINT("NETSTAT%s", buffer);
         }
 
         delete[] buffer;

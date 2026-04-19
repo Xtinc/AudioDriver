@@ -789,7 +789,8 @@ RetCode AudioCenter::direct_push_pcm(IToken itoken, OToken otoken, unsigned int 
         return {RetCode::EPARAM, "Invalid data pointer"};
     }
 
-    return oas->second->direct_push(chan, frames, sample_rate, data, SourceUUID{0, 0, itoken.tok}, priority);
+    return oas->second->direct_push(chan, frames, sample_rate, data, SourceUUID{0, 0, itoken.tok, otoken.tok},
+                                    priority);
 }
 
 RetCode AudioCenter::start()

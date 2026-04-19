@@ -29,16 +29,18 @@ struct SourceUUID
     uint32_t sender_ip;
     uint32_t gateway_ip;
     uint8_t sender_token;
+    uint8_t receiver_token;
 
     bool operator==(const SourceUUID &other) const
     {
-        return sender_ip == other.sender_ip && gateway_ip == other.gateway_ip && sender_token == other.sender_token;
+        return sender_ip == other.sender_ip && gateway_ip == other.gateway_ip && sender_token == other.sender_token &&
+               receiver_token == other.receiver_token;
     }
 
     bool operator<(const SourceUUID &other) const
     {
-        return std::tie(sender_ip, gateway_ip, sender_token) <
-               std::tie(other.sender_ip, other.gateway_ip, other.sender_token);
+        return std::tie(sender_ip, gateway_ip, sender_token, receiver_token) <
+               std::tie(other.sender_ip, other.gateway_ip, other.sender_token, other.receiver_token);
     }
 };
 
