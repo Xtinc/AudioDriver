@@ -18,6 +18,7 @@
 #define WAVE_OAS 0x64
 #define NULL_IAS 0x66
 #define NULL_OAS 0x67
+#define VIRT_IAS 0x68
 
 enum class ResetOrd
 {

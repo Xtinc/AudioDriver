@@ -166,9 +166,8 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     RetCode clear_all_connections();
 
     // Called by OAStream when this IAStream is used as a render sink (listener mode).
-    // Replaces device I/O with direct in-thread processing driven by the OAStream.
     void init_as_render_sink(unsigned int src_fs, unsigned int src_ch);
-    void process_render(const char *data, size_t len);
+    RetCode feed_render_data(const char *data, size_t len);
 
     void pause();
     void resume();
@@ -217,6 +216,8 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     sampler_ptr sampler;
     filter_ptr filter_bank;
     std::atomic_uint volume;
+    unsigned int raw_cb_ch;
+    bool raw_ch_fixed;
 
     std::mutex dest_mtx;
     destinations dests;
@@ -229,8 +230,6 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     asio_strand cb_strand;
     StreamErrorCallback error_cb;
     void *error_cb_ptr;
-    bool direct_mode;
-    unsigned int render_src_ch;
 };
 
 class AudioPlayer : public std::enable_shared_from_this<AudioPlayer>

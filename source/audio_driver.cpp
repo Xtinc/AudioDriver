@@ -1335,6 +1335,101 @@ double NullDevice::rlatency() const
     return 0.0;
 }
 
+class VirtualInputDevice final : public AudioDevice
+{
+  public:
+    VirtualInputDevice(const std::string &name, unsigned int fs, unsigned int ps, unsigned int ch)
+        : AudioDevice(name, true, fs, ps, ch, ResetOrd::RESET_NONE)
+    {
+    }
+
+    ~VirtualInputDevice() override
+    {
+        (void)stop();
+    }
+
+    RetCode open() override
+    {
+        io_buffer = std::make_unique<KFifo>(dev_ps * sizeof(PCM_TYPE), 2, dev_ch);
+        min_ch = max_ch = dev_ch;
+        hstate = STREAM_OPENED;
+        AUDIO_INFO_PRINT("Virtual input device [%s] opened. fs = %u, ps = %u, chan = %u", hw_name.c_str(), dev_fs,
+                         dev_ps, dev_ch);
+        return {RetCode::OK, "Success"};
+    }
+
+    RetCode start() override
+    {
+        Mode expected = STREAM_OPENED;
+        if (!hstate.compare_exchange_strong(expected, STREAM_RUNNING) &&
+            !(expected = STREAM_STOPPED, hstate.compare_exchange_strong(expected, STREAM_RUNNING)))
+        {
+            return {RetCode::NOACTION, "Virtual device already running"};
+        }
+        return {RetCode::OK, "Success"};
+    }
+
+    RetCode stop() override
+    {
+        Mode expected = STREAM_RUNNING;
+        if (!hstate.compare_exchange_strong(expected, STREAM_STOPPED) && hstate != STREAM_STOPPED)
+        {
+            return {RetCode::NOACTION, "Virtual device already stopped"};
+        }
+        return {RetCode::OK, "Success"};
+    }
+
+    RetCode write(const char *data, size_t len) override
+    {
+        if (hstate != STREAM_RUNNING)
+        {
+            return {RetCode::ESTATE, "Virtual device not running"};
+        }
+
+        if (!data || len == 0)
+        {
+            return {RetCode::EPARAM, "Invalid write buffer"};
+        }
+
+        if (!io_buffer->store(data, len))
+        {
+            return {RetCode::NOACTION, "Virtual input buffer full"};
+        }
+
+        return {RetCode::OK, "Success"};
+    }
+
+    RetCode read(char *data, size_t len) override
+    {
+        if (hstate != STREAM_RUNNING)
+        {
+            return {RetCode::ESTATE, "Virtual device not running"};
+        }
+
+        if (!data || len == 0)
+        {
+            return {RetCode::EPARAM, "Invalid read buffer"};
+        }
+
+        if (!io_buffer->load(data, len))
+        {
+            return {RetCode::NOACTION, "Virtual input buffer empty"};
+        }
+
+        return {RetCode::OK, "Success"};
+    }
+
+    double wlatency() const override
+    {
+        return io_buffer ? io_buffer->write_water_level() * 1000.0 / (dev_fs * dev_ch * sizeof(PCM_TYPE)) : 0.0;
+    }
+
+    double rlatency() const override
+    {
+        return io_buffer ? io_buffer->read_water_level() * 1000.0 / (dev_fs * dev_ch * sizeof(PCM_TYPE)) : 0.0;
+    }
+};
+
 std::unique_ptr<AudioDevice> make_audio_driver(int type, const AudioDeviceName &name, unsigned int fs, unsigned int ps,
                                                unsigned int ch, ResetOrd reset_order)
 {
@@ -1367,6 +1462,10 @@ std::unique_ptr<AudioDevice> make_audio_driver(int type, const AudioDeviceName &
     else if (type == NULL_IAS)
     {
         return std::make_unique<NullDevice>(name.first, true, fs, ps, ch);
+    }
+    else if (type == VIRT_IAS)
+    {
+        return std::make_unique<VirtualInputDevice>(name.first, fs, ps, ch);
     }
     else
     {
