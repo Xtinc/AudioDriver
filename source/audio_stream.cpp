@@ -1312,15 +1312,21 @@ void IAStream::schedule_auto_reset()
 
 void IAStream::schedule_callback()
 {
-    if (!ias_ready)
+    if (!ias_ready || !usr_cb.cb || usr_cb.req_frs == 0 || fs == 0)
     {
         return;
     }
 
-    auto req_ti = usr_cb.req_frs * 1000 / fs;
-    cb_timer.expires_from_now(std::chrono::microseconds(req_ti * 1000 - 100));
+    const auto period_ms =
+        (static_cast<unsigned long long>(usr_cb.req_frs) * 1000ULL) / static_cast<unsigned long long>(fs);
+    cb_timer.expires_from_now(std::chrono::milliseconds((std::max)(1ULL, period_ms)));
     cb_timer.async_wait(asio::bind_executor(cb_strand, [self = shared_from_this()](const asio::error_code &ec) {
         if (!self->ias_ready)
+        {
+            return;
+        }
+
+        if (ec == asio::error::operation_aborted)
         {
             return;
         }
@@ -1332,7 +1338,7 @@ void IAStream::schedule_callback()
         }
 
         auto req_ch = self->usr_cb.mode == UsrCallBackMode::RAW ? self->raw_cb_ch : self->ch;
-        if (self->session->load_aside(self->usr_cb.req_frs * req_ch * sizeof(PCM_TYPE)))
+        if (self->session && self->session->load_aside(self->usr_cb.req_frs * req_ch * sizeof(PCM_TYPE)))
         {
             self->usr_cb.cb(reinterpret_cast<PCM_TYPE *>(self->session->data()), req_ch, self->usr_cb.req_frs,
                             self->usr_cb.ptr);
