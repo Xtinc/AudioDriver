@@ -146,6 +146,11 @@ void NetState::update(uint32_t sequence, uint64_t timestamp, NetStatInfos &stats
 
     period_packets_received++;
 
+    if (sequence == 0)
+    {
+        first_packet = true;
+    }
+
     if (first_packet)
     {
         first_packet = false;

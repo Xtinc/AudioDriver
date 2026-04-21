@@ -731,8 +731,8 @@ IAStream::IAStream(unsigned char _token, const AudioDeviceName &_name, unsigned 
                    unsigned int dev_ch, AudioChannelMap _imap, AudioPriority _priority)
     : token(_token), ti(_ti), fs(_fs), ps(fs * ti / 1000), ch(2), rst_order(ResetOrd::RESET_NONE), spf_ch(dev_ch),
       imap(_imap), priority(_priority), usr_name(_name), ias_ready(false), exec_timer(BG_SERVICE),
-      exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE), volume(100), muted(false), raw_cb_ch(dev_ch),
-      raw_ch_fixed(false), usr_cb{nullptr, 0, UsrCallBackMode::PROCESSED, nullptr}, cb_timer(BG_SERVICE),
+      exec_strand(asio::make_strand(BG_SERVICE)), reset_timer(BG_SERVICE), volume(100), raw_cb_ch(dev_ch),
+      raw_ch_fixed(false), muted(false), usr_cb{nullptr, 0, UsrCallBackMode::PROCESSED, nullptr}, cb_timer(BG_SERVICE),
       cb_strand(asio::make_strand(BG_SERVICE)), error_cb(nullptr), error_cb_ptr(nullptr)
 {
     DBG_ASSERT_GE(dev_ch, 2);

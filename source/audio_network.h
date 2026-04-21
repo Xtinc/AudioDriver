@@ -553,7 +553,7 @@ class NetWorker : public std::enable_shared_from_this<NetWorker>
     RetCode register_receiver(uint8_t token, ReceiveCallback callback);
     RetCode unregister_receiver(uint8_t token);
     RetCode clear_all_destinations(uint8_t sender_id);
-    void NetWorker::query_stats();
+    void query_stats();
 
   private:
     void start_receive_loop();
