@@ -59,7 +59,7 @@ class OAStream : public std::enable_shared_from_this<OAStream>
                        unsigned int dst_ch, unsigned int max_frames, const AudioChannelMap &imap,
                        const AudioChannelMap &omap, unsigned int priority_value)
             : uuid(source_uuid), enabled(true), priority(priority_value),
-              session(max_frames * sizeof(PCM_TYPE), 2, src_ch),
+              session(max_frames * sizeof(PCM_TYPE), 3, src_ch),
               sampler(src_fs, src_ch, dst_fs, dst_ch, max_frames, imap, omap), effector(static_cast<float>(dst_fs))
         {
         }

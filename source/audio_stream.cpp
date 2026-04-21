@@ -890,6 +890,12 @@ RetCode IAStream::feed_render_data(const char *data, size_t len)
         return {RetCode::FAILED, "Capture device not initialized"};
     }
 
+    if (usr_cb.cb && usr_cb.mode == UsrCallBackMode::OBSERVER)
+    {
+        unsigned int fr = len / (raw_cb_ch * sizeof(PCM_TYPE));
+        usr_cb.cb(reinterpret_cast<const PCM_TYPE *>(data), raw_cb_ch, fr, usr_cb.ptr);
+    }
+
     return idevice->write(data, len);
 }
 
