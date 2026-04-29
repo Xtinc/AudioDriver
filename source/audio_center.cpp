@@ -13,7 +13,7 @@ bool audio_is_debug_enabled()
     return s_audio_debug_enabled.load(std::memory_order_relaxed);
 }
 
-static void default_stream_error_callback(unsigned char token, std::string message, void *user_ptr)
+static void default_stream_error_callback(unsigned char token, const std::string &message, void *user_ptr)
 {
     (void)user_ptr; // Unused in default callback
     AUDIO_ERROR_PRINT("Stream error on token %u: %s", token, message.c_str());

@@ -64,7 +64,7 @@ typedef void (*AudioInputCallBack)(const int16_t *data, unsigned int chan_num, u
  * @param error_msg The terminal stream error message
  * @param user_ptr User data pointer passed during callback registration
  */
-typedef void (*StreamErrorCallback)(unsigned char token, std::string error_msg, void *user_ptr);
+typedef void (*StreamErrorCallback)(unsigned char token, const std::string &error_msg, void *user_ptr);
 
 /**
  * @enum UsrCallBackMode

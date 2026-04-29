@@ -85,7 +85,7 @@ class NetState
     uint64_t last_timestamp{0};
     uint64_t last_arrival_time{0};
 
-    // Per-period counters — reset every report interval
+    // Per-period counters reset every report interval
     uint32_t period_packets_received{0};
     uint32_t period_packets_lost{0};
     double period_total_jitter{0.0};
@@ -104,7 +104,7 @@ template <size_t N> class Histogram
     // Collect this many raw samples before switching to EMA mode.
     static constexpr size_t BOOTSTRAP_MIN = (N < 32) ? 32 : N;
 
-    // EMA decay factor. Effective window ≈ 1/(1-DECAY) = 100 samples.
+    // EMA decay factor. Effective window 1/(1-DECAY) = 100 samples.
     static constexpr double DECAY = 0.99;
 
   public:
@@ -175,7 +175,7 @@ template <size_t N> class Histogram
         for (size_t i = 0; i < boot_n; i++)
             bcnts[bucket_of(boot_vals[i])] += 1.0;
         for (auto &c : bcnts)
-            c /= static_cast<double>(boot_n); // normalize → sum == 1.0
+            c /= static_cast<double>(boot_n); // normalize sum == 1.0
     }
 
     void ema_update(double val)

@@ -746,9 +746,9 @@ void NetWorker::process_and_deliver_audio(const DataPacket *header, const uint8_
         // Concealment before decoding the current packet
         // seq_gap == 1 : consecutive, nothing to do
         // seq_gap >= 2 : gap detected
-        //   · FEC  — Opus embeds redundancy for the packet immediately preceding
+        //   · FEC    Opus embeds redundancy for the packet immediately preceding
         //             the current one; decode with decode_fec=1 to recover it.
-        //   · PLC  — any further missing packets (gap > 2) are concealed by
+        //   · PLC    any further missing packets (gap > 2) are concealed by
         //             calling opus_decode with a null payload; this keeps the
         //             decoder state continuous.
         // seq_gap <= 0 : first packet, duplicate, or out-of-order — skip.
@@ -795,7 +795,7 @@ void NetWorker::process_and_deliver_audio(const DataPacket *header, const uint8_
         deliver(channels, static_cast<unsigned int>(decoded_frames), sample_rate, ctx.decode_buffer.get(), ssid,
                 priority);
     }
-    else // PCM — pass through directly
+    else // PCM pass through directly
     {
         int decoded_frames = static_cast<int>(opus_size / (channels * sizeof(int16_t)));
         if (decoded_frames <= 0)
