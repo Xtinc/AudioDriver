@@ -481,45 +481,23 @@ void FadeEffect::start(FadeType type, float duration_ms)
 
 void FadeEffect::process(ChannelBuffer<float> *buffer)
 {
-    if (fade_type == FadeType::NONE)
+    if (fade_type == FadeType::NONE || fade_type == FadeType::FADE_IN)
     {
         return;
     }
 
-    const auto frames = buffer->num_frames();
-    const auto num_channels = buffer->num_channels();
-
-    for (unsigned int i = 0; i < frames; i++)
+    if (fade_type == FadeType::FADE_OUT)
     {
-        // Check if fade is complete
-        if (position >= total_samples)
-        {
-            if (fade_type == FadeType::FADE_OUT)
-            {
-                // Silence remaining samples after fade-out completes
-                for (unsigned int c = 0; c < num_channels; c++)
-                {
-                    MonoView<float> channel = buffer->channels_view()[c];
-                    for (unsigned int j = i; j < frames; j++)
-                    {
-                        channel[j] = 0.0f;
-                    }
-                }
-            }
-            return;
-        }
-
-        // Compute gain for current position
-        float gain = compute_gain();
-
-        // Apply gain to all channels
+        const auto frames = buffer->num_frames();
+        const auto num_channels = buffer->num_channels();
         for (unsigned int c = 0; c < num_channels; c++)
         {
             MonoView<float> channel = buffer->channels_view()[c];
-            channel[i] *= gain;
+            for (unsigned int i = 0; i < frames; i++)
+            {
+                channel[i] = 0.0f;
+            }
         }
-
-        position++;
     }
 }
 
@@ -528,25 +506,22 @@ void FadeEffect::decide_fade_type(unsigned int highest_priority, unsigned int cu
     switch (fade_type)
     {
     case FadeType::INIT:
-        start(FadeType::FADE_IN, 500.0f);
+        start(FadeType::NONE, 0.0f);
         break;
     case FadeType::NONE:
         if (highest_priority >= enum2val(AudioPriority::HIGH) && current_priority <= enum2val(AudioPriority::LOW))
         {
-            start(FadeType::FADE_OUT, 500.0f);
+            start(FadeType::FADE_OUT, 0.0f);
         }
         break;
     case FadeType::FADE_OUT:
         if (highest_priority < enum2val(AudioPriority::HIGH))
         {
-            start(FadeType::FADE_IN, 2500.0f);
+            start(FadeType::NONE, 0.0f);
         }
         break;
     case FadeType::FADE_IN:
-        if (position >= total_samples)
-        {
-            start(FadeType::NONE, 0.0f);
-        }
+        start(FadeType::NONE, 0.0f);
         break;
     default:
         break;
