@@ -238,7 +238,8 @@ class AudioPlayer : public std::enable_shared_from_this<AudioPlayer>
     explicit AudioPlayer(unsigned char _token);
     ~AudioPlayer();
 
-    RetCode play(const std::string &name, int cycles, const std::shared_ptr<OAStream> &sink, AudioPriority priority);
+    RetCode play(const std::string &name, int cycles, const std::shared_ptr<OAStream> &sink, AudioPriority priority,
+                 int vol = -1);
     RetCode stop(const std::string &name);
     RetCode set_volume(unsigned int vol);
 

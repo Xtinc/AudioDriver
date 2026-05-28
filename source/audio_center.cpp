@@ -1090,7 +1090,7 @@ RetCode AudioCenter::mute(IToken itoken, OToken otoken, bool enable, const std::
     return enable ? oas->second->mute(itoken.tok, ip) : oas->second->unmute(itoken.tok, ip);
 }
 
-RetCode AudioCenter::play(const std::string &name, int cycles, OToken otoken, AudioPriority priority)
+RetCode AudioCenter::play(const std::string &name, int cycles, OToken otoken, AudioPriority priority, int vol)
 {
     if (center_state.load() != State::READY)
     {
@@ -1112,7 +1112,7 @@ RetCode AudioCenter::play(const std::string &name, int cycles, OToken otoken, Au
     }
 
     AUDIO_INFO_PRINT("Try to play file %s -> %u", name.c_str(), otoken.tok);
-    auto ret = player->play(name, cycles, oas->second, priority);
+    auto ret = player->play(name, cycles, oas->second, priority, vol);
     if (!ret)
     {
         AUDIO_ERROR_PRINT("Failed to play file %s to output token %u: %s", name.c_str(), otoken.tok, ret.what());

@@ -800,9 +800,11 @@ class AudioCenter
      * @param cycles Number of times to play the file
      * @param otoken Output token
      * @param priority Priority level for the playback
+     * @param vol Per-call volume override (0-100). Pass -1 (default) to use the global player volume.
      * @return RetCode indicating success or failure
      */
-    RetCode play(const std::string &name, int cycles, OToken otoken, AudioPriority priority = AudioPriority::MEDIUM);
+    RetCode play(const std::string &name, int cycles, OToken otoken, AudioPriority priority = AudioPriority::MEDIUM,
+                int vol = -1);
 
     /**
      * @brief Stops playing an audio file

@@ -1382,7 +1382,7 @@ AudioPlayer::AudioPlayer(unsigned char _token) : token(_token), preemptive(0), v
 AudioPlayer::~AudioPlayer() = default;
 
 RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared_ptr<OAStream> &sink,
-                          AudioPriority priority)
+                          AudioPriority priority, int vol)
 {
     if (preemptive.load(std::memory_order_relaxed) > 5)
     {
@@ -1419,7 +1419,7 @@ RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared
     preemptive.fetch_add(1, std::memory_order_relaxed);
     sounds.emplace(name, audio_sender);
 
-    audio_sender->set_volume(volume.load());
+    audio_sender->set_volume(vol >= 0 && vol <= 100 ? static_cast<unsigned int>(vol) : volume.load());
 
     auto ret = audio_sender->connect(sink);
     if (!ret)
