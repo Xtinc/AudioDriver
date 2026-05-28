@@ -3,6 +3,7 @@
 
 #include "audio_interface.h"
 #include "audio_network.h"
+#include "audio_wavfile.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -19,6 +20,7 @@
 #define NULL_IAS 0x66
 #define NULL_OAS 0x67
 #define VIRT_IAS 0x68
+#define COMB_IAS 0x69
 
 enum class ResetOrd
 {
@@ -164,5 +166,7 @@ void set_current_thread_scheduler_policy();
 
 std::unique_ptr<AudioDevice> make_audio_driver(int type, const AudioDeviceName &name, unsigned int fs, unsigned int ps,
                                                unsigned int ch, ResetOrd reset_order);
+
+std::unique_ptr<AudioDevice> make_combiner_device(WavCombiner combiner, unsigned int ps, unsigned int cycles);
 
 #endif

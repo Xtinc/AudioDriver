@@ -169,6 +169,9 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     void init_as_render_sink(unsigned int src_fs, unsigned int src_ch);
     RetCode feed_render_data(const char *data, size_t len);
 
+    // Initialize this IAStream as a WavCombiner playback device.
+    RetCode init_as_wav_combiner(const std::vector<std::pair<std::string, int>> &segs, unsigned int cycles);
+
     void pause();
     void resume();
     bool available() const;
@@ -240,6 +243,8 @@ class AudioPlayer : public std::enable_shared_from_this<AudioPlayer>
 
     RetCode play(const std::string &name, int cycles, const std::shared_ptr<OAStream> &sink, AudioPriority priority,
                  int vol = -1);
+    RetCode play(const std::string &files, const std::string &periods, int cycles,
+                 const std::shared_ptr<OAStream> &sink, AudioPriority priority, int vol = -1);
     RetCode stop(const std::string &name);
     RetCode set_volume(unsigned int vol);
 

@@ -139,4 +139,42 @@ private:
     uint64_t data_offset{};
 };
 
+// Internal class for combining multiple WAV segments with per-segment durations.
+// Not part of the public API - used only within AudioDriver internals.
+class WavCombiner
+{
+  public:
+    WavCombiner() = default;
+    WavCombiner(WavCombiner &&) = default;
+    WavCombiner &operator=(WavCombiner &&) = default;
+
+    // Add a segment: open path and play for duration_ms milliseconds.
+    // All segments must share the same sample_rate and channel count.
+    RetCode add(const std::string &path, unsigned int duration_ms);
+
+    // Read frames sequentially across segments.
+    // Returns INVSEEK when all segments are exhausted or a file ends early.
+    RetCode read(int16_t *output, uint64_t frame_count);
+
+    // Reset all segment cursors to the beginning (for cycle replay).
+    RetCode seek_all();
+
+    bool valid() const { return !segments.empty(); }
+    uint32_t sample_rate() const { return native_fs; }
+    uint16_t channels() const { return native_ch; }
+
+  private:
+    struct Segment
+    {
+        std::unique_ptr<WavFile> wav;
+        uint64_t duration_frames; // how many frames to play from this segment
+    };
+
+    std::vector<Segment> segments;
+    size_t current_seg{0};
+    uint64_t seg_frames_played{0};
+    uint32_t native_fs{0};
+    uint16_t native_ch{0};
+};
+
 #endif

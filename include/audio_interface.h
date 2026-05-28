@@ -807,6 +807,20 @@ class AudioCenter
                 int vol = -1);
 
     /**
+     * @brief Plays multiple WAV files alternately using a string-based protocol.
+     *
+     * @param files  Format: "COMB:A.wav|B.wav[|...]"
+     * @param periods Format: "PERIOD:50|40[|...]" (milliseconds per segment)
+     * @param cycles Number of full-group repeats (0 = play once; -1 = infinite)
+     * @param otoken Output stream token to route audio to
+     * @param priority Playback priority
+     * @param vol Volume (0-100, or -1 to use current player volume)
+     * @return RetCode indicating success or failure
+     */
+    RetCode play(const std::string &files, const std::string &periods, int cycles, OToken otoken,
+                 AudioPriority priority = AudioPriority::MEDIUM, int vol = -1);
+
+    /**
      * @brief Stops playing an audio file
      *
      * @param path Path to the audio file to stop

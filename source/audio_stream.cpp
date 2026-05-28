@@ -1,5 +1,6 @@
 #include "audio_stream.h"
 #include <cmath>
+#include <sstream>
 
 #if WINDOWS_OS_ENVIRONMENT
 #include <combaseapi.h>
@@ -824,6 +825,42 @@ void IAStream::init_as_render_sink(unsigned int src_fs, unsigned int src_ch)
     ias_ready = true;
 }
 
+RetCode IAStream::init_as_wav_combiner(const std::vector<std::pair<std::string, int>> &segs, unsigned int cycles)
+{
+    stop();
+
+    WavCombiner combiner;
+    for (const auto &seg : segs)
+    {
+        auto ret = combiner.add(seg.first, static_cast<unsigned int>(seg.second));
+        if (!ret)
+        {
+            AUDIO_ERROR_PRINT("WavCombiner: failed to add '%s': %s", seg.first.c_str(), ret.what());
+            return ret;
+        }
+    }
+
+    auto dev_ps = combiner.sample_rate() * ti / 1000;
+    auto comb_device = make_combiner_device(std::move(combiner), dev_ps, cycles);
+
+    auto ret = comb_device->open();
+    if (!ret)
+    {
+        AUDIO_ERROR_PRINT("Failed to open WavCombinerDevice: %s", ret.what());
+        return ret;
+    }
+
+    ret = swap_device(comb_device);
+    if (!ret)
+    {
+        AUDIO_ERROR_PRINT("Failed to swap WavCombinerDevice: %s", ret.what());
+        return ret;
+    }
+
+    ias_ready = true;
+    return RetCode::OK;
+}
+
 RetCode IAStream::start()
 {
     if (!ias_ready)
@@ -1418,6 +1455,129 @@ RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared
 
     preemptive.fetch_add(1, std::memory_order_relaxed);
     sounds.emplace(name, audio_sender);
+
+    audio_sender->set_volume(vol >= 0 && vol <= 100 ? static_cast<unsigned int>(vol) : volume.load());
+
+    auto ret = audio_sender->connect(sink);
+    if (!ret)
+    {
+        AUDIO_ERROR_PRINT("Failed to connect to sink: %s", ret.what());
+    }
+    return audio_sender->start();
+}
+
+static RetCode parse_comb_strings(const std::string &files, const std::string &periods,
+                                  std::vector<std::pair<std::string, int>> &out_segs)
+{
+    const std::string comb_prefix = "COMB:";
+    const std::string period_prefix = "PERIOD:";
+
+    if (files.substr(0, comb_prefix.size()) != comb_prefix)
+    {
+        return {RetCode::EPARAM, "files must start with 'COMB:'"};
+    }
+    if (periods.substr(0, period_prefix.size()) != period_prefix)
+    {
+        return {RetCode::EPARAM, "periods must start with 'PERIOD:'"};
+    }
+
+    std::string files_body = files.substr(comb_prefix.size());
+    std::string periods_body = periods.substr(period_prefix.size());
+
+    // split by '|'
+    auto split = [](const std::string &s, std::vector<std::string> &parts) {
+        std::istringstream ss(s);
+        std::string token;
+        while (std::getline(ss, token, '|'))
+        {
+            if (!token.empty())
+            {
+                parts.push_back(token);
+            }
+        }
+    };
+
+    std::vector<std::string> file_parts, period_parts;
+    split(files_body, file_parts);
+    split(periods_body, period_parts);
+
+    if (file_parts.empty() || file_parts.size() != period_parts.size())
+    {
+        return {RetCode::EPARAM, "COMB file count must match PERIOD count"};
+    }
+
+    for (size_t i = 0; i < file_parts.size(); ++i)
+    {
+        int dur = 0;
+        try
+        {
+            dur = std::stoi(period_parts[i]);
+        }
+        catch (const std::exception &)
+        {
+            return {RetCode::EPARAM, "PERIOD value is not a valid integer"};
+        }
+        if (dur <= 0)
+        {
+            return {RetCode::EPARAM, "PERIOD values must be positive"};
+        }
+        out_segs.emplace_back(file_parts[i], dur);
+    }
+
+    return RetCode::OK;
+}
+
+RetCode AudioPlayer::play(const std::string &files, const std::string &periods, int cycles,
+                          const std::shared_ptr<OAStream> &sink, AudioPriority priority, int vol)
+{
+    if (preemptive.load(std::memory_order_relaxed) > 5)
+    {
+        return {RetCode::FAILED, "Too many player streams"};
+    }
+
+    bool stream_found = true;
+    {
+        std::lock_guard<std::mutex> grd(mtx);
+        stream_found = sounds.find(files) != sounds.cend();
+    }
+
+    if (stream_found)
+    {
+        return {RetCode::FAILED, "Stream already exists"};
+    }
+
+    std::vector<std::pair<std::string, int>> segs;
+    auto parse_ret = parse_comb_strings(files, periods, segs);
+    if (!parse_ret)
+    {
+        return parse_ret;
+    }
+
+    auto *raw_sender =
+        new IAStream(static_cast<unsigned char>(token + preemptive), AudioDeviceName("null_combiner", 0),
+                     enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2, ResetOrd::RESET_NONE,
+                     priority);
+
+    auto audio_sender = std::shared_ptr<IAStream>(raw_sender, [self = shared_from_this(), files](const IAStream *ptr) {
+        self->preemptive.fetch_sub(1, std::memory_order_relaxed);
+        std::lock_guard<std::mutex> grd(self->mtx);
+        auto iter = self->sounds.find(files);
+        if (iter != self->sounds.cend())
+        {
+            self->sounds.erase(iter);
+        }
+        delete ptr;
+    });
+
+    preemptive.fetch_add(1, std::memory_order_relaxed);
+    sounds.emplace(files, audio_sender);
+
+    auto comb_ret = audio_sender->init_as_wav_combiner(segs, static_cast<unsigned int>(cycles));
+    if (!comb_ret)
+    {
+        AUDIO_ERROR_PRINT("Failed to init WavCombiner: %s", comb_ret.what());
+        return comb_ret;
+    }
 
     audio_sender->set_volume(vol >= 0 && vol <= 100 ? static_cast<unsigned int>(vol) : volume.load());
 

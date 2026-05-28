@@ -1120,6 +1120,37 @@ RetCode AudioCenter::play(const std::string &name, int cycles, OToken otoken, Au
     return ret;
 }
 
+RetCode AudioCenter::play(const std::string &files, const std::string &periods, int cycles, OToken otoken,
+                          AudioPriority priority, int vol)
+{
+    if (center_state.load() != State::READY)
+    {
+        AUDIO_ERROR_PRINT("AudioCenter not in READY state");
+        return {RetCode::ESTATE, "AudioCenter not in READY state"};
+    }
+
+    if (!otoken)
+    {
+        AUDIO_ERROR_PRINT("Invalid remote token: %u", otoken.tok);
+        return {RetCode::EPARAM, "Invalid remote token"};
+    }
+
+    auto oas = oas_map.find(otoken.tok);
+    if (oas == oas_map.end())
+    {
+        AUDIO_ERROR_PRINT("Invalid output token: %u", otoken.tok);
+        return {RetCode::EPARAM, "Invalid output token"};
+    }
+
+    AUDIO_INFO_PRINT("Try to play combiner [%s / %s] -> %u", files.c_str(), periods.c_str(), otoken.tok);
+    auto ret = player->play(files, periods, cycles, oas->second, priority, vol);
+    if (!ret)
+    {
+        AUDIO_ERROR_PRINT("Failed to play combiner to output token %u: %s", otoken.tok, ret.what());
+    }
+    return ret;
+}
+
 RetCode AudioCenter::stop(const std::string &path)
 {
     if (center_state.load() != State::READY)

@@ -540,3 +540,83 @@ RetCode WavFile::read_header(ChunkList *headers)
 
     return RetCode::OK;
 }
+
+// WavCombiner
+RetCode WavCombiner::add(const std::string &path, unsigned int duration_ms)
+{
+    auto wav = std::make_unique<WavFile>();
+    auto ret = wav->open(path, WavFile::in);
+    if (!ret)
+    {
+        return ret;
+    }
+
+    uint32_t fs = wav->sample_rate();
+    uint16_t ch = wav->channel_number();
+
+    if (native_fs == 0)
+    {
+        native_fs = fs;
+        native_ch = ch;
+    }
+    else if (fs != native_fs || ch != native_ch)
+    {
+        return {RetCode::INVFMT, "WavCombiner: sample_rate or channels mismatch"};
+    }
+
+    uint64_t duration_frames = static_cast<uint64_t>(duration_ms) * native_fs / 1000;
+    segments.push_back({std::move(wav), duration_frames});
+    return RetCode::OK;
+}
+
+RetCode WavCombiner::read(int16_t *output, uint64_t frame_count)
+{
+    uint64_t frames_remaining = frame_count;
+    int16_t *ptr = output;
+
+    while (frames_remaining > 0)
+    {
+        if (current_seg >= segments.size())
+        {
+            return RetCode::INVSEEK;
+        }
+
+        auto &seg = segments[current_seg];
+        uint64_t seg_remaining = seg.duration_frames - seg_frames_played;
+        uint64_t to_read = frames_remaining < seg_remaining ? frames_remaining : seg_remaining;
+
+        auto ret = seg.wav->read(ptr, to_read);
+        if (!ret)
+        {
+            // File ended before duration_frames exhausted - treat as end of all
+            return RetCode::INVSEEK;
+        }
+
+        ptr += to_read * native_ch;
+        frames_remaining -= to_read;
+        seg_frames_played += to_read;
+
+        if (seg_frames_played >= seg.duration_frames)
+        {
+            ++current_seg;
+            seg_frames_played = 0;
+        }
+    }
+
+    return RetCode::OK;
+}
+
+RetCode WavCombiner::seek_all()
+{
+    for (auto &seg : segments)
+    {
+        auto ret = seg.wav->seek(0);
+        if (!ret)
+        {
+            return ret;
+        }
+    }
+    current_seg = 0;
+    seg_frames_played = 0;
+    return RetCode::OK;
+}

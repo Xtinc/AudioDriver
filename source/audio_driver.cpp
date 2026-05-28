@@ -1430,6 +1430,88 @@ class VirtualInputDevice final : public AudioDevice
     }
 };
 
+class WavCombinerDevice final : public AudioDevice
+{
+  public:
+    WavCombinerDevice(WavCombiner &&combiner, unsigned int ps, unsigned int cycles)
+        : AudioDevice("wav_combiner", true, combiner.sample_rate(), ps, combiner.channels(), ResetOrd::RESET_NONE),
+          combiner_(std::move(combiner)), cycles_(cycles)
+    {
+    }
+
+    RetCode open() override
+    {
+        if (!combiner_.valid())
+        {
+            return {RetCode::EOPEN, "WavCombiner has no segments"};
+        }
+        min_ch = max_ch = dev_ch;
+        hstate = STREAM_OPENED;
+        return RetCode::OK;
+    }
+
+    RetCode start() override
+    {
+        Mode expected = STREAM_OPENED;
+        if (!hstate.compare_exchange_strong(expected, STREAM_RUNNING) &&
+            !(expected = STREAM_STOPPED, hstate.compare_exchange_strong(expected, STREAM_RUNNING)))
+        {
+            return {RetCode::FAILED, "stream not opened or stopped"};
+        }
+        return RetCode::OK;
+    }
+
+    RetCode stop() override
+    {
+        Mode expected = STREAM_RUNNING;
+        if (!hstate.compare_exchange_strong(expected, STREAM_STOPPED))
+        {
+            return RetCode::NOACTION;
+        }
+        return RetCode::OK;
+    }
+
+    RetCode write(const char * /*data*/, size_t /*len*/) override
+    {
+        return {RetCode::EWRITE, "WavCombinerDevice does not support write"};
+    }
+
+    RetCode read(char *data, size_t len) override
+    {
+        if (hstate != STREAM_RUNNING)
+        {
+            return {RetCode::ESTATE, "Stream not running"};
+        }
+
+        size_t frames = len / (dev_ch * sizeof(PCM_TYPE));
+        if (frames == 0)
+        {
+            return RetCode::OK;
+        }
+
+        auto ret = combiner_.read(reinterpret_cast<PCM_TYPE *>(data), frames);
+        if (ret == RetCode::INVSEEK && cycles_ > 0)
+        {
+            AUDIO_INFO_PRINT("WavCombiner reached end, seeking to beginning, cycle %u", cycles_--);
+            combiner_.seek_all();
+            ret = combiner_.read(reinterpret_cast<PCM_TYPE *>(data), frames);
+        }
+        return ret;
+    }
+
+    double wlatency() const override { return 0.0; }
+    double rlatency() const override { return 0.0; }
+
+  private:
+    WavCombiner combiner_;
+    unsigned int cycles_;
+};
+
+std::unique_ptr<AudioDevice> make_combiner_device(WavCombiner combiner, unsigned int ps, unsigned int cycles)
+{
+    return std::make_unique<WavCombinerDevice>(std::move(combiner), ps, cycles);
+}
+
 std::unique_ptr<AudioDevice> make_audio_driver(int type, const AudioDeviceName &name, unsigned int fs, unsigned int ps,
                                                unsigned int ch, ResetOrd reset_order)
 {
