@@ -863,12 +863,17 @@ RetCode IAStream::init_as_wav_combiner(const std::vector<std::pair<std::string, 
 
 RetCode IAStream::start()
 {
-    if (!ias_ready)
+    RetCode ret = RetCode::FAILED;
     {
-        return {RetCode::FAILED, "Device not ready"};
+        std::lock_guard<std::mutex> grd(device_mtx);
+        if (!ias_ready)
+        {
+            return {RetCode::FAILED, "Device not ready"};
+        }
+
+        ret = idevice->start();
     }
 
-    auto ret = idevice->start();
     if (ret)
     {
         execute_loop({}, 0);
@@ -907,6 +912,7 @@ RetCode IAStream::stop()
         cb_timer.cancel();
     }
 
+    std::lock_guard<std::mutex> grd(device_mtx);
     return idevice->stop();
 }
 
@@ -1195,13 +1201,20 @@ void IAStream::execute_loop(TimePointer tp, unsigned int cnt)
 
 RetCode IAStream::process_data()
 {
-    if (!ias_ready)
+    unsigned int dev_fr = 0;
+    unsigned int dev_ch = 0;
+    RetCode ret = RetCode::FAILED;
     {
-        return RetCode::NOACTION;
-    }
+        std::lock_guard<std::mutex> grd(device_mtx);
+        if (!ias_ready)
+        {
+            return RetCode::NOACTION;
+        }
 
-    auto dev_fr = idevice->fs() * ti / 1000;
-    auto ret = idevice->read(dev_buf.get(), dev_fr * idevice->ch() * sizeof(PCM_TYPE));
+        dev_fr = idevice->fs() * ti / 1000;
+        dev_ch = idevice->ch();
+        ret = idevice->read(dev_buf.get(), dev_fr * dev_ch * sizeof(PCM_TYPE));
+    }
 
     if (ret != RetCode::OK)
     {
@@ -1211,7 +1224,7 @@ RetCode IAStream::process_data()
     // raw data from device
     if (usr_cb.cb && usr_cb.mode == UsrCallBackMode::RAW)
     {
-        (void)session->store(reinterpret_cast<const char *>(dev_buf.get()), dev_fr * idevice->ch() * sizeof(PCM_TYPE));
+        (void)session->store(reinterpret_cast<const char *>(dev_buf.get()), dev_fr * dev_ch * sizeof(PCM_TYPE));
     }
 
     if (muted)
@@ -1219,7 +1232,7 @@ RetCode IAStream::process_data()
         return RetCode::OK;
     }
 
-    InterleavedView<PCM_TYPE> iview(reinterpret_cast<PCM_TYPE *>(dev_buf.get()), dev_fr, idevice->ch());
+    InterleavedView<PCM_TYPE> iview(reinterpret_cast<PCM_TYPE *>(dev_buf.get()), dev_fr, dev_ch);
     InterleavedView<PCM_TYPE> oview(reinterpret_cast<PCM_TYPE *>(usr_buf.get()), ps, ch);
 
     if (filter_bank)
@@ -1421,40 +1434,44 @@ AudioPlayer::~AudioPlayer() = default;
 RetCode AudioPlayer::play(const std::string &name, int cycles, const std::shared_ptr<OAStream> &sink,
                           AudioPriority priority, int vol)
 {
+    auto registered = std::make_shared<std::atomic_bool>(false);
+    std::unique_lock<std::mutex> lock(mtx);
+
     if (preemptive.load(std::memory_order_relaxed) > 5)
     {
         return {RetCode::FAILED, "Too many player streams"};
     }
 
-    bool stream_found = true;
-    {
-        std::lock_guard<std::mutex> grd(mtx);
-        stream_found = sounds.find(name) != sounds.cend();
-    }
-
-    if (stream_found)
+    if (sounds.find(name) != sounds.cend())
     {
         return {RetCode::FAILED, "Stream already exists"};
     }
 
-    auto *raw_sender = new IAStream(static_cast<unsigned char>(token + preemptive), AudioDeviceName(name, cycles),
-                                    enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2,
-                                    ResetOrd::RESET_NONE, priority);
+    auto *raw_sender =
+        new IAStream(static_cast<unsigned char>(token + preemptive.load(std::memory_order_relaxed)),
+                     AudioDeviceName(name, cycles), enum2val(AudioPeriodSize::INR_20MS),
+                     enum2val(AudioBandWidth::Full), 2, ResetOrd::RESET_NONE, priority);
 
-    auto audio_sender = std::shared_ptr<IAStream>(raw_sender, [self = shared_from_this(), name](const IAStream *ptr) {
-        self->preemptive.fetch_sub(1, std::memory_order_relaxed);
-        std::lock_guard<std::mutex> grd(self->mtx);
-        auto iter = self->sounds.find(name);
-        if (iter != self->sounds.cend())
-        {
-            self->sounds.erase(iter);
-        }
+    auto audio_sender = std::shared_ptr<IAStream>(
+        raw_sender, [self = shared_from_this(), name, registered](const IAStream *ptr) {
+            if (registered->exchange(false, std::memory_order_acq_rel))
+            {
+                std::lock_guard<std::mutex> grd(self->mtx);
+                self->preemptive.fetch_sub(1, std::memory_order_relaxed);
+                auto iter = self->sounds.find(name);
+                if (iter != self->sounds.cend() && iter->second.expired())
+                {
+                    self->sounds.erase(iter);
+                }
+            }
 
-        delete ptr;
-    });
+            delete ptr;
+        });
 
-    preemptive.fetch_add(1, std::memory_order_relaxed);
     sounds.emplace(name, audio_sender);
+    preemptive.fetch_add(1, std::memory_order_relaxed);
+    registered->store(true, std::memory_order_release);
+    lock.unlock();
 
     audio_sender->set_volume(vol >= 0 && vol <= 100 ? static_cast<unsigned int>(vol) : volume.load());
 
@@ -1530,22 +1547,6 @@ static RetCode parse_comb_strings(const std::string &files, const std::string &p
 RetCode AudioPlayer::play(const std::string &files, const std::string &periods, int cycles,
                           const std::shared_ptr<OAStream> &sink, AudioPriority priority, int vol)
 {
-    if (preemptive.load(std::memory_order_relaxed) > 5)
-    {
-        return {RetCode::FAILED, "Too many player streams"};
-    }
-
-    bool stream_found = true;
-    {
-        std::lock_guard<std::mutex> grd(mtx);
-        stream_found = sounds.find(files) != sounds.cend();
-    }
-
-    if (stream_found)
-    {
-        return {RetCode::FAILED, "Stream already exists"};
-    }
-
     std::vector<std::pair<std::string, int>> segs;
     auto parse_ret = parse_comb_strings(files, periods, segs);
     if (!parse_ret)
@@ -1553,24 +1554,43 @@ RetCode AudioPlayer::play(const std::string &files, const std::string &periods, 
         return parse_ret;
     }
 
+    auto registered = std::make_shared<std::atomic_bool>(false);
+    std::unique_lock<std::mutex> lock(mtx);
+
+    if (preemptive.load(std::memory_order_relaxed) > 5)
+    {
+        return {RetCode::FAILED, "Too many player streams"};
+    }
+
+    if (sounds.find(files) != sounds.cend())
+    {
+        return {RetCode::FAILED, "Stream already exists"};
+    }
+
     auto *raw_sender =
-        new IAStream(static_cast<unsigned char>(token + preemptive), AudioDeviceName("null_combiner", 0),
-                     enum2val(AudioPeriodSize::INR_20MS), enum2val(AudioBandWidth::Full), 2, ResetOrd::RESET_NONE,
-                     priority);
+        new IAStream(static_cast<unsigned char>(token + preemptive.load(std::memory_order_relaxed)),
+                     AudioDeviceName("null_combiner", 0), enum2val(AudioPeriodSize::INR_20MS),
+                     enum2val(AudioBandWidth::Full), 2, ResetOrd::RESET_NONE, priority);
 
-    auto audio_sender = std::shared_ptr<IAStream>(raw_sender, [self = shared_from_this(), files](const IAStream *ptr) {
-        self->preemptive.fetch_sub(1, std::memory_order_relaxed);
-        std::lock_guard<std::mutex> grd(self->mtx);
-        auto iter = self->sounds.find(files);
-        if (iter != self->sounds.cend())
-        {
-            self->sounds.erase(iter);
-        }
-        delete ptr;
-    });
+    auto audio_sender = std::shared_ptr<IAStream>(
+        raw_sender, [self = shared_from_this(), files, registered](const IAStream *ptr) {
+            if (registered->exchange(false, std::memory_order_acq_rel))
+            {
+                std::lock_guard<std::mutex> grd(self->mtx);
+                self->preemptive.fetch_sub(1, std::memory_order_relaxed);
+                auto iter = self->sounds.find(files);
+                if (iter != self->sounds.cend() && iter->second.expired())
+                {
+                    self->sounds.erase(iter);
+                }
+            }
+            delete ptr;
+        });
 
-    preemptive.fetch_add(1, std::memory_order_relaxed);
     sounds.emplace(files, audio_sender);
+    preemptive.fetch_add(1, std::memory_order_relaxed);
+    registered->store(true, std::memory_order_release);
+    lock.unlock();
 
     auto comb_ret = audio_sender->init_as_wav_combiner(segs, static_cast<unsigned int>(cycles));
     if (!comb_ret)
@@ -1619,15 +1639,5 @@ RetCode AudioPlayer::set_volume(unsigned int vol)
     }
 
     volume.store(vol);
-
-    std::lock_guard<std::mutex> grd(mtx);
-    for (auto &sound_pair : sounds)
-    {
-        if (auto stream = sound_pair.second.lock())
-        {
-            stream->set_volume(vol);
-        }
-    }
-
     return RetCode::OK;
 }

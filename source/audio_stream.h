@@ -216,6 +216,7 @@ class IAStream : public std::enable_shared_from_this<IAStream>
     ibuffer_ptr usr_buf;
     ibuffer_ptr dev_buf;
     idevice_ptr idevice;
+    std::mutex device_mtx;
     sampler_ptr sampler;
     filter_ptr filter_bank;
     std::atomic_uint volume;

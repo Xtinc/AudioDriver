@@ -831,7 +831,8 @@ class AudioCenter
     /**
      * @brief Sets the global volume for audio file playback
      *
-     * This affects all currently playing and future audio files.
+     * This sets the default volume for future audio playback. Streams that are
+     * already playing keep the volume selected when they were started.
      *
      * @param vol Volume level (0-100)
      * @return RetCode indicating success or failure
